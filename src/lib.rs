@@ -12,6 +12,7 @@ pub struct ModuleConfig {
 #[napi]
 impl ModuleConfig {
   #[napi(constructor)]
+  #[allow(clippy::new_without_default)]
   pub fn new() -> Self {
     Self {
       inner: walrus::ModuleConfig::new(),
