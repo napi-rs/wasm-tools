@@ -5,7 +5,7 @@ import {
 } from '@napi-rs/wasm-runtime'
 import { Volume as __Volume, createFsFromVolume as __createFsFromVolume } from '@napi-rs/wasm-runtime/fs'
 
-import __wasmUrl from './package-template.wasm32-wasi.wasm?url'
+import __wasmUrl from './walrus.wasm32-wasi.wasm?url'
 
 const __fs = __createFsFromVolume(
   __Volume.fromJSON({
@@ -58,6 +58,10 @@ const {
 })
 
 function __napi_rs_initialize_modules(__napiInstance) {
-  __napiInstance.exports['__napi_register__plus_100_0']?.()
+  __napiInstance.exports['__napi_register__ModuleConfig_struct_0']?.()
+  __napiInstance.exports['__napi_register__ModuleConfig_impl_10']?.()
+  __napiInstance.exports['__napi_register__WasmModule_struct_11']?.()
+  __napiInstance.exports['__napi_register__WasmModule_impl_15']?.()
 }
-export const plus100 = __napiModule.exports.plus100
+export const ModuleConfig = __napiModule.exports.ModuleConfig
+export const WasmModule = __napiModule.exports.WasmModule

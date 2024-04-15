@@ -1,12 +1,12 @@
 {
-  "name": "@napi-rs/package-template-pnpm",
-  "version": "1.1.1",
-  "description": "Template project for writing node package with napi-rs",
+  "name": "@napi-rs/wasm-tools",
+  "version": "0.0.0",
+  "description": "https://github.com/rustwasm/walrus bindings",
   "main": "index.js",
   "types": "index.d.ts",
   "browser": "browser.js",
   "repository": {
-    "url": "git+ssh://git@github.com/napi-rs/package-template-pnpm.git",
+    "url": "git+ssh://git@github.com/napi-rs/wasm-tools.git",
     "type": "git"
   },
   "license": "MIT",
@@ -24,7 +24,7 @@
     "browser.js"
   ],
   "napi": {
-    "binaryName": "package-template",
+    "binaryName": "walrus",
     "targets": [
       "x86_64-apple-darwin",
       "aarch64-apple-darwin",
@@ -68,10 +68,12 @@
     "@emnapi/runtime": "^1.1.1",
     "@napi-rs/cli": "^3.0.0-alpha.47",
     "@napi-rs/wasm-runtime": "^0.1.2",
+    "@napi-rs/wasm-panic": "workspace:*",
     "@swc-node/register": "^1.9.0",
     "@swc/core": "^1.4.13",
     "@taplo/cli": "^0.7.0",
     "@tybys/wasm-util": "^0.8.1",
+    "@types/node": "^20.12.7",
     "ava": "^6.1.2",
     "benny": "^3.7.1",
     "chalk": "^5.3.0",

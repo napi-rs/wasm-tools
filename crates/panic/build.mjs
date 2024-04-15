@@ -1,21 +1,3 @@
-# `@napi-rs/wasm-tools`
-
-![https://github.com/napi-rs/wasm-tools/actions](https://github.com/napi-rs/wasm-tools/workflows/CI/badge.svg)
-
-> https://github.com/rustwasm/walrus bindings
-
-## Install this package
-
-```
-pnpm add @napi-rs/wasm-tools -D
-yarn add @napi-rs/wasm-tools -D
-```
-
-## Usage
-
-```ts
-// Generate dwarf info and emit wasm
-
 import { join } from 'node:path'
 import { readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -35,4 +17,3 @@ const binary = new ModuleConfig()
   .emitWasm(true)
 
 await writeFile(join(__dirname, 'panic.wasm32-wasi.wasm'), binary)
-```

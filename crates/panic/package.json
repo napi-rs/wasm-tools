@@ -1,0 +1,25 @@
+{
+  "name": "@napi-rs/wasm-panic",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A package contains panic in Rust code compiled to wasm",
+  "main": "index.js",
+  "napi": {
+    "binaryName": "panic",
+    "targets": [
+      "wasm32-wasi-preview1-threads"
+    ]
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0-alpha.47",
+    "@napi-rs/wasm-runtime": "^0.1.2",
+    "@napi-rs/wasm-tools": "workspace:*",
+    "emnapi": "^1.1.1",
+    "npm-run-all2": "^6.1.2"
+  },
+  "scripts": {
+    "build": "run-s build:napi build:wasm",
+    "build:napi": "napi build --target wasm32-wasi-preview1-threads --profile wasm-fixture --platform",
+    "build:wasm": "node build.mjs"
+  }
+}

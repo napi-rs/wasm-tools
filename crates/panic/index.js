@@ -60,24 +60,24 @@ function requireNative() {
   if (process.platform === 'android') {
     if (process.arch === 'arm64') {
       try {
-        return require('./walrus.android-arm64.node')
+        return require('./panic.android-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-android-arm64')
+        return require('@napi-rs/wasm-panic-android-arm64')
       } catch (e) {
         loadErrors.push(e)
       }
 
     } else if (process.arch === 'arm') {
       try {
-        return require('./walrus.android-arm-eabi.node')
+        return require('./panic.android-arm-eabi.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-android-arm-eabi')
+        return require('@napi-rs/wasm-panic-android-arm-eabi')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -88,36 +88,36 @@ function requireNative() {
   } else if (process.platform === 'win32') {
     if (process.arch === 'x64') {
       try {
-        return require('./walrus.win32-x64-msvc.node')
+        return require('./panic.win32-x64-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-win32-x64-msvc')
+        return require('@napi-rs/wasm-panic-win32-x64-msvc')
       } catch (e) {
         loadErrors.push(e)
       }
 
     } else if (process.arch === 'ia32') {
       try {
-        return require('./walrus.win32-ia32-msvc.node')
+        return require('./panic.win32-ia32-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-win32-ia32-msvc')
+        return require('@napi-rs/wasm-panic-win32-ia32-msvc')
       } catch (e) {
         loadErrors.push(e)
       }
 
     } else if (process.arch === 'arm64') {
       try {
-        return require('./walrus.win32-arm64-msvc.node')
+        return require('./panic.win32-arm64-msvc.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-win32-arm64-msvc')
+        return require('@napi-rs/wasm-panic-win32-arm64-msvc')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -127,36 +127,36 @@ function requireNative() {
     }
   } else if (process.platform === 'darwin') {
     try {
-        return require('./walrus.darwin-universal.node')
+        return require('./panic.darwin-universal.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-darwin-universal')
+        return require('@napi-rs/wasm-panic-darwin-universal')
       } catch (e) {
         loadErrors.push(e)
       }
 
     if (process.arch === 'x64') {
       try {
-        return require('./walrus.darwin-x64.node')
+        return require('./panic.darwin-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-darwin-x64')
+        return require('@napi-rs/wasm-panic-darwin-x64')
       } catch (e) {
         loadErrors.push(e)
       }
 
     } else if (process.arch === 'arm64') {
       try {
-        return require('./walrus.darwin-arm64.node')
+        return require('./panic.darwin-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-darwin-arm64')
+        return require('@napi-rs/wasm-panic-darwin-arm64')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -167,24 +167,24 @@ function requireNative() {
   } else if (process.platform === 'freebsd') {
     if (process.arch === 'x64') {
       try {
-        return require('./walrus.freebsd-x64.node')
+        return require('./panic.freebsd-x64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-freebsd-x64')
+        return require('@napi-rs/wasm-panic-freebsd-x64')
       } catch (e) {
         loadErrors.push(e)
       }
 
     } else if (process.arch === 'arm64') {
       try {
-        return require('./walrus.freebsd-arm64.node')
+        return require('./panic.freebsd-arm64.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-freebsd-arm64')
+        return require('@napi-rs/wasm-panic-freebsd-arm64')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -196,24 +196,24 @@ function requireNative() {
     if (process.arch === 'x64') {
       if (isMusl()) {
         try {
-        return require('./walrus.linux-x64-musl.node')
+        return require('./panic.linux-x64-musl.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-x64-musl')
+        return require('@napi-rs/wasm-panic-linux-x64-musl')
       } catch (e) {
         loadErrors.push(e)
       }
 
       } else {
         try {
-        return require('./walrus.linux-x64-gnu.node')
+        return require('./panic.linux-x64-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-x64-gnu')
+        return require('@napi-rs/wasm-panic-linux-x64-gnu')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -222,24 +222,24 @@ function requireNative() {
     } else if (process.arch === 'arm64') {
       if (isMusl()) {
         try {
-        return require('./walrus.linux-arm64-musl.node')
+        return require('./panic.linux-arm64-musl.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-arm64-musl')
+        return require('@napi-rs/wasm-panic-linux-arm64-musl')
       } catch (e) {
         loadErrors.push(e)
       }
 
       } else {
         try {
-        return require('./walrus.linux-arm64-gnu.node')
+        return require('./panic.linux-arm64-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-arm64-gnu')
+        return require('@napi-rs/wasm-panic-linux-arm64-gnu')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -248,24 +248,24 @@ function requireNative() {
     } else if (process.arch === 'arm') {
       if (isMusl()) {
         try {
-        return require('./walrus.linux-arm-musleabihf.node')
+        return require('./panic.linux-arm-musleabihf.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-arm-musleabihf')
+        return require('@napi-rs/wasm-panic-linux-arm-musleabihf')
       } catch (e) {
         loadErrors.push(e)
       }
 
       } else {
         try {
-        return require('./walrus.linux-arm-gnueabihf.node')
+        return require('./panic.linux-arm-gnueabihf.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-arm-gnueabihf')
+        return require('@napi-rs/wasm-panic-linux-arm-gnueabihf')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -274,24 +274,24 @@ function requireNative() {
     } else if (process.arch === 'riscv64') {
       if (isMusl()) {
         try {
-        return require('./walrus.linux-riscv64-musl.node')
+        return require('./panic.linux-riscv64-musl.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-riscv64-musl')
+        return require('@napi-rs/wasm-panic-linux-riscv64-musl')
       } catch (e) {
         loadErrors.push(e)
       }
 
       } else {
         try {
-        return require('./walrus.linux-riscv64-gnu.node')
+        return require('./panic.linux-riscv64-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-riscv64-gnu')
+        return require('@napi-rs/wasm-panic-linux-riscv64-gnu')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -299,24 +299,24 @@ function requireNative() {
       }
     } else if (process.arch === 'ppc64') {
       try {
-        return require('./walrus.linux-ppc64-gnu.node')
+        return require('./panic.linux-ppc64-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-ppc64-gnu')
+        return require('@napi-rs/wasm-panic-linux-ppc64-gnu')
       } catch (e) {
         loadErrors.push(e)
       }
 
     } else if (process.arch === 's390x') {
       try {
-        return require('./walrus.linux-s390x-gnu.node')
+        return require('./panic.linux-s390x-gnu.node')
       } catch (e) {
         loadErrors.push(e)
       }
       try {
-        return require('@napi-rs/wasm-tools-linux-s390x-gnu')
+        return require('@napi-rs/wasm-panic-linux-s390x-gnu')
       } catch (e) {
         loadErrors.push(e)
       }
@@ -333,7 +333,7 @@ nativeBinding = requireNative()
 
 if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
   try {
-    nativeBinding = require('./walrus.wasi.cjs')
+    nativeBinding = require('./panic.wasi.cjs')
   } catch (err) {
     if (process.env.NAPI_RS_FORCE_WASI) {
       console.error(err)
@@ -341,7 +341,7 @@ if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
   }
   if (!nativeBinding) {
     try {
-      nativeBinding = require('@napi-rs/wasm-tools-wasm32-wasi')
+      nativeBinding = require('@napi-rs/wasm-panic-wasm32-wasi')
     } catch (err) {
       if (process.env.NAPI_RS_FORCE_WASI) {
         console.error(err)
@@ -361,5 +361,4 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-module.exports.ModuleConfig = nativeBinding.ModuleConfig
-module.exports.WasmModule = nativeBinding.WasmModule
+module.exports.panic = nativeBinding.panic

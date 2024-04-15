@@ -31,13 +31,13 @@ const __sharedMemory = new WebAssembly.Memory({
   shared: true,
 })
 
-let __wasmFilePath = __nodePath.join(__dirname, 'package-template.wasm32-wasi.wasm')
+let __wasmFilePath = __nodePath.join(__dirname, 'walrus.wasm32-wasi.wasm')
 
 if (!__nodeFs.existsSync(__wasmFilePath)) {
   try {
-    __wasmFilePath = __nodePath.resolve('@napi-rs/package-template-pnpm-wasm32-wasi')
+    __wasmFilePath = __nodePath.resolve('@napi-rs/wasm-tools-wasm32-wasi')
   } catch {
-    throw new Error('Cannot find package-template.wasm32-wasi.wasm file, and @napi-rs/package-template-pnpm-wasm32-wasi package is not installed.')
+    throw new Error('Cannot find walrus.wasm32-wasi.wasm file, and @napi-rs/wasm-tools-wasm32-wasi package is not installed.')
   }
 }
 
@@ -74,6 +74,10 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
 })
 
 function __napi_rs_initialize_modules(__napiInstance) {
-  __napiInstance.exports['__napi_register__plus_100_0']?.()
+  __napiInstance.exports['__napi_register__ModuleConfig_struct_0']?.()
+  __napiInstance.exports['__napi_register__ModuleConfig_impl_10']?.()
+  __napiInstance.exports['__napi_register__WasmModule_struct_11']?.()
+  __napiInstance.exports['__napi_register__WasmModule_impl_15']?.()
 }
-module.exports.plus100 = __napiModule.exports.plus100
+module.exports.ModuleConfig = __napiModule.exports.ModuleConfig
+module.exports.WasmModule = __napiModule.exports.WasmModule
