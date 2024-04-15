@@ -7,7 +7,7 @@ import { WasmModule } from '../index'
 
 test('should be able to parse wasm', (t) => {
   t.notThrows(() => {
-    WasmModule.fromPath(join(__dirname, '..', 'walrus.wasm32-wasi.wasm'))
+    WasmModule.fromPath(join(__dirname, '..', 'crates', 'panic', 'panic.wasm32-wasi.wasm'))
   })
 })
 
