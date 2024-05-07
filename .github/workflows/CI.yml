@@ -30,9 +30,9 @@ jobs:
         settings:
           - host: macos-latest
             target: x86_64-apple-darwin
-            build: pnpm build
+            build: pnpm build --target x86_64-apple-darwin
           - host: windows-latest
-            build: pnpm build
+            build: pnpm build --target x86_64-pc-windows-msvc
             target: x86_64-pc-windows-msvc
           - host: windows-latest
             build: pnpm build --target i686-pc-windows-msvc
@@ -43,7 +43,7 @@ jobs:
           - host: ubuntu-latest
             target: x86_64-unknown-linux-musl
             build: pnpm build --target x86_64-unknown-linux-musl -x
-          - host: macos-14
+          - host: macos-latest
             target: aarch64-apple-darwin
             build: pnpm build --target aarch64-apple-darwin
           - host: ubuntu-latest
@@ -62,8 +62,8 @@ jobs:
             target: aarch64-pc-windows-msvc
             build: pnpm build --target aarch64-pc-windows-msvc
           - host: ubuntu-latest
-            target: wasm32-wasi-preview1-threads
-            build: pnpm build --target wasm32-wasi-preview1-threads
+            target: wasm32-wasip1-threads
+            build: pnpm build --target wasm32-wasip1-threads
     name: stable - ${{ matrix.settings.target }} - node@20
     runs-on: ${{ matrix.settings.host }}
     steps:
@@ -113,7 +113,7 @@ jobs:
         shell: bash
       - name: Upload artifact
         uses: actions/upload-artifact@v4
-        if: matrix.settings.target != 'wasm32-wasi-preview1-threads'
+        if: matrix.settings.target != 'wasm32-wasip1-threads'
         with:
           name: bindings-${{ matrix.settings.target }}
           path: "*.node"
@@ -121,7 +121,7 @@ jobs:
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
-        if: matrix.settings.target == 'wasm32-wasi-preview1-threads'
+        if: matrix.settings.target == 'wasm32-wasip1-threads'
         with:
           name: bindings-${{ matrix.settings.target }}
           path: "*.wasm"
@@ -183,10 +183,13 @@ jobs:
         settings:
           - host: windows-latest
             target: x86_64-pc-windows-msvc
+            architecture: x64
           - host: macos-latest
             target: x86_64-apple-darwin
-          - host: macos-14
+            architecture: x64
+          - host: macos-latest
             target: aarch64-apple-darwin
+            architecture: arm64
         node:
           - '18'
           - '20'
@@ -200,6 +203,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
+          architecture: ${{ matrix.settings.architecture }}
       - name: Install dependencies
         run: pnpm install
       - name: Download artifacts
@@ -298,7 +302,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: bindings-wasm32-wasi-preview1-threads
+          name: bindings-wasm32-wasip1-threads
           path: .
       - name: List packages
         run: ls -R .
