@@ -60,8 +60,8 @@ importers:
         specifier: ^6.1.2
         version: 6.1.2
       oxlint:
-        specifier: ^0.3.0
-        version: 0.3.2
+        specifier: ^0.5.0
+        version: 0.5.0
       prettier:
         specifier: ^3.2.5
         version: 3.2.5
@@ -389,43 +389,43 @@ packages:
   '@octokit/types@12.4.0':
     resolution: {integrity: sha512-FLWs/AvZllw/AGVs+nJ+ELCDZZJk+kY0zMen118xhL2zD0s1etIUHm1odgjP7epxYU1ln7SZxEUWYop5bhsdgQ==}
 
-  '@oxlint/darwin-arm64@0.3.2':
-    resolution: {integrity: sha512-V+/rpdISAg7AQ15ArGEud3QY5RF/QqSu1ISCm6CJZKKT/v0s8bYXHyVG5yDGYZ554MLuIxYKhOGlQztDoIpaaw==}
+  '@oxlint/darwin-arm64@0.5.0':
+    resolution: {integrity: sha512-1WS+jX0cw6Xq7BM5NkBm0hIVf1CVwaHYFyfpVwDS84kcryGPrfEGepW+J2nquQK3iu8squCA5mBMIKWrdpzCGg==}
     cpu: [arm64]
     os: [darwin]
 
-  '@oxlint/darwin-x64@0.3.2':
-    resolution: {integrity: sha512-Q4rgeEU1ZtpYhTF4iyRtUa3WGFMuWkZMw3RzFE1D9E6qx4rJuwBH0S53QKtqFy2DmFpK6csf2dfB6D78n7syXA==}
+  '@oxlint/darwin-x64@0.5.0':
+    resolution: {integrity: sha512-EC3rLi0PmO7ts2EUmn+pVlTz4szFT/FOqqkeX1gcHPFfh7I+mE7DMBTnmDSZvU0SVSrMvIW2u/tVvZ7mie+UTA==}
     cpu: [x64]
     os: [darwin]
 
-  '@oxlint/linux-arm64-gnu@0.3.2':
-    resolution: {integrity: sha512-mDrnHVpfuEeK69t/jt6WhPPsiTn9Q0Z+9wD2Wu6I7vppbu+ksRK/ULW+Y1WrTu7keDgvUpkS/3Xaj+1pLppmmg==}
+  '@oxlint/linux-arm64-gnu@0.5.0':
+    resolution: {integrity: sha512-yosA5HkNs9LjaO2NR4nhr7Jjfdsci2ctDBrjvPNez0G4NGgIMSyIhWnLn9xzv6aws1hMUaO5qd+POxWJ1SB0+A==}
     cpu: [arm64]
     os: [linux]
 
-  '@oxlint/linux-arm64-musl@0.3.2':
-    resolution: {integrity: sha512-29FuLxci3oqCBe5Vt8afPQKg/q4jRaNjz/9PKgM6nOlcuKgg+QQkUcyOMCSAze+dPBGMMIfQK/fiydrp0DsN7w==}
+  '@oxlint/linux-arm64-musl@0.5.0':
+    resolution: {integrity: sha512-B9u5Hz8a6NmCspJFkAfMSEhddZXa7QUn8JbHGB62aReY/kl+DAyRTZ4gbPQzfPmTd7zbr1vvqiU24dzAMxS9jw==}
     cpu: [arm64]
     os: [linux]
 
-  '@oxlint/linux-x64-gnu@0.3.2':
-    resolution: {integrity: sha512-rUZffyJKNDkSnmUGbzkIAQMl/K0jHUWrnxTPALE+0FDD30aXwQ4ivlrs/J8OB6tBWdPFSKgj5Uo3suRZ09uF/A==}
+  '@oxlint/linux-x64-gnu@0.5.0':
+    resolution: {integrity: sha512-9X4d2GARKK7WnHcMSdKeXLsnrNwRK9T9/C2YSxVfYEgBUqXza8L9ACbGH1v2BUm1ScHzKOakpRQ3XKD2Xe/G1w==}
     cpu: [x64]
     os: [linux]
 
-  '@oxlint/linux-x64-musl@0.3.2':
-    resolution: {integrity: sha512-0y6E0Zk5agCAZS5pyQtXciuCnJUOY+eYtIPmhGR08s6xL8ObuMiwMyxrXzJ2tihPoZ018zoCl2kMbPDqvkROhA==}
+  '@oxlint/linux-x64-musl@0.5.0':
+    resolution: {integrity: sha512-fv3GE5PXtvrl1q9ZrF55ImoRgehPuD56c8FqGGd88Aj4Uo1pDHYpNtmlm6RHdicAkwIytrpzc3o/uuxYb89/Zw==}
     cpu: [x64]
     os: [linux]
 
-  '@oxlint/win32-arm64@0.3.2':
-    resolution: {integrity: sha512-uMVAxkY6EXTRBandXwpcG1xhkshsw/wiKmr/sLSpbSswRvfGkfOmqi8d99ZpS90lNO+VN/vLQIyqWlKZTb3X6A==}
+  '@oxlint/win32-arm64@0.5.0':
+    resolution: {integrity: sha512-wd5HqczvEFqs8YeIkeGC6vDD7LodNPjMcJrnD3zxXHkHFrn/vPPk8jLLLq6YyfmudPwOV+Rfjq7TvvWqOfloaQ==}
     cpu: [arm64]
     os: [win32]
 
-  '@oxlint/win32-x64@0.3.2':
-    resolution: {integrity: sha512-X/JB+/d/02v1V4yMahfQFlefUCX6L1Lt0zRB24s77gHY8WT225+TNHLv1pj4N5sfeYW4eMNMbY8Mm7mPhNltSw==}
+  '@oxlint/win32-x64@0.5.0':
+    resolution: {integrity: sha512-upNYLh71F9pAh3m79a1K6Tm4IHYbDdkmRBdwUc3Kdz3jXw0vDBH2KsfUP6YitJKvTn6gzryzf7O7LNRh3rp75Q==}
     cpu: [x64]
     os: [win32]
 
@@ -597,6 +597,7 @@ packages:
   are-we-there-yet@2.0.0:
     resolution: {integrity: sha512-Ci/qENmwHnsYo9xKIcUJN5LeDKdJ6R1Z1j9V/J5wyq8nh/mYPEpIKJbBZXtZjG04HiK7zV/p6Vs9952MrMeUIw==}
     engines: {node: '>=10'}
+    deprecated: This package is no longer supported.
 
   argparse@1.0.10:
     resolution: {integrity: sha512-o5Roy6tNG4SL/FOkCAN6RzjiakZS25RLYFrcMttJqbdd8BWrnA+fGz57iN5Pb06pvBGvl5gQ0B48dJlslXvoTg==}
@@ -935,6 +936,7 @@ packages:
   gauge@3.0.2:
     resolution: {integrity: sha512-+5J6MS/5XksCuXq++uFRsnUd7Ovu1XenbeuIuNRJxYWjgQbPuFhT14lAvsWfqfAmnwluf1OwMjz39HjfLPci0Q==}
     engines: {node: '>=10'}
+    deprecated: This package is no longer supported.
 
   get-caller-file@2.0.5:
     resolution: {integrity: sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg==}
@@ -958,6 +960,7 @@ packages:
 
   glob@7.2.3:
     resolution: {integrity: sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q==}
+    deprecated: Glob versions prior to v9 are no longer supported
 
   globby@14.0.0:
     resolution: {integrity: sha512-/1WM/LNHRAOH9lZta77uGbq0dAEQM+XjNesWwhlERDVenqothRbnzTrL3/LrIoEPPjeUHC3vrS6TwoyxeHs7MQ==}
@@ -1029,6 +1032,7 @@ packages:
 
   inflight@1.0.6:
     resolution: {integrity: sha512-k92I/b08q4wvFscXCLvqfsHCrjrF7yiXsQuIVvVE7N82W3+aqpzuUdBbfhWcy/FZR3/4IgflMgKLOsvPDrGCJA==}
+    deprecated: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
 
   inherits@2.0.4:
     resolution: {integrity: sha512-k/vGaX4/Yla3WzyMCvTQOXYeIHvqOKtnqBduzTHpzpQZzAskKMhZ2K+EnBiSM9zGSoIFeMpXKxa4dYeZIQqewQ==}
@@ -1280,6 +1284,7 @@ packages:
 
   npmlog@5.0.1:
     resolution: {integrity: sha512-AqZtDUWOMKs1G/8lwylVjrdYgqA4d9nu8hc+0gzRxlDb1I10+FHBGMXs6aiQHFdCUUlqH99MUMuLfzWDNDtfxw==}
+    deprecated: This package is no longer supported.
 
   object-assign@4.1.1:
     resolution: {integrity: sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==}
@@ -1304,8 +1309,8 @@ packages:
     resolution: {integrity: sha512-D2FR03Vir7FIu45XBY20mTb+/ZSWB00sjU9jdQXt83gDrI4Ztz5Fs7/yy74g2N5SVQY4xY1qDr4rNddwYRVX0g==}
     engines: {node: '>=0.10.0'}
 
-  oxlint@0.3.2:
-    resolution: {integrity: sha512-HMnIV7pQvGfqTTSoI5/8TiXWS/kO4bxHVuLjEg4phoPhtnSDFQuXVaRH2xneqDri1jNNUvHou5PKr0OV6Rfrzg==}
+  oxlint@0.5.0:
+    resolution: {integrity: sha512-eb8ba12zrwnQatTvM1OzO4dWrjeDvsTlFPwLlfBEA5wOOdB+0pnY02FOe6uO3MMmzJLvHfyQlDNTp2Iq4yr1Hw==}
     engines: {node: '>=14.*'}
     hasBin: true
 
@@ -1410,6 +1415,7 @@ packages:
 
   rimraf@3.0.2:
     resolution: {integrity: sha512-JZkJMZkAGFFPP2YqXZXPbMlMBgsxzE8ILs4lMIX/2o0L9UBw9O/Y3o6wFw/i9YLapcUJWwqbi3kdxIPdC62TIA==}
+    deprecated: Rimraf versions prior to v4 are no longer supported
     hasBin: true
 
   run-async@3.0.0:
@@ -1934,28 +1940,28 @@ snapshots:
     dependencies:
       '@octokit/openapi-types': 19.1.0
 
-  '@oxlint/darwin-arm64@0.3.2':
+  '@oxlint/darwin-arm64@0.5.0':
     optional: true
 
-  '@oxlint/darwin-x64@0.3.2':
+  '@oxlint/darwin-x64@0.5.0':
     optional: true
 
-  '@oxlint/linux-arm64-gnu@0.3.2':
+  '@oxlint/linux-arm64-gnu@0.5.0':
     optional: true
 
-  '@oxlint/linux-arm64-musl@0.3.2':
+  '@oxlint/linux-arm64-musl@0.5.0':
     optional: true
 
-  '@oxlint/linux-x64-gnu@0.3.2':
+  '@oxlint/linux-x64-gnu@0.5.0':
     optional: true
 
-  '@oxlint/linux-x64-musl@0.3.2':
+  '@oxlint/linux-x64-musl@0.5.0':
     optional: true
 
-  '@oxlint/win32-arm64@0.3.2':
+  '@oxlint/win32-arm64@0.5.0':
     optional: true
 
-  '@oxlint/win32-x64@0.3.2':
+  '@oxlint/win32-x64@0.5.0':
     optional: true
 
   '@rollup/pluginutils@4.2.1':
@@ -2812,16 +2818,16 @@ snapshots:
 
   os-tmpdir@1.0.2: {}
 
-  oxlint@0.3.2:
+  oxlint@0.5.0:
     optionalDependencies:
-      '@oxlint/darwin-arm64': 0.3.2
-      '@oxlint/darwin-x64': 0.3.2
-      '@oxlint/linux-arm64-gnu': 0.3.2
-      '@oxlint/linux-arm64-musl': 0.3.2
-      '@oxlint/linux-x64-gnu': 0.3.2
-      '@oxlint/linux-x64-musl': 0.3.2
-      '@oxlint/win32-arm64': 0.3.2
-      '@oxlint/win32-x64': 0.3.2
+      '@oxlint/darwin-arm64': 0.5.0
+      '@oxlint/darwin-x64': 0.5.0
+      '@oxlint/linux-arm64-gnu': 0.5.0
+      '@oxlint/linux-arm64-musl': 0.5.0
+      '@oxlint/linux-x64-gnu': 0.5.0
+      '@oxlint/linux-x64-musl': 0.5.0
+      '@oxlint/win32-arm64': 0.5.0
+      '@oxlint/win32-x64': 0.5.0
 
   p-map@7.0.2: {}
 
