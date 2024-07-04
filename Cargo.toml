@@ -7,7 +7,7 @@ members = ["crates/panic"]
   napi-derive    = "2"
   rustc-demangle = "0.1"
   uuid           = { version = "1", default-features = false, features = ["v4"] }
-  walrus         = "0.20"
+  walrus         = "0.21"
 
 [package]
 authors = ["LongYinan <lynweklm@gmail.com>"]
