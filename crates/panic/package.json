@@ -15,7 +15,7 @@
     "@napi-rs/wasm-runtime": "^0.2.4",
     "@napi-rs/wasm-tools": "workspace:*",
     "emnapi": "^1.2.0",
-    "npm-run-all2": "^6.2.2"
+    "npm-run-all2": "^7.0.0"
   },
   "scripts": {
     "build": "run-s build:napi build:wasm",
