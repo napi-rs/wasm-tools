@@ -1,8 +1,8 @@
 import {
-  instantiateNapiModuleSync as __emnapiInstantiateNapiModuleSync,
-  getDefaultContext as __emnapiGetDefaultContext,
-  WASI as __WASI,
   createOnMessage as __wasmCreateOnMessageForFsProxy,
+  getDefaultContext as __emnapiGetDefaultContext,
+  instantiateNapiModuleSync as __emnapiInstantiateNapiModuleSync,
+  WASI as __WASI,
 } from '@napi-rs/wasm-runtime'
 
 import __wasmUrl from './walrus.wasm32-wasi.wasm?url'
@@ -33,7 +33,7 @@ const {
     const worker = new Worker(new URL('./wasi-worker-browser.mjs', import.meta.url), {
       type: 'module',
     })
-    
+
     return worker
   },
   overwriteImports(importObject) {
@@ -46,15 +46,13 @@ const {
     return importObject
   },
   beforeInit({ instance }) {
-    __napi_rs_initialize_modules(instance)
+    for (const name of Object.keys(instance.exports)) {
+      if (name.startsWith('__napi_register__')) {
+        instance.exports[name]()
+      }
+    }
   },
 })
-
-function __napi_rs_initialize_modules(__napiInstance) {
-  __napiInstance.exports['__napi_register__ModuleConfig_struct_0']?.()
-  __napiInstance.exports['__napi_register__ModuleConfig_impl_10']?.()
-  __napiInstance.exports['__napi_register__WasmModule_struct_11']?.()
-  __napiInstance.exports['__napi_register__WasmModule_impl_15']?.()
-}
+export default __napiModule.exports
 export const ModuleConfig = __napiModule.exports.ModuleConfig
 export const WasmModule = __napiModule.exports.WasmModule
