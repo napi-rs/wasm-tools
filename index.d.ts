@@ -85,4 +85,3 @@ export declare class WasmModule {
   /** Emit this module into an in-memory wasm buffer. */
   emitWasm(demangle: boolean): Uint8Array
 }
-

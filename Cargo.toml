@@ -2,9 +2,9 @@
 members = ["crates/panic"]
 
   [workspace.dependencies]
-  napi           = { version = "3.0.0-alpha", features = ["anyhow"] }
+  napi           = { version = "3.0.0-beta", features = ["anyhow"] }
   napi-build     = "2"
-  napi-derive    = "3.0.0-alpha"
+  napi-derive    = "3.0.0-beta"
   rustc-demangle = "0.1"
   uuid           = { version = "1", default-features = false, features = ["v4"] }
   walrus         = "0.23"

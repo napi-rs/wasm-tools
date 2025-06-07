@@ -9,9 +9,9 @@ const { WASI: __nodeWASI } = require('node:wasi')
 const { Worker } = require('node:worker_threads')
 
 const {
-  instantiateNapiModuleSync: __emnapiInstantiateNapiModuleSync,
-  getDefaultContext: __emnapiGetDefaultContext,
   createOnMessage: __wasmCreateOnMessageForFsProxy,
+  getDefaultContext: __emnapiGetDefaultContext,
+  instantiateNapiModuleSync: __emnapiInstantiateNapiModuleSync,
 } = require('@napi-rs/wasm-runtime')
 
 const __rootDir = __nodePath.parse(process.cwd()).root
@@ -56,11 +56,11 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
       return 4
     }
   })(),
+  reuseWorker: true,
   wasi: __wasi,
   onCreateWorker() {
     const worker = new Worker(__nodePath.join(__dirname, 'wasi-worker.mjs'), {
       env: process.env,
-      execArgv: ['--experimental-wasi-unstable-preview1'],
     })
     worker.onmessage = ({ data }) => {
       __wasmCreateOnMessageForFsProxy(__nodeFs)(data)
@@ -77,15 +77,13 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
     return importObject
   },
   beforeInit({ instance }) {
-    __napi_rs_initialize_modules(instance)
-  }
+    for (const name of Object.keys(instance.exports)) {
+      if (name.startsWith('__napi_register__')) {
+        instance.exports[name]()
+      }
+    }
+  },
 })
-
-function __napi_rs_initialize_modules(__napiInstance) {
-  __napiInstance.exports['__napi_register__ModuleConfig_struct_0']?.()
-  __napiInstance.exports['__napi_register__ModuleConfig_impl_10']?.()
-  __napiInstance.exports['__napi_register__WasmModule_struct_11']?.()
-  __napiInstance.exports['__napi_register__WasmModule_impl_15']?.()
-}
+module.exports = __napiModule.exports
 module.exports.ModuleConfig = __napiModule.exports.ModuleConfig
 module.exports.WasmModule = __napiModule.exports.WasmModule
