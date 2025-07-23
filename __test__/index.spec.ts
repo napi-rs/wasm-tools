@@ -1,9 +1,12 @@
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { panic } from '@napi-rs/wasm-panic'
 import test from 'ava'
 
 import { WasmModule } from '../index'
+
+const __dirname = join(fileURLToPath(import.meta.url), '..')
 
 test('should be able to parse wasm', (t) => {
   t.notThrows(() => {

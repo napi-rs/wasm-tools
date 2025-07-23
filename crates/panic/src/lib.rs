@@ -1,3 +1,5 @@
+#![allow(clippy::assertions_on_constants)]
+
 use napi_derive::napi;
 
 #[napi]
