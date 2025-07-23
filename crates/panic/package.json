@@ -12,7 +12,7 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "^3.0.0-alpha.47",
-    "@napi-rs/wasm-runtime": "^0.2.4",
+    "@napi-rs/wasm-runtime": "^1.0.0",
     "@napi-rs/wasm-tools": "workspace:*",
     "emnapi": "^1.2.0",
     "npm-run-all2": "^8.0.0"
