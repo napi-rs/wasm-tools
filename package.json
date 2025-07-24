@@ -68,7 +68,7 @@
     "@napi-rs/cli": "^3.0.1",
     "@napi-rs/wasm-runtime": "^1.0.1",
     "@napi-rs/wasm-panic": "workspace:*",
-    "@oxc-node/core": "^0.0.29",
+    "@oxc-node/core": "^0.0.30",
     "@taplo/cli": "^0.7.0",
     "@tybys/wasm-util": "^0.10.0",
     "@types/node": "^24.1.0",
