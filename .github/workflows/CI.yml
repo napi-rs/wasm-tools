@@ -120,7 +120,7 @@ jobs:
             .cargo-cache
             target/
           key: ${{ matrix.settings.target }}-cargo-${{ matrix.settings.host }}
-      - uses: goto-bus-stop/setup-zig@v2
+      - uses: mlugg/setup-zig@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
           version: 0.14.1
@@ -145,7 +145,7 @@ jobs:
         if: matrix.settings.target != 'wasm32-wasip1-threads'
         with:
           name: bindings-${{ matrix.settings.target }}
-          path: "*.node"
+          path: '*.node'
           if-no-files-found: error
 
       - name: Upload artifact
@@ -153,7 +153,7 @@ jobs:
         if: matrix.settings.target == 'wasm32-wasip1-threads'
         with:
           name: bindings-${{ matrix.settings.target }}
-          path: "*.wasm"
+          path: '*.wasm'
           if-no-files-found: error
   build-freebsd:
     runs-on: ubuntu-latest
