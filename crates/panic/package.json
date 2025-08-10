@@ -11,15 +11,15 @@
     ]
   },
   "devDependencies": {
-    "@napi-rs/cli": "^3.0.0-alpha.47",
-    "@napi-rs/wasm-runtime": "^1.0.0",
+    "@napi-rs/cli": "^3.1.2",
+    "@napi-rs/wasm-runtime": "^1.0.3",
     "@napi-rs/wasm-tools": "workspace:*",
-    "emnapi": "^1.2.0",
-    "npm-run-all2": "^8.0.0"
+    "emnapi": "^1.4.5",
+    "npm-run-all2": "^8.0.4"
   },
   "scripts": {
     "build": "run-s build:napi build:wasm",
-    "build:napi": "napi build --target wasm32-wasi-preview1-threads --profile wasm-fixture --platform",
+    "build:napi": "napi build --target wasm32-wasip1-threads --profile wasm-fixture --platform",
     "build:wasm": "node build.mjs"
   }
 }
