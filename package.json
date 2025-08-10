@@ -1,6 +1,6 @@
 {
   "name": "@napi-rs/wasm-tools",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "https://github.com/rustwasm/walrus bindings",
   "main": "index.js",
   "types": "index.d.ts",
