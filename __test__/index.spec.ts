@@ -1,10 +1,10 @@
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { panic } from '@napi-rs/wasm-panic'
 import test from 'ava'
 
 import { WasmModule } from '../index'
+import { panic } from '../crates/panic/index.js'
 
 const __dirname = join(fileURLToPath(import.meta.url), '..')
 
@@ -22,7 +22,7 @@ test('should throw panic with source info', (t) => {
       .split('\n')
       .slice(2, 4)
       .map((line: string) => line.trim())
-    t.true(line2.startsWith('at std::panicking::rust_panic_with_hook'))
-    t.true(line3.startsWith('at std::panicking::begin_panic_handler::{{closure}}'))
+    t.true(line2.startsWith('at panic.wasm.std::sys::pal::wasi::helpers::abort_internal'))
+    t.true(line3.startsWith('at panic.wasm.std::process::abort'))
   }
 })

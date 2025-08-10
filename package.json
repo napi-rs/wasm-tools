@@ -50,7 +50,6 @@
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "bench": "node -r @swc-node/register benchmark/bench.ts",
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "format": "run-p format:prettier format:rs format:toml",
@@ -65,23 +64,21 @@
   "devDependencies": {
     "@emnapi/core": "^1.4.5",
     "@emnapi/runtime": "^1.4.5",
-    "@napi-rs/cli": "^3.0.1",
-    "@napi-rs/wasm-runtime": "^1.0.1",
-    "@napi-rs/wasm-panic": "workspace:*",
+    "@napi-rs/cli": "^3.1.2",
+    "@napi-rs/wasm-runtime": "^1.0.3",
     "@oxc-node/core": "^0.0.32",
     "@taplo/cli": "^0.7.0",
     "@tybys/wasm-util": "^0.10.0",
-    "@types/node": "^24.1.0",
+    "@types/node": "^24.2.1",
     "ava": "^6.4.1",
-    "benny": "^3.7.1",
-    "chalk": "^5.4.1",
+    "chalk": "^5.5.0",
     "emnapi": "^1.4.5",
     "husky": "^9.1.7",
-    "lint-staged": "^16.1.2",
+    "lint-staged": "^16.1.5",
     "npm-run-all2": "^8.0.4",
-    "oxlint": "^1.8.0",
+    "oxlint": "^1.11.1",
     "prettier": "^3.6.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.9.2"
   },
   "lint-staged": {
     "*.@(js|ts|tsx)": [
