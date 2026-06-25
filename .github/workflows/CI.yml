@@ -24,7 +24,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: setup pnpm
         uses: pnpm/action-setup@v6
       - name: Setup node
@@ -93,7 +93,7 @@ jobs:
     name: stable - ${{ matrix.settings.target }} - node@22
     runs-on: ${{ matrix.settings.host }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: setup pnpm
         uses: pnpm/action-setup@v6
       - name: Setup node
@@ -156,7 +156,7 @@ jobs:
     runs-on: ubuntu-latest
     name: Build FreeBSD
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Build
         id: build
         uses: cross-platform-actions/action@v1.1.0
@@ -223,7 +223,7 @@ jobs:
           - '22'
     runs-on: ${{ matrix.settings.host }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: setup pnpm
         uses: pnpm/action-setup@v6
       - name: Setup node
@@ -260,7 +260,7 @@ jobs:
           - '22'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: setup pnpm
         uses: pnpm/action-setup@v6
       - name: Setup node
@@ -317,7 +317,7 @@ jobs:
       - build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: setup pnpm
         uses: pnpm/action-setup@v6
       - name: Setup node
@@ -352,7 +352,7 @@ jobs:
       - test-linux-binding
       - test-wasi
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: setup pnpm
         uses: pnpm/action-setup@v6
       - name: Setup node
