@@ -82,6 +82,27 @@ export declare class WasmModule {
   static fromPath(path: string): WasmModule
   /** Construct a new module from the given path and configuration. */
   static fromFileWithConfig(path: string, config: ModuleConfig): WasmModule
+  /**
+   * Construct a new module from the in-memory wasm buffer with the default
+   * configuration.
+   */
+  static fromBuffer(bytes: Uint8Array): WasmModule
+  /** Construct a new module from the in-memory wasm buffer and configuration. */
+  static fromBufferWithConfig(bytes: Uint8Array, config: ModuleConfig): WasmModule
   /** Emit this module into an in-memory wasm buffer. */
   emitWasm(demangle: boolean): Uint8Array
+  /** Emit this module into a `.wasm` file at the given path. */
+  emitWasmFile(path: string, demangle: boolean): void
+  /** Write the GraphViz `.dot` representation of this module to the given path. */
+  writeGraphvizDot(path: string): void
+  /**
+   * Run garbage collection passes over this module, removing items that are
+   * not transitively referenced from any root (exports, the start function,
+   * etc.).
+   */
+  gc(): void
+  /** The name of this module, as stored in the wasm "name" custom section. */
+  get name(): string | null
+  /** Set the name of this module, stored in the wasm "name" custom section. */
+  set name(name: string | undefined | null)
 }
