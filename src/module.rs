@@ -1,8 +1,9 @@
-use napi::bindgen_prelude::{Result, Uint8Array};
+use napi::bindgen_prelude::{Reference, Result, Uint8Array};
+use napi::Env;
 use napi_derive::napi;
 use walrus::{Module, RawCustomSection};
 
-use crate::ModuleConfig;
+use crate::{ModuleConfig, WasmCustomSections, WasmProducers};
 
 #[napi]
 pub struct WasmModule {
@@ -85,6 +86,25 @@ impl WasmModule {
   /// Set the name of this module, stored in the wasm "name" custom section.
   pub fn set_name(&mut self, name: Option<String>) {
     self.inner.name = name;
+  }
+
+  #[napi(getter)]
+  /// The `producers` custom section of this module, describing the tools that
+  /// produced it. Mutations through the returned object write back to this
+  /// module.
+  pub fn producers(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmProducers> {
+    Ok(WasmProducers {
+      module: this.clone(env)?,
+    })
+  }
+
+  #[napi(getter)]
+  /// The custom sections of this module. Mutations through the returned object
+  /// write back to this module.
+  pub fn customs(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmCustomSections> {
+    Ok(WasmCustomSections {
+      module: this.clone(env)?,
+    })
   }
 }
 

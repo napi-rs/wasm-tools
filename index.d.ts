@@ -74,6 +74,26 @@ export declare class ModuleConfig {
   parse(binary: Uint8Array): WasmModule
 }
 
+/**
+ * The custom sections of a module. Mutations write straight through to the
+ * owning [`WasmModule`].
+ */
+export declare class WasmCustomSections {
+  /** Add a raw, unparsed custom section with the given name and data. */
+  addRaw(name: string, data: Uint8Array): void
+  /**
+   * Remove the first raw custom section with the given name, returning its
+   * data if it was present.
+   */
+  removeRaw(name: string): Uint8Array | null
+  /**
+   * List the custom sections currently present in the module. `data` is the
+   * raw bytes for unparsed (raw) sections, or `null` for sections that walrus
+   * has parsed into a typed representation.
+   */
+  list(): Array<RawSectionInfo>
+}
+
 export declare class WasmModule {
   /**
    * Construct a new module from the given path with the default
@@ -105,4 +125,53 @@ export declare class WasmModule {
   get name(): string | null
   /** Set the name of this module, stored in the wasm "name" custom section. */
   set name(name: string | undefined | null)
+  /**
+   * The `producers` custom section of this module, describing the tools that
+   * produced it. Mutations through the returned object write back to this
+   * module.
+   */
+  get producers(): WasmProducers
+  /**
+   * The custom sections of this module. Mutations through the returned object
+   * write back to this module.
+   */
+  get customs(): WasmCustomSections
+}
+
+/**
+ * The `producers` custom section of a module, exposing the tools that produced
+ * it. Mutations write straight through to the owning [`WasmModule`].
+ */
+export declare class WasmProducers {
+  /** Add (or update) a `language` entry in the producers section. */
+  addLanguage(language: string, version: string): void
+  /** Add (or update) a `processed-by` entry in the producers section. */
+  addProcessedBy(tool: string, version: string): void
+  /** Add (or update) an `sdk` entry in the producers section. */
+  addSdk(sdk: string, version: string): void
+  /** Remove every field from the producers section. */
+  clear(): void
+  /** List the fields currently present in the producers section. */
+  fields(): Array<ProducerFieldInfo>
+}
+
+/**
+ * A single field (e.g. `language`, `sdk`, `processed-by`) of the producers
+ * section, along with its versioned values.
+ */
+export interface ProducerFieldInfo {
+  name: string
+  values: Array<ProducerValueInfo>
+}
+
+/** A single versioned value within a producers field. */
+export interface ProducerValueInfo {
+  name: string
+  version: string
+}
+
+/** Information about a single custom section in the module. */
+export interface RawSectionInfo {
+  name: string
+  data?: Uint8Array
 }

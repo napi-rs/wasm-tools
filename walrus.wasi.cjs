@@ -109,4 +109,6 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
 })
 module.exports = __napiModule.exports
 module.exports.ModuleConfig = __napiModule.exports.ModuleConfig
+module.exports.WasmCustomSections = __napiModule.exports.WasmCustomSections
 module.exports.WasmModule = __napiModule.exports.WasmModule
+module.exports.WasmProducers = __napiModule.exports.WasmProducers
