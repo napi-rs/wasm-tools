@@ -582,3 +582,5 @@ module.exports.WasmGlobal = nativeBinding.WasmGlobal
 module.exports.WasmGlobals = nativeBinding.WasmGlobals
 module.exports.WasmModule = nativeBinding.WasmModule
 module.exports.WasmProducers = nativeBinding.WasmProducers
+module.exports.AbstractHeapType = nativeBinding.AbstractHeapType
+module.exports.GlobalKind = nativeBinding.GlobalKind

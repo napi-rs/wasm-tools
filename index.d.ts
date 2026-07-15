@@ -123,6 +123,10 @@ export declare class WasmGlobal {
   set mutable(value: boolean)
   /** Whether this global is shared (a creation-time property, read only). */
   get shared(): boolean
+  /** This global's value type (read only). */
+  get ty(): ValType
+  /** Whether this global is imported or locally defined (read only). */
+  get kind(): GlobalKind
 }
 
 /**
@@ -223,6 +227,61 @@ export declare class WasmProducers {
   fields(): Array<ProducerFieldInfo>
 }
 
+/** An abstract heap type, mirroring `walrus::AbstractHeapType` 1:1. */
+export declare const enum AbstractHeapType {
+  /** The abstract `func` heap type (any function). */
+  Func = 'Func',
+  /** The abstract `extern` heap type (external/host references). */
+  Extern = 'Extern',
+  /** The abstract `any` heap type (any internal reference). */
+  Any = 'Any',
+  /** The abstract `none` heap type (bottom type for internal refs). */
+  None = 'None',
+  /** The abstract `noextern` heap type (bottom type for external refs). */
+  NoExtern = 'NoExtern',
+  /** The abstract `nofunc` heap type (bottom type for function refs). */
+  NoFunc = 'NoFunc',
+  /** The abstract `eq` heap type (comparable references: i31, struct, array). */
+  Eq = 'Eq',
+  /** The abstract `struct` heap type. */
+  Struct = 'Struct',
+  /** The abstract `array` heap type. */
+  Array = 'Array',
+  /** The abstract `i31` heap type (31-bit integers). */
+  I31 = 'I31',
+  /** The abstract `exn` heap type (exceptions). */
+  Exn = 'Exn',
+  /** The abstract `noexn` heap type (bottom type for exception refs). */
+  NoExn = 'NoExn'
+}
+
+/**
+ * Whether a global is imported or locally defined.
+ *
+ * Mirrors the discriminant of `walrus::GlobalKind` (`Import(ImportId)` /
+ * `Local(ConstExpr)`). The companion accessors that expose the import id or
+ * the local initializer are deferred to a later task.
+ */
+export declare const enum GlobalKind {
+  /** An imported global (its initializer lives in the host). */
+  Import = 'Import',
+  /** A locally defined global (has an in-module initializer). */
+  Local = 'Local'
+}
+
+/**
+ * A heap type for reference (`ValType::Ref`) values.
+ *
+ * The `Concrete` and `Exact` variants carry a `type_index` — the stable
+ * `.index()` of the referenced type in the module's type arena. This is
+ * display-only: an index alone cannot rebuild a walrus `TypeId`, so there is
+ * no reverse conversion (read-only value layer).
+ */
+export type HeapType =
+  | { type: 'Abstract', kind: AbstractHeapType }
+  | { type: 'Concrete', typeIndex: number }
+  | { type: 'Exact', typeIndex: number }
+
 /**
  * A single field (e.g. `language`, `sdk`, `processed-by`) of the producers
  * section, along with its versioned values.
@@ -243,3 +302,20 @@ export interface RawSectionInfo {
   name: string
   data?: Uint8Array
 }
+
+/**
+ * A wasm value type.
+ *
+ * Generated as a TypeScript discriminated union keyed on `type`, e.g.
+ * `{ type: 'I32' } | ... | { type: 'Ref'; nullable: boolean; heap: HeapType }`.
+ *
+ * `walrus::RefType { nullable, heap_type }` is inlined into the `Ref` variant;
+ * there is no standalone `RefType` napi type.
+ */
+export type ValType =
+  | { type: 'I32' }
+  | { type: 'I64' }
+  | { type: 'F32' }
+  | { type: 'F64' }
+  | { type: 'V128' }
+  | { type: 'Ref', nullable: boolean, heap: HeapType }

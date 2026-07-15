@@ -3,7 +3,21 @@ use napi::Env;
 use napi_derive::napi;
 use walrus::GlobalId;
 
+use crate::valtype::ValType;
 use crate::WasmModule;
+
+/// Whether a global is imported or locally defined.
+///
+/// Mirrors the discriminant of `walrus::GlobalKind` (`Import(ImportId)` /
+/// `Local(ConstExpr)`). The companion accessors that expose the import id or
+/// the local initializer are deferred to a later task.
+#[napi(string_enum)]
+pub enum GlobalKind {
+  /// An imported global (its initializer lives in the host).
+  Import,
+  /// A locally defined global (has an in-module initializer).
+  Local,
+}
 
 /// The globals of a module. Each accessor materializes a fresh [`WasmGlobal`]
 /// handle that reads and writes straight through to the owning [`WasmModule`];
@@ -174,5 +188,22 @@ impl WasmGlobal {
   pub fn shared(&self) -> Result<bool> {
     self.ensure_exists()?;
     Ok(self.module.inner.globals.get(self.id).shared)
+  }
+
+  #[napi(getter)]
+  /// This global's value type (read only).
+  pub fn ty(&self) -> Result<ValType> {
+    self.ensure_exists()?;
+    Ok(self.module.inner.globals.get(self.id).ty.into())
+  }
+
+  #[napi(getter)]
+  /// Whether this global is imported or locally defined (read only).
+  pub fn kind(&self) -> Result<GlobalKind> {
+    self.ensure_exists()?;
+    Ok(match self.module.inner.globals.get(self.id).kind {
+      walrus::GlobalKind::Import(_) => GlobalKind::Import,
+      walrus::GlobalKind::Local(_) => GlobalKind::Local,
+    })
   }
 }

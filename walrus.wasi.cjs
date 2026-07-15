@@ -114,3 +114,5 @@ module.exports.WasmGlobal = __napiModule.exports.WasmGlobal
 module.exports.WasmGlobals = __napiModule.exports.WasmGlobals
 module.exports.WasmModule = __napiModule.exports.WasmModule
 module.exports.WasmProducers = __napiModule.exports.WasmProducers
+module.exports.AbstractHeapType = __napiModule.exports.AbstractHeapType
+module.exports.GlobalKind = __napiModule.exports.GlobalKind
