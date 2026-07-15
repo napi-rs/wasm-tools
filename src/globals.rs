@@ -194,7 +194,10 @@ impl WasmGlobal {
   /// This global's value type (read only).
   pub fn ty(&self) -> Result<ValType> {
     self.ensure_exists()?;
-    Ok(self.module.inner.globals.get(self.id).ty.into())
+    // Fallible: the value type may embed a `#[non_exhaustive]` walrus HeapType.
+    // A later 0.26.x (Cargo.lock is untracked) could add a variant we don't
+    // map; surface that as a catchable JS error, never a process-aborting panic.
+    self.module.inner.globals.get(self.id).ty.try_into()
   }
 
   #[napi(getter)]
