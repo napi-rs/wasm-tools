@@ -79,7 +79,15 @@ export declare class ModuleConfig {
  * owning [`WasmModule`].
  */
 export declare class WasmCustomSections {
-  /** Add a raw, unparsed custom section with the given name and data. */
+  /**
+   * Add a raw, unparsed custom section with the given name and data.
+   *
+   * Names starting with `.debug` are rejected: walrus manages DWARF debug
+   * sections through its own parsed representation and silently drops any
+   * `.debug*` custom section from `emitWasm` output, so adding one here would
+   * be lost data. Add real debug info through the module's DWARF handling
+   * instead.
+   */
   addRaw(name: string, data: Uint8Array): void
   /**
    * Remove the first raw custom section with the given name, returning its

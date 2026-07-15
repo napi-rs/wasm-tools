@@ -1,5 +1,5 @@
 use napi::bindgen_prelude::{Reference, Result, Uint8Array};
-use napi::Env;
+use napi::{Env, Error};
 use napi_derive::napi;
 use walrus::{Module, RawCustomSection};
 
@@ -49,16 +49,15 @@ impl WasmModule {
   #[napi]
   /// Emit this module into an in-memory wasm buffer.
   pub fn emit_wasm(&mut self, demangle: bool) -> Result<Uint8Array> {
-    self.prepare_for_emit(demangle);
-    Ok(self.inner.emit_wasm().into())
+    Ok(self.emit_bytes(demangle).into())
   }
 
   #[napi]
   /// Emit this module into a `.wasm` file at the given path.
   pub fn emit_wasm_file(&mut self, path: String, demangle: bool) -> Result<()> {
-    self.prepare_for_emit(demangle);
-    self.inner.emit_wasm_file(path)?;
-    Ok(())
+    let bytes = self.emit_bytes(demangle);
+    std::fs::write(&path, bytes)
+      .map_err(|e| Error::from_reason(format!("failed to write wasm to '{path}': {e}")))
   }
 
   #[napi]
@@ -109,6 +108,38 @@ impl WasmModule {
 }
 
 impl WasmModule {
+  /// Emit this module to wasm bytes without mutating the in-memory module's
+  /// custom sections.
+  ///
+  /// walrus' [`Module::emit_wasm`] does `mem::take(&mut self.customs)` and never
+  /// restores it, so a naive emit would leave `self.inner.customs` empty:
+  /// `customs.list()` would come back empty after an emit, a second emit would
+  /// be missing every raw custom section, and `build_id` would be regenerated on
+  /// every emit (since `prepare_for_emit` would no longer see the previous one).
+  /// We snapshot the raw custom sections before emitting and add them back after,
+  /// so emission is non-destructive: the output bytes are identical (walrus emits
+  /// the sections before draining them) while the module keeps its state.
+  ///
+  /// Every section reachable through our API lives in `customs` as a
+  /// [`RawCustomSection`]: `addRaw` only ever adds that type, and parsing stores
+  /// unknown sections as `RawCustomSection` too (the `name`/`producers`/`.debug`
+  /// sections are parsed into dedicated fields, never `customs`). The downcast
+  /// filter therefore captures the full set with nothing dropped.
+  fn emit_bytes(&mut self, demangle: bool) -> Vec<u8> {
+    self.prepare_for_emit(demangle);
+    let saved: Vec<RawCustomSection> = self
+      .inner
+      .customs
+      .iter()
+      .filter_map(|(_, section)| section.as_any().downcast_ref::<RawCustomSection>().cloned())
+      .collect();
+    let out = self.inner.emit_wasm();
+    for section in saved {
+      self.inner.customs.add(section);
+    }
+    out
+  }
+
   /// Shared pre-emit preparation used by both `emit_wasm` and `emit_wasm_file`:
   /// optionally demangle Rust symbol names, then add a `build_id` custom
   /// section if one is not already present.

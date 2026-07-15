@@ -1,4 +1,5 @@
-use napi::bindgen_prelude::{Reference, Uint8Array};
+use napi::bindgen_prelude::{Reference, Result, Uint8Array};
+use napi::Error;
 use napi_derive::napi;
 use walrus::RawCustomSection;
 
@@ -15,11 +16,23 @@ pub struct WasmCustomSections {
 impl WasmCustomSections {
   #[napi]
   /// Add a raw, unparsed custom section with the given name and data.
-  pub fn add_raw(&mut self, name: String, data: Uint8Array) {
+  ///
+  /// Names starting with `.debug` are rejected: walrus manages DWARF debug
+  /// sections through its own parsed representation and silently drops any
+  /// `.debug*` custom section from `emitWasm` output, so adding one here would
+  /// be lost data. Add real debug info through the module's DWARF handling
+  /// instead.
+  pub fn add_raw(&mut self, name: String, data: Uint8Array) -> Result<()> {
+    if name.starts_with(".debug") {
+      return Err(Error::from_reason(format!(
+        "custom section names starting with '.debug' are managed by walrus's DWARF handling and are not emitted; refusing to add '{name}'"
+      )));
+    }
     self.module.inner.customs.add(RawCustomSection {
       name,
       data: data.to_vec(),
     });
+    Ok(())
   }
 
   #[napi]
