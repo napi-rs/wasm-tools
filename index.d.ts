@@ -146,6 +146,13 @@ export declare class WasmGlobals {
    *
    * It is the caller's responsibility to ensure nothing still references the
    * deleted global (walrus does not check).
+   *
+   * Same no-panic invariant as the item accessors: walrus'
+   * `ModuleGlobals::delete` asserts the id is live, and a panic across FFI
+   * aborts the process. Id equality includes the arena_id, so this liveness
+   * scan rejects BOTH already-deleted ids (`iter()` skips tombstoned entries)
+   * AND handles that belong to a different module (arena_id mismatch),
+   * surfacing a catchable JS error instead of aborting.
    */
   delete(global: WasmGlobal): void
 }

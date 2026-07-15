@@ -85,6 +85,35 @@ test('delete removes a global and the removal persists through emit and re-parse
   t.is(reparsed.globals.length, 1)
 })
 
+test('delete-guard: double-delete throws instead of aborting the process', (t) => {
+  const m = load()
+  const handle = m.globals.items()[0]
+
+  // First delete succeeds and drops the count.
+  m.globals.delete(handle)
+  t.is(m.globals.length, 1)
+
+  // Deleting the SAME (now dead) handle again must raise a catchable JS error
+  // rather than tripping walrus' `assert(contains(id))` and aborting via FFI.
+  const err = t.throws(() => m.globals.delete(handle))
+  t.regex(err!.message, /deleted/)
+})
+
+test('delete-guard: cross-module delete throws and leaves both modules unchanged', (t) => {
+  const a = load()
+  const b = load()
+
+  // A handle minted from module B must never be accepted by module A: the ids
+  // carry an arena_id, so the liveness scan rejects the foreign handle before
+  // walrus can assert on it.
+  const bHandle = b.globals.items()[0]
+  t.throws(() => a.globals.delete(bHandle))
+
+  // Neither module was mutated by the rejected delete.
+  t.is(a.globals.length, 2)
+  t.is(b.globals.length, 2)
+})
+
 test('delete-guard: using a handle after delete throws instead of crashing', (t) => {
   const m = load()
   const handle = m.globals.items()[0]

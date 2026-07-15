@@ -81,8 +81,26 @@ impl WasmGlobals {
   ///
   /// It is the caller's responsibility to ensure nothing still references the
   /// deleted global (walrus does not check).
-  pub fn delete(&mut self, global: &WasmGlobal) {
-    self.module.inner.globals.delete(global.id);
+  ///
+  /// Same no-panic invariant as the item accessors: walrus'
+  /// `ModuleGlobals::delete` asserts the id is live, and a panic across FFI
+  /// aborts the process. Id equality includes the arena_id, so this liveness
+  /// scan rejects BOTH already-deleted ids (`iter()` skips tombstoned entries)
+  /// AND handles that belong to a different module (arena_id mismatch),
+  /// surfacing a catchable JS error instead of aborting.
+  pub fn delete(&mut self, global: &WasmGlobal) -> Result<()> {
+    if self
+      .module
+      .inner
+      .globals
+      .iter()
+      .any(|g| g.id() == global.id)
+    {
+      self.module.inner.globals.delete(global.id);
+      Ok(())
+    } else {
+      Err(crate::handle::deleted("global"))
+    }
   }
 }
 
