@@ -102,6 +102,54 @@ export declare class WasmCustomSections {
   list(): Array<RawSectionInfo>
 }
 
+/**
+ * A single global in a module, as a live handle: it holds the global's id plus
+ * a strong reference to the owning [`WasmModule`], and every accessor reads or
+ * writes through to that module.
+ */
+export declare class WasmGlobal {
+  /**
+   * This global's stable index — its identity for numeric lookup. Readable
+   * even after the global is deleted (it never touches the arena).
+   */
+  get index(): number
+  /** This global's name from the wasm "name" custom section, if any. */
+  get name(): string | null
+  /** Set this global's name, stored in the wasm "name" custom section. */
+  set name(name: string | undefined | null)
+  /** Whether this global is mutable. */
+  get mutable(): boolean
+  /** Set whether this global is mutable. */
+  set mutable(value: boolean)
+  /** Whether this global is shared (a creation-time property, read only). */
+  get shared(): boolean
+}
+
+/**
+ * The globals of a module. Each accessor materializes a fresh [`WasmGlobal`]
+ * handle that reads and writes straight through to the owning [`WasmModule`];
+ * the collection itself caches nothing.
+ */
+export declare class WasmGlobals {
+  /** The number of globals in the module. */
+  get length(): number
+  /** Every global in the module, as live item handles. */
+  items(): Array<WasmGlobal>
+  /** The global whose stable `.index` equals `index`, or `null` if none exists. */
+  getByIndex(index: number): WasmGlobal | null
+  /** The first global with the given name, or `null` if none is named that. */
+  byName(name: string): WasmGlobal | null
+  /**
+   * Delete a global from the module. Takes the handle itself: a JS number can
+   * never be turned back into a walrus id, so the wrapper is the only way to
+   * name an item for removal.
+   *
+   * It is the caller's responsibility to ensure nothing still references the
+   * deleted global (walrus does not check).
+   */
+  delete(global: WasmGlobal): void
+}
+
 export declare class WasmModule {
   /**
    * Construct a new module from the given path with the default
@@ -144,6 +192,11 @@ export declare class WasmModule {
    * write back to this module.
    */
   get customs(): WasmCustomSections
+  /**
+   * The globals of this module. Each handle materialized through the returned
+   * object reads and writes back to this module.
+   */
+  get globals(): WasmGlobals
 }
 
 /**

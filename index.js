@@ -578,5 +578,7 @@ if (!nativeBinding) {
 module.exports = nativeBinding
 module.exports.ModuleConfig = nativeBinding.ModuleConfig
 module.exports.WasmCustomSections = nativeBinding.WasmCustomSections
+module.exports.WasmGlobal = nativeBinding.WasmGlobal
+module.exports.WasmGlobals = nativeBinding.WasmGlobals
 module.exports.WasmModule = nativeBinding.WasmModule
 module.exports.WasmProducers = nativeBinding.WasmProducers

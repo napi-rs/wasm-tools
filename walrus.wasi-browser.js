@@ -59,5 +59,7 @@ const {
 export default __napiModule.exports
 export const ModuleConfig = __napiModule.exports.ModuleConfig
 export const WasmCustomSections = __napiModule.exports.WasmCustomSections
+export const WasmGlobal = __napiModule.exports.WasmGlobal
+export const WasmGlobals = __napiModule.exports.WasmGlobals
 export const WasmModule = __napiModule.exports.WasmModule
 export const WasmProducers = __napiModule.exports.WasmProducers
