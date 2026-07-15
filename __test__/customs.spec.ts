@@ -114,6 +114,46 @@ test('emitWasmFile preserves custom sections on the module', (t) => {
   t.deepEqual(customSections(m.emitWasm(false), 'x.note'), [new Uint8Array([9, 8, 7])])
 })
 
+// Invariant 3b: emitWasmFile is retry-safe. Custom sections are restored BEFORE
+// `std::fs::write`, so a FAILED write must leave the module fully intact — the
+// section survives and a retry to a good path succeeds, re-emitting identical
+// bytes (same `build_id`, no regeneration). This guards against a regression
+// that moved restoration to after the write, which would lose customs whenever
+// the write failed while a successful write still looked fine.
+test('emitWasmFile is retry-safe: a failed write keeps customs and re-emits an identical build_id', (t) => {
+  const m = WasmModule.fromBuffer(emptyModuleBytes())
+  m.customs.addRaw('x.note', new Uint8Array([4, 5, 6]))
+
+  // A successful emit BEFORE the failed write, to capture the stable build_id.
+  const buildIdBefore = customSections(m.emitWasm(false), 'build_id')
+  t.is(buildIdBefore.length, 1)
+
+  // Writing to an existing directory path fails deterministically (EISDIR),
+  // exercising the failure branch of emitWasmFile without any external CLI.
+  const badPath = mkdtempSync(join(tmpdir(), 'wasm-customs-faildir-'))
+  t.throws(() => m.emitWasmFile(badPath, false))
+
+  // The failed write must not lose the custom section (restored before write).
+  t.true(m.customs.list().some((s) => s.name === 'x.note'))
+
+  // Retry to a valid path: it succeeds and the written bytes re-parse.
+  const out = tmpFile('retry.wasm')
+  m.emitWasmFile(out, false)
+  const writtenBytes = readFileSync(out)
+  t.true(
+    WasmModule.fromBuffer(writtenBytes)
+      .customs.list()
+      .some((s) => s.name === 'x.note'),
+  )
+  t.is(customSections(writtenBytes, 'x.note').length, 1)
+
+  // The build_id is byte-identical to the pre-failure emit: the failed write
+  // did not regenerate it.
+  const buildIdAfter = customSections(writtenBytes, 'build_id')
+  t.is(buildIdAfter.length, 1)
+  t.deepEqual(buildIdAfter, buildIdBefore)
+})
+
 // Invariant 4: adding a `.debug*` section is refused loudly, because walrus
 // silently drops such sections from emit output.
 test('addRaw rejects .debug* section names', (t) => {
