@@ -112,6 +112,57 @@ test('addLocal accepts a null maximum', (t) => {
   t.is(reparsed.memories.getByIndex(mem.index)!.maximum, null)
 })
 
+test('addLocal rejects a negative initial size and leaves the collection unchanged', (t) => {
+  const m = load()
+  const err = t.throws(() => m.memories.addLocal(false, false, -5n, null, null))
+  t.regex(err!.message, /non-negative/)
+  t.is(m.memories.length, 2)
+})
+
+test('addLocal rejects an out-of-range (u64 overflow) initial size and leaves the collection unchanged', (t) => {
+  const m = load()
+  const err = t.throws(() => m.memories.addLocal(false, false, 2n ** 64n, null, null))
+  t.regex(err!.message, /non-negative/)
+  t.is(m.memories.length, 2)
+})
+
+test('addLocal rejects an out-of-range maximum before mutating', (t) => {
+  const m = load()
+  const err = t.throws(() => m.memories.addLocal(false, false, 1n, 2n ** 64n, null))
+  t.regex(err!.message, /non-negative/)
+  t.is(m.memories.length, 2)
+})
+
+test('set initial rejects a negative size and preserves the original through emit and re-parse', (t) => {
+  const m = load()
+  const mem = m.memories.items()[0]
+  t.is(mem.initial, 1n)
+
+  const err = t.throws(() => {
+    mem.initial = -5n
+  })
+  t.regex(err!.message, /non-negative/)
+  // No partial mutation: in-memory value untouched...
+  t.is(mem.initial, 1n)
+  // ...and the emitted module still carries the original limit.
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  t.is(reparsed.memories.getByIndex(0)!.initial, 1n)
+})
+
+test('set maximum rejects an out-of-range size and preserves the original through emit and re-parse', (t) => {
+  const m = load()
+  const mem = m.memories.items()[0]
+  t.is(mem.maximum, 2n)
+
+  const err = t.throws(() => {
+    mem.maximum = 2n ** 64n
+  })
+  t.regex(err!.message, /non-negative/)
+  t.is(mem.maximum, 2n)
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  t.is(reparsed.memories.getByIndex(0)!.maximum, 2n)
+})
+
 test('delete removes a memory and the removal persists through emit and re-parse', (t) => {
   const m = load()
   m.memories.delete(m.memories.items()[0])

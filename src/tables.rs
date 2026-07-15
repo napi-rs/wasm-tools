@@ -131,8 +131,19 @@ impl WasmTables {
         ))
       }
     };
-    let initial = initial.get_u64().1;
-    let maximum = maximum.map(|m| m.get_u64().1);
+    // `add_local` builds a NULL-initialized table (`init: None`), and walrus
+    // requires an initializer for a non-defaultable (non-nullable) element type
+    // — a non-nullable element here would emit a table that fails validation.
+    // Reject it BEFORE touching the arena (init-with-value is a deferred task).
+    if !element_ty.nullable {
+      return Err(Error::from_reason(
+        "a non-nullable table element type requires an initializer; addLocal creates a null-initialized table, so its element type must be nullable",
+      ));
+    }
+    let initial = crate::handle::bigint_to_u64(initial, "initial")?;
+    let maximum = maximum
+      .map(|m| crate::handle::bigint_to_u64(m, "maximum"))
+      .transpose()?;
     let id = self
       .module
       .inner
@@ -212,8 +223,11 @@ impl WasmTable {
   #[napi(setter)]
   /// Set this table's initial size, in entries.
   pub fn set_initial(&mut self, value: BigInt) -> Result<()> {
+    // Convert (and reject a bad size) BEFORE the liveness check and the arena
+    // write, so a bad input never mutates the module.
+    let value = crate::handle::bigint_to_u64(value, "initial")?;
     self.ensure_exists()?;
-    self.module.inner.tables.get_mut(self.id).initial = value.get_u64().1;
+    self.module.inner.tables.get_mut(self.id).initial = value;
     Ok(())
   }
 
@@ -228,8 +242,13 @@ impl WasmTable {
   #[napi(setter)]
   /// Set this table's optional maximum size, in entries. `null` clears it.
   pub fn set_maximum(&mut self, value: Option<BigInt>) -> Result<()> {
+    // Convert (and reject a bad size) BEFORE the liveness check and the arena
+    // write, so a bad input never mutates the module.
+    let value = value
+      .map(|m| crate::handle::bigint_to_u64(m, "maximum"))
+      .transpose()?;
     self.ensure_exists()?;
-    self.module.inner.tables.get_mut(self.id).maximum = value.map(|m| m.get_u64().1);
+    self.module.inner.tables.get_mut(self.id).maximum = value;
     Ok(())
   }
 

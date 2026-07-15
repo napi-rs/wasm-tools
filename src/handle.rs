@@ -1,4 +1,23 @@
-use napi::bindgen_prelude::{Error, Result};
+use napi::bindgen_prelude::{BigInt, Error, Result};
+
+/// Convert a JS `BigInt` to a `u64` wasm size, rejecting a negative or
+/// out-of-range value with a catchable error.
+///
+/// `BigInt::get_u64()` returns `(sign_bit, value, lossless)` and the previous
+/// code kept only `value` — so `-5n` silently stored `5` and `2n**64n` silently
+/// stored `0`. Unlike a wasm `i64` VALUE (which wraps by spec), a memory/table
+/// SIZE is an unsigned count with no modulo semantics, so a size that does not
+/// fit losslessly in a `u64` is data corruption, not wraparound. Reject it here
+/// before any arena mutation so the API never reports a bogus success.
+pub(crate) fn bigint_to_u64(v: BigInt, what: &str) -> Result<u64> {
+  let (sign_bit, value, lossless) = v.get_u64();
+  if sign_bit || !lossless {
+    return Err(Error::from_reason(format!(
+      "{what} must be a non-negative integer that fits in a u64"
+    )));
+  }
+  Ok(value)
+}
 
 /// Error returned when an item handle is used after its item was deleted from
 /// the module.

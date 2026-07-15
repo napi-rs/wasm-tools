@@ -103,8 +103,10 @@ impl WasmMemories {
     maximum: Option<BigInt>,
     page_size_log2: Option<u32>,
   ) -> Result<WasmMemory> {
-    let initial = initial.get_u64().1;
-    let maximum = maximum.map(|m| m.get_u64().1);
+    let initial = crate::handle::bigint_to_u64(initial, "initial")?;
+    let maximum = maximum
+      .map(|m| crate::handle::bigint_to_u64(m, "maximum"))
+      .transpose()?;
     let id =
       self
         .module
@@ -192,8 +194,11 @@ impl WasmMemory {
   #[napi(setter)]
   /// Set this memory's initial size, in wasm pages.
   pub fn set_initial(&mut self, value: BigInt) -> Result<()> {
+    // Convert (and reject a bad size) BEFORE the liveness check and the arena
+    // write, so a bad input never mutates the module.
+    let value = crate::handle::bigint_to_u64(value, "initial")?;
     self.ensure_exists()?;
-    self.module.inner.memories.get_mut(self.id).initial = value.get_u64().1;
+    self.module.inner.memories.get_mut(self.id).initial = value;
     Ok(())
   }
 
@@ -208,8 +213,13 @@ impl WasmMemory {
   #[napi(setter)]
   /// Set this memory's optional maximum size, in wasm pages. `null` clears it.
   pub fn set_maximum(&mut self, value: Option<BigInt>) -> Result<()> {
+    // Convert (and reject a bad size) BEFORE the liveness check and the arena
+    // write, so a bad input never mutates the module.
+    let value = value
+      .map(|m| crate::handle::bigint_to_u64(m, "maximum"))
+      .transpose()?;
     self.ensure_exists()?;
-    self.module.inner.memories.get_mut(self.id).maximum = value.map(|m| m.get_u64().1);
+    self.module.inner.memories.get_mut(self.id).maximum = value;
     Ok(())
   }
 

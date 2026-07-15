@@ -19,6 +19,7 @@ const load = () => WasmModule.fromBuffer(fixtureBytes)
 
 const FUNCREF = { type: 'Ref', nullable: true, heap: { type: 'Abstract', kind: 'Func' } } as const
 const EXTERNREF = { type: 'Ref', nullable: true, heap: { type: 'Abstract', kind: 'Extern' } } as const
+const NON_NULLABLE_FUNCREF = { type: 'Ref', nullable: false, heap: { type: 'Abstract', kind: 'Func' } } as const
 
 test('tables collection reports length and materializes item handles', (t) => {
   const m = load()
@@ -121,6 +122,55 @@ test('addLocal rejects a non-reference element type (catchable, never aborts)', 
 
   // The rejected add left the module untouched.
   t.is(m.tables.length, 2)
+})
+
+test('addLocal rejects a negative initial size and leaves the collection unchanged', (t) => {
+  const m = load()
+  const err = t.throws(() => m.tables.addLocal(false, -5n, null, FUNCREF))
+  t.regex(err!.message, /non-negative/)
+  t.is(m.tables.length, 2)
+})
+
+test('addLocal rejects an out-of-range (u64 overflow) initial size and leaves the collection unchanged', (t) => {
+  const m = load()
+  const err = t.throws(() => m.tables.addLocal(false, 2n ** 64n, null, FUNCREF))
+  t.regex(err!.message, /non-negative/)
+  t.is(m.tables.length, 2)
+})
+
+test('addLocal rejects a non-nullable element type (would emit an invalid module) and leaves the collection unchanged', (t) => {
+  const m = load()
+  const err = t.throws(() => m.tables.addLocal(false, 1n, null, NON_NULLABLE_FUNCREF))
+  t.regex(err!.message, /nullable|initializer/i)
+  t.is(m.tables.length, 2)
+})
+
+test('set initial rejects a negative size and preserves the original through emit and re-parse', (t) => {
+  const m = load()
+  const table = m.tables.items()[0]
+  t.is(table.initial, 1n)
+
+  const err = t.throws(() => {
+    table.initial = -5n
+  })
+  t.regex(err!.message, /non-negative/)
+  t.is(table.initial, 1n)
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  t.is(reparsed.tables.getByIndex(0)!.initial, 1n)
+})
+
+test('set maximum rejects an out-of-range size and preserves the original through emit and re-parse', (t) => {
+  const m = load()
+  const table = m.tables.items()[0]
+  t.is(table.maximum, 4n)
+
+  const err = t.throws(() => {
+    table.maximum = 2n ** 64n
+  })
+  t.regex(err!.message, /non-negative/)
+  t.is(table.maximum, 4n)
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  t.is(reparsed.tables.getByIndex(0)!.maximum, 4n)
 })
 
 test('delete removes a table and the removal persists through emit and re-parse', (t) => {
