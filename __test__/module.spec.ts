@@ -1,10 +1,9 @@
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import test from 'ava'
+import test, { type ExecutionContext } from 'ava'
 
 import { ModuleConfig, WasmModule } from '../index'
 
@@ -14,19 +13,25 @@ const fixtureBytes = readFileSync(FIXTURE)
 
 const tmpFile = (name: string) => join(mkdtempSync(join(tmpdir(), 'wasm-a1-')), name)
 
-// `wasm-tools validate` returns non-zero and throws when the wasm is invalid,
-// and is silent (no stdout) on success, so it keeps test output pristine.
-const validate = (wasm: Uint8Array) => {
-  const path = tmpFile('validate.wasm')
-  writeFileSync(path, wasm)
-  execFileSync('wasm-tools', ['validate', path])
+// A minimal, valid wasm module: the 8-byte magic + version header with no
+// sections. walrus parses it and `new WebAssembly.Module` always compiles it,
+// which makes it a clean, custom-section-free baseline for asserting that a
+// `build_id` section is *added* on emit. Returns a fresh array each call so
+// tests never share module state.
+const emptyModuleBytes = () => new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+
+// Structural-soundness check that stays fully hermetic (no external process):
+// re-parsing runs walrus' strict validation (on by default), and
+// `WebAssembly.validate` is an independent second opinion from V8's decoder.
+const assertValid = (t: ExecutionContext, wasm: Uint8Array) => {
+  t.notThrows(() => WasmModule.fromBuffer(wasm))
+  t.true(WebAssembly.validate(wasm))
 }
 
-const objdumpSections = (wasm: Uint8Array): string => {
-  const path = tmpFile('objdump.wasm')
-  writeFileSync(path, wasm)
-  return execFileSync('wasm-tools', ['objdump', path], { encoding: 'utf8' })
-}
+// Count occurrences of a named custom section via V8's WebAssembly API, which
+// returns an `ArrayBuffer[]` (one entry per matching section). No CLI involved.
+const customSectionCount = (wasm: Uint8Array, name: string): number =>
+  WebAssembly.Module.customSections(new WebAssembly.Module(wasm), name).length
 
 test('fromBuffer parses and emitWasm(false) produces valid, re-parseable wasm', (t) => {
   const m = WasmModule.fromBuffer(fixtureBytes)
@@ -34,10 +39,8 @@ test('fromBuffer parses and emitWasm(false) produces valid, re-parseable wasm', 
   t.true(emitted instanceof Uint8Array)
   t.true(emitted.length > 0)
   // Re-parsing proves the emitted bytes are structurally sound (walrus parses
-  // with strict validation on by default).
-  t.notThrows(() => WasmModule.fromBuffer(emitted))
-  // And an independent validator agrees.
-  t.notThrows(() => validate(emitted))
+  // with strict validation on by default); WebAssembly.validate agrees.
+  assertValid(t, emitted)
 })
 
 test('module name round-trips through emit and re-parse', (t) => {
@@ -59,8 +62,7 @@ test('gc does not throw and the module still emits and re-parses', (t) => {
   const m = WasmModule.fromBuffer(fixtureBytes)
   t.notThrows(() => m.gc())
   const emitted = m.emitWasm(false)
-  t.notThrows(() => WasmModule.fromBuffer(emitted))
-  t.notThrows(() => validate(emitted))
+  assertValid(t, emitted)
 })
 
 test('emitWasmFile writes a file whose bytes re-parse and validate', (t) => {
@@ -71,13 +73,26 @@ test('emitWasmFile writes a file whose bytes re-parse and validate', (t) => {
 
   const written = readFileSync(out)
   t.true(written.length > 0)
-  t.notThrows(() => WasmModule.fromBuffer(written))
-  t.notThrows(() => validate(written))
+  assertValid(t, written)
+})
 
-  // emitWasmFile shares the same pre-emit preparation as emitWasm: both keep a
-  // `build_id` custom section in the output.
-  t.regex(objdumpSections(written), /custom "build_id"/)
-  t.regex(objdumpSections(m.emitWasm(false)), /custom "build_id"/)
+test('emit adds exactly one build_id section when the module has none', (t) => {
+  // Fresh, custom-section-free module: emitWasm must ADD a single build_id.
+  const viaBuffer = WasmModule.fromBuffer(emptyModuleBytes()).emitWasm(false)
+  t.is(customSectionCount(viaBuffer, 'build_id'), 1)
+
+  // A *different* fresh instance emitted to a file must independently produce
+  // exactly one build_id in the written bytes — proving emitWasmFile runs the
+  // same pre-emit preparation as emitWasm, not just that presence is preserved.
+  const out = tmpFile('buildid.wasm')
+  WasmModule.fromBuffer(emptyModuleBytes()).emitWasmFile(out, false)
+  const written = readFileSync(out)
+  t.is(customSectionCount(written, 'build_id'), 1)
+
+  // Idempotence: re-parsing bytes that ALREADY carry a build_id and emitting
+  // again must still yield exactly one — the prep must not duplicate it.
+  const reEmitted = WasmModule.fromBuffer(viaBuffer).emitWasm(false)
+  t.is(customSectionCount(reEmitted, 'build_id'), 1)
 })
 
 test('writeGraphvizDot writes a non-empty dot graph', (t) => {
@@ -94,8 +109,7 @@ test('fromBufferWithConfig honors the supplied ModuleConfig', (t) => {
   const config = new ModuleConfig().generateProducersSection(false)
   const m = WasmModule.fromBufferWithConfig(fixtureBytes, config)
   const emitted = m.emitWasm(false)
-  t.notThrows(() => WasmModule.fromBuffer(emitted))
-  t.notThrows(() => validate(emitted))
-  // With the producers section disabled the emitted module drops it.
-  t.notRegex(objdumpSections(emitted), /custom "producers"/)
+  assertValid(t, emitted)
+  // With the producers section disabled the emitted module drops it entirely.
+  t.is(customSectionCount(emitted, 'producers'), 0)
 })
