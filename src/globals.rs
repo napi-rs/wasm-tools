@@ -140,6 +140,10 @@ impl WasmGlobals {
     // Reject an unsupported value type BEFORE touching the arena, so a failed
     // add never mutates the module.
     let wty: walrus::ValType = ty.try_into()?;
+    // Reject an initializer that references a global/function id not live in
+    // THIS module (a foreign-module handle or an already-deleted id) BEFORE it
+    // can reach emit, where walrus would abort the whole Node process.
+    crate::handle::validate_const_expr(&self.module.inner, &init.inner)?;
     let id = self
       .module
       .inner

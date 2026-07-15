@@ -41,12 +41,16 @@ export declare class ConstExpr {
    */
   static globalGet(global: WasmGlobal): ConstExpr
   /**
-   * A null reference of the given reference type (`ref.null`).
+   * A null reference of the given heap type (`ref.null`).
+   *
+   * `ref.null` is ALWAYS nullable — a non-nullable null is invalid wasm
+   * (`WebAssembly.validate` rejects it), so this factory takes only the heap
+   * type and always builds a nullable `RefType`.
    *
    * Fallible because the heap type conversion rejects concrete/indexed heap
    * types (they need a type handle, deferred to the GC-types task).
    */
-  static refNull(nullable: boolean, heap: HeapType): ConstExpr
+  static refNull(heap: HeapType): ConstExpr
   /** Which kind of constant expression this is. */
   get kind(): ConstExprKind
 }

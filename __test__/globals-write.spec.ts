@@ -32,16 +32,22 @@ test('addLocal creates an i32 global whose fields read back, and it round-trips'
   t.is(rg.mutable, true)
 })
 
-test('addLocal creates an externref global (ref type + refNull init) and round-trips', (t) => {
+test('addLocal creates a nullable externref global (ref type + refNull init), emits valid wasm, and round-trips', (t) => {
   const m = empty()
 
-  const g = m.globals.addLocal(EXTERNREF, false, false, ConstExpr.refNull(true, EXTERN_HEAP))
+  // refNull is ALWAYS nullable (single-arg), so it initializes a NULLABLE
+  // externref global. A non-nullable null would be invalid wasm.
+  const g = m.globals.addLocal(EXTERNREF, false, false, ConstExpr.refNull(EXTERN_HEAP))
   t.is(m.globals.length, 1)
   t.deepEqual(g.ty, EXTERNREF)
   t.is(g.mutable, false)
   t.is(g.init()!.kind, 'RefNull')
 
-  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const bytes = m.emitWasm(false)
+  // Independent validity check: the emitted module must actually validate.
+  t.true(WebAssembly.validate(bytes))
+
+  const reparsed = WasmModule.fromBuffer(bytes)
   t.is(reparsed.globals.length, 1)
   t.deepEqual(reparsed.globals.getByIndex(0)!.ty, EXTERNREF)
 })
@@ -71,7 +77,7 @@ test('ConstExpr factory kinds map to the walrus discriminants', (t) => {
   t.is(ConstExpr.i64(1n).kind, 'Value')
   t.is(ConstExpr.f32(1.5).kind, 'Value')
   t.is(ConstExpr.f64(1.5).kind, 'Value')
-  t.is(ConstExpr.refNull(true, { type: 'Abstract', kind: 'Func' }).kind, 'RefNull')
+  t.is(ConstExpr.refNull({ type: 'Abstract', kind: 'Func' }).kind, 'RefNull')
 
   const m = empty()
   const existing = m.globals.addLocal({ type: 'I32' }, false, false, ConstExpr.i32(7))
@@ -84,4 +90,39 @@ test('init() returns the local initializer as a ConstExpr wrapper', (t) => {
   const init = g.init()
   t.truthy(init)
   t.is(init!.kind, 'Value')
+})
+
+// Regression: a ConstExpr that reads a global from ANOTHER module must be
+// rejected at addLocal time with a CATCHABLE error. Before the fix, the
+// foreign id survived into emit, where walrus panicked in get_global_index and
+// ABORTED the whole Node process (uncatchable). This test simply COMPLETING —
+// the process staying alive to run the assertion and every later test — is the
+// proof that the abort is gone.
+test('addLocal rejects a globalGet ConstExpr from another module (throws, never aborts)', (t) => {
+  const moduleB = empty()
+  const bGlobal = moduleB.globals.addLocal({ type: 'I32' }, false, false, ConstExpr.i32(1))
+
+  const moduleA = empty()
+  const ce = ConstExpr.globalGet(bGlobal)
+
+  const err = t.throws(() => moduleA.globals.addLocal({ type: 'I32' }, true, false, ce))
+  t.regex(err!.message, /not in this module|deleted/i)
+
+  // The rejected add left module A untouched, and the process is still alive.
+  t.is(moduleA.globals.length, 0)
+})
+
+// Regression: same guard also catches an already-DELETED global's id. After
+// delete, the id has no index in the module, so emit would abort; addLocal must
+// reject it up front instead.
+test('addLocal rejects a globalGet ConstExpr referencing an already-deleted global (throws, never aborts)', (t) => {
+  const m = empty()
+  const g1 = m.globals.addLocal({ type: 'I32' }, false, false, ConstExpr.i32(1))
+  m.globals.delete(g1)
+
+  const ce = ConstExpr.globalGet(g1)
+  const err = t.throws(() => m.globals.addLocal({ type: 'I32' }, false, false, ce))
+  t.regex(err!.message, /not in this module|deleted/i)
+
+  t.is(m.globals.length, 0)
 })

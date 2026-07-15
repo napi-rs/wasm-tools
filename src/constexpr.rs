@@ -96,16 +96,20 @@ impl ConstExpr {
     }
   }
 
-  /// A null reference of the given reference type (`ref.null`).
+  /// A null reference of the given heap type (`ref.null`).
+  ///
+  /// `ref.null` is ALWAYS nullable — a non-nullable null is invalid wasm
+  /// (`WebAssembly.validate` rejects it), so this factory takes only the heap
+  /// type and always builds a nullable `RefType`.
   ///
   /// Fallible because the heap type conversion rejects concrete/indexed heap
   /// types (they need a type handle, deferred to the GC-types task).
   #[napi(factory)]
-  pub fn ref_null(nullable: bool, heap: HeapType) -> Result<Self> {
+  pub fn ref_null(heap: HeapType) -> Result<Self> {
     let heap_type: walrus::HeapType = heap.try_into()?;
     Ok(Self {
       inner: walrus::ConstExpr::RefNull(walrus::RefType {
-        nullable,
+        nullable: true,
         heap_type,
       }),
     })
