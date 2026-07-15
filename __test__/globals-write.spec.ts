@@ -1,12 +1,28 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import test from 'ava'
 
-import { ConstExpr, WasmModule } from '../index'
+import { ConstExpr, ModuleConfig, WasmModule } from '../index'
+
+const __dirname = join(fileURLToPath(import.meta.url), '..')
 
 // The canonical 8-byte empty module: valid wasm header, zero sections. walrus
 // parses it, and it carries no globals/custom sections, giving each test a
 // clean slate. Building fresh instances keeps the suite hermetic (no CLI).
 const EMPTY_MODULE = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
 const empty = () => WasmModule.fromBuffer(EMPTY_MODULE)
+
+// Committed, pre-compiled fixture (see fixtures/typed-refnull.wat). A module
+// with one concrete type `$t` and a global `(ref null $t) (ref.null $t)`, so its
+// only global's initializer is a RefNull carrying a CONCRETE TypeId. The typed
+// ref needs proposal features, so it must be parsed with onlyStableFeatures(false).
+//   (module (type $t (func)) (global (ref null $t) (ref.null $t)))
+const TYPED_REFNULL = readFileSync(join(__dirname, 'fixtures', 'typed-refnull.wasm'))
+const parseTypedRefNull = () => new ModuleConfig().onlyStableFeatures(false).parse(TYPED_REFNULL)
+
+const FUNCREF = { type: 'Ref', nullable: true, heap: { type: 'Abstract', kind: 'Func' } } as const
 
 const EXTERN_HEAP = { type: 'Abstract', kind: 'Extern' } as const
 const EXTERNREF = { type: 'Ref', nullable: true, heap: EXTERN_HEAP } as const
@@ -125,4 +141,50 @@ test('addLocal rejects a globalGet ConstExpr referencing an already-deleted glob
   t.regex(err!.message, /not in this module|deleted/i)
 
   t.is(m.globals.length, 0)
+})
+
+// Regression: a RefNull ConstExpr carrying a CONCRETE TypeId from ANOTHER module
+// must be rejected at addLocal time with a CATCHABLE error. Before the fix,
+// validate_const_expr treated every RefNull as id-free, so the foreign TypeId
+// survived into emit, where walrus panicked in get_type_index and ABORTED the
+// whole Node process (SIGABRT, exit 134). This test simply COMPLETING — the
+// process staying alive to run the assertions and every later test — is the
+// proof that the abort is gone.
+test('addLocal rejects a typed RefNull ConstExpr whose type lives in another module (throws, never aborts)', (t) => {
+  const moduleA = parseTypedRefNull()
+  const ce = moduleA.globals.items()[0].init()!
+  t.is(ce.kind, 'RefNull')
+
+  // module B has no types, so A's concrete TypeId is foreign to it.
+  const moduleB = empty()
+  const err = t.throws(() => moduleB.globals.addLocal(FUNCREF, false, false, ce))
+  t.regex(err!.message, /type/i)
+
+  // The rejected add left module B untouched, the process is still alive, and B
+  // still emits + re-parses cleanly (no corruption, no abort).
+  t.is(moduleB.globals.length, 0)
+  const reparsed = WasmModule.fromBuffer(moduleB.emitWasm(false))
+  t.is(reparsed.globals.length, 0)
+})
+
+// Positive / provenance: the guard rejects FOREIGN/deleted TypeIds, NOT every
+// concrete RefNull. On module A itself — whose type IS live — the very same
+// typed RefNull initializer must be accepted, emit, and re-parse. This guards
+// against an over-broad fix that just rejects all concrete RefNulls.
+test('addLocal accepts a typed RefNull ConstExpr whose type is live in the same module', (t) => {
+  const moduleA = parseTypedRefNull()
+  const init = moduleA.globals.items()[0].init()!
+  t.is(init.kind, 'RefNull')
+
+  // funcref is the abstract supertype of `(ref null $t)`, so `ref.null $t` is a
+  // valid initializer for it (subtyping) — and it is an accepted `ty` (concrete
+  // ref types are not yet accepted by addLocal).
+  const g = moduleA.globals.addLocal(FUNCREF, false, false, init)
+  t.is(g.init()!.kind, 'RefNull')
+  t.is(moduleA.globals.length, 2)
+
+  // Emits bytes that re-parse (with proposal features on) — provenance held.
+  const out = moduleA.emitWasm(false)
+  const reparsed = new ModuleConfig().onlyStableFeatures(false).parse(out)
+  t.is(reparsed.globals.length, 2)
 })
