@@ -1,4 +1,9 @@
-//! walrus -> napi conversions for the value-type layer (READ direction only).
+//! Conversions between the walrus value types and their napi mirrors, in both
+//! directions.
+//!
+//! READ (walrus -> napi): used by the getters (e.g. `WasmGlobal::ty`).
+//! WRITE (napi -> walrus): used when building things from JS (e.g.
+//! `globals.addLocal(ty, ...)`, `ConstExpr::ref_null(...)`).
 //!
 //! All matches over walrus enums are written out arm-by-arm so a *known*
 //! variant can never be silently mismapped. Two of these walrus enums —
@@ -93,5 +98,72 @@ impl TryFrom<walrus::AbstractHeapType> for AbstractHeapType {
         )))
       }
     })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// WRITE direction (napi -> walrus).
+//
+// Used when building walrus values from JS: `globals.addLocal(ty, ...)` and
+// `ConstExpr::ref_null(...)`. `ValType` -> `walrus::ValType` is fallible only
+// because a `Ref` embeds a `HeapType`; the heap-type conversion itself rejects
+// concrete/indexed heap types, which cannot be reconstructed from a bare
+// `type_index` (rebuilding a walrus `TypeId` needs a type handle — deferred to
+// the GC-types task). That rejection is a catchable `napi::Error`, never a
+// panic.
+// ---------------------------------------------------------------------------
+
+impl TryFrom<ValType> for walrus::ValType {
+  type Error = napi::Error;
+
+  fn try_from(ty: ValType) -> napi::Result<Self> {
+    Ok(match ty {
+      ValType::I32 => walrus::ValType::I32,
+      ValType::I64 => walrus::ValType::I64,
+      ValType::F32 => walrus::ValType::F32,
+      ValType::F64 => walrus::ValType::F64,
+      ValType::V128 => walrus::ValType::V128,
+      ValType::Ref { nullable, heap } => walrus::ValType::Ref(walrus::RefType {
+        nullable,
+        heap_type: heap.try_into()?,
+      }),
+    })
+  }
+}
+
+impl TryFrom<HeapType> for walrus::HeapType {
+  type Error = napi::Error;
+
+  fn try_from(heap: HeapType) -> napi::Result<Self> {
+    match heap {
+      HeapType::Abstract { kind } => Ok(walrus::HeapType::Abstract(kind.into())),
+      // A `type_index` (a stable arena index) cannot rebuild a walrus `TypeId`;
+      // that requires a type handle. Reject it with a catchable error until the
+      // GC-types task threads real type handles through.
+      HeapType::Concrete { .. } | HeapType::Exact { .. } => Err(napi::Error::from_reason(
+        "concrete/indexed ref types require a type handle; not yet supported (see GC types task)",
+      )),
+    }
+  }
+}
+
+impl From<AbstractHeapType> for walrus::AbstractHeapType {
+  fn from(kind: AbstractHeapType) -> Self {
+    // Total: our napi enum has exactly the 12 walrus abstract heap types, so
+    // this maps 1:1 with no catch-all (and no fallibility) needed.
+    match kind {
+      AbstractHeapType::Func => walrus::AbstractHeapType::Func,
+      AbstractHeapType::Extern => walrus::AbstractHeapType::Extern,
+      AbstractHeapType::Any => walrus::AbstractHeapType::Any,
+      AbstractHeapType::None => walrus::AbstractHeapType::None,
+      AbstractHeapType::NoExtern => walrus::AbstractHeapType::NoExtern,
+      AbstractHeapType::NoFunc => walrus::AbstractHeapType::NoFunc,
+      AbstractHeapType::Eq => walrus::AbstractHeapType::Eq,
+      AbstractHeapType::Struct => walrus::AbstractHeapType::Struct,
+      AbstractHeapType::Array => walrus::AbstractHeapType::Array,
+      AbstractHeapType::I31 => walrus::AbstractHeapType::I31,
+      AbstractHeapType::Exn => walrus::AbstractHeapType::Exn,
+      AbstractHeapType::NoExn => walrus::AbstractHeapType::NoExn,
+    }
   }
 }

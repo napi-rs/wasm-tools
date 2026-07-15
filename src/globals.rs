@@ -3,6 +3,7 @@ use napi::Env;
 use napi_derive::napi;
 use walrus::GlobalId;
 
+use crate::constexpr::ConstExpr;
 use crate::valtype::ValType;
 use crate::WasmModule;
 
@@ -116,6 +117,39 @@ impl WasmGlobals {
       Err(crate::handle::deleted("global"))
     }
   }
+
+  #[napi]
+  /// Add a new locally defined global, returning a live handle to it.
+  ///
+  /// `ty` is the global's value type (e.g. `{ type: 'I32' }` or a `Ref`), and
+  /// `init` is its constant initializer (build one with the `ConstExpr`
+  /// factories). Fallible: an unsupported `ty` — currently a concrete/indexed
+  /// ref type, which needs a type handle we do not yet thread through — is
+  /// rejected with a catchable error rather than aborting.
+  ///
+  /// The returned handle holds its own strong reference to the module (same as
+  /// the accessor handles), so it stays valid as long as it is held.
+  pub fn add_local(
+    &mut self,
+    env: Env,
+    ty: ValType,
+    mutable: bool,
+    shared: bool,
+    init: &ConstExpr,
+  ) -> Result<WasmGlobal> {
+    // Reject an unsupported value type BEFORE touching the arena, so a failed
+    // add never mutates the module.
+    let wty: walrus::ValType = ty.try_into()?;
+    let id = self
+      .module
+      .inner
+      .globals
+      .add_local(wty, mutable, shared, init.inner.clone());
+    Ok(WasmGlobal {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
 }
 
 /// A single global in a module, as a live handle: it holds the global's id plus
@@ -207,6 +241,23 @@ impl WasmGlobal {
     Ok(match self.module.inner.globals.get(self.id).kind {
       walrus::GlobalKind::Import(_) => GlobalKind::Import,
       walrus::GlobalKind::Local(_) => GlobalKind::Local,
+    })
+  }
+
+  #[napi]
+  /// This global's constant initializer, or `null` if it is imported.
+  ///
+  /// A locally defined global carries a `ConstExpr` initializer; an imported
+  /// global's initial value lives in the host, so this returns `null` for it.
+  /// A method (not a getter) because it materializes a fresh `ConstExpr`
+  /// wrapper on each call.
+  pub fn init(&self) -> Result<Option<ConstExpr>> {
+    self.ensure_exists()?;
+    Ok(match &self.module.inner.globals.get(self.id).kind {
+      walrus::GlobalKind::Local(init) => Some(ConstExpr {
+        inner: init.clone(),
+      }),
+      walrus::GlobalKind::Import(_) => None,
     })
   }
 }

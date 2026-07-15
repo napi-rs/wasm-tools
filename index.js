@@ -576,6 +576,7 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.ConstExpr = nativeBinding.ConstExpr
 module.exports.ModuleConfig = nativeBinding.ModuleConfig
 module.exports.WasmCustomSections = nativeBinding.WasmCustomSections
 module.exports.WasmGlobal = nativeBinding.WasmGlobal
@@ -583,4 +584,5 @@ module.exports.WasmGlobals = nativeBinding.WasmGlobals
 module.exports.WasmModule = nativeBinding.WasmModule
 module.exports.WasmProducers = nativeBinding.WasmProducers
 module.exports.AbstractHeapType = nativeBinding.AbstractHeapType
+module.exports.ConstExprKind = nativeBinding.ConstExprKind
 module.exports.GlobalKind = nativeBinding.GlobalKind

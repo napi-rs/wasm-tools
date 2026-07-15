@@ -57,6 +57,7 @@ const {
   },
 })
 export default __napiModule.exports
+export const ConstExpr = __napiModule.exports.ConstExpr
 export const ModuleConfig = __napiModule.exports.ModuleConfig
 export const WasmCustomSections = __napiModule.exports.WasmCustomSections
 export const WasmGlobal = __napiModule.exports.WasmGlobal
@@ -64,4 +65,5 @@ export const WasmGlobals = __napiModule.exports.WasmGlobals
 export const WasmModule = __napiModule.exports.WasmModule
 export const WasmProducers = __napiModule.exports.WasmProducers
 export const AbstractHeapType = __napiModule.exports.AbstractHeapType
+export const ConstExprKind = __napiModule.exports.ConstExprKind
 export const GlobalKind = __napiModule.exports.GlobalKind

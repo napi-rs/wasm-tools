@@ -108,6 +108,7 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
   },
 })
 module.exports = __napiModule.exports
+module.exports.ConstExpr = __napiModule.exports.ConstExpr
 module.exports.ModuleConfig = __napiModule.exports.ModuleConfig
 module.exports.WasmCustomSections = __napiModule.exports.WasmCustomSections
 module.exports.WasmGlobal = __napiModule.exports.WasmGlobal
@@ -115,4 +116,5 @@ module.exports.WasmGlobals = __napiModule.exports.WasmGlobals
 module.exports.WasmModule = __napiModule.exports.WasmModule
 module.exports.WasmProducers = __napiModule.exports.WasmProducers
 module.exports.AbstractHeapType = __napiModule.exports.AbstractHeapType
+module.exports.ConstExprKind = __napiModule.exports.ConstExprKind
 module.exports.GlobalKind = __napiModule.exports.GlobalKind

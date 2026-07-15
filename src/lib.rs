@@ -1,6 +1,7 @@
 #![deny(clippy::all)]
 
 mod config;
+mod constexpr;
 mod convert;
 mod customs;
 mod globals;
@@ -10,6 +11,7 @@ mod producers;
 mod valtype;
 
 pub use config::ModuleConfig;
+pub use constexpr::{ConstExpr, ConstExprKind};
 pub use customs::{RawSectionInfo, WasmCustomSections};
 pub use globals::{GlobalKind, WasmGlobal, WasmGlobals};
 pub use module::WasmModule;
