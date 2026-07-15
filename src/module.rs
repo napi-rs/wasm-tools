@@ -3,7 +3,9 @@ use napi::{Env, Error};
 use napi_derive::napi;
 use walrus::{Module, RawCustomSection};
 
-use crate::{ModuleConfig, WasmCustomSections, WasmGlobals, WasmProducers};
+use crate::{
+  ModuleConfig, WasmCustomSections, WasmGlobals, WasmMemories, WasmProducers, WasmTables,
+};
 
 #[napi]
 pub struct WasmModule {
@@ -111,6 +113,24 @@ impl WasmModule {
   /// object reads and writes back to this module.
   pub fn globals(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmGlobals> {
     Ok(WasmGlobals {
+      module: this.clone(env)?,
+    })
+  }
+
+  #[napi(getter)]
+  /// The memories of this module. Each handle materialized through the returned
+  /// object reads and writes back to this module.
+  pub fn memories(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmMemories> {
+    Ok(WasmMemories {
+      module: this.clone(env)?,
+    })
+  }
+
+  #[napi(getter)]
+  /// The tables of this module. Each handle materialized through the returned
+  /// object reads and writes back to this module.
+  pub fn tables(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmTables> {
+    Ok(WasmTables {
       module: this.clone(env)?,
     })
   }

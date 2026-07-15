@@ -238,6 +238,90 @@ export declare class WasmGlobals {
   addLocal(ty: ValType, mutable: boolean, shared: boolean, init: ConstExpr): WasmGlobal
 }
 
+/**
+ * The memories of a module. Each accessor materializes a fresh [`WasmMemory`]
+ * handle that reads and writes straight through to the owning [`WasmModule`];
+ * the collection itself caches nothing.
+ */
+export declare class WasmMemories {
+  /** The number of memories in the module. */
+  get length(): number
+  /** Every memory in the module, as live item handles. */
+  items(): Array<WasmMemory>
+  /** The memory whose stable `.index` equals `index`, or `null` if none exists. */
+  getByIndex(index: number): WasmMemory | null
+  /**
+   * Delete a memory from the module. Takes the handle itself: a JS number can
+   * never be turned back into a walrus id, so the wrapper is the only way to
+   * name an item for removal.
+   *
+   * It is the caller's responsibility to ensure nothing still references the
+   * deleted memory (walrus does not check).
+   *
+   * Same no-panic invariant as the item accessors: walrus'
+   * `ModuleMemories::delete` asserts the id is live, and a panic across FFI
+   * aborts the process. Id equality includes the arena_id, so this liveness
+   * scan rejects BOTH already-deleted ids (`iter()` skips tombstoned entries)
+   * AND handles that belong to a different module (arena_id mismatch),
+   * surfacing a catchable JS error instead of aborting.
+   */
+  delete(memory: WasmMemory): void
+  /**
+   * Add a new locally defined memory, returning a live handle to it.
+   *
+   * `initial`/`maximum` are page counts (`bigint`, so 64-bit `memory64`
+   * memories are representable losslessly); `maximum` is `null` for an
+   * unbounded memory. `pageSizeLog2` is the custom-page-sizes proposal's log2
+   * page size, or `null` for the default 64 KiB pages.
+   *
+   * The returned handle holds its own strong reference to the module (same as
+   * the accessor handles), so it stays valid as long as it is held.
+   */
+  addLocal(shared: boolean, memory64: boolean, initial: bigint, maximum?: bigint | undefined | null, pageSizeLog2?: number | undefined | null): WasmMemory
+}
+
+/**
+ * A single memory in a module, as a live handle: it holds the memory's id plus
+ * a strong reference to the owning [`WasmModule`], and every accessor reads or
+ * writes through to that module.
+ */
+export declare class WasmMemory {
+  /**
+   * This memory's stable index — its identity for numeric lookup. Readable
+   * even after the memory is deleted (it never touches the arena).
+   */
+  get index(): number
+  /** This memory's name from the wasm "name" custom section, if any. */
+  get name(): string | null
+  /** Set this memory's name, stored in the wasm "name" custom section. */
+  set name(name: string | undefined | null)
+  /** Whether this memory is shared (a creation-time property, read only). */
+  get shared(): boolean
+  /** Whether this is a 64-bit memory (a creation-time property, read only). */
+  get memory64(): boolean
+  /** This memory's initial size, in wasm pages (`bigint`). */
+  get initial(): bigint
+  /** Set this memory's initial size, in wasm pages. */
+  set initial(value: bigint)
+  /**
+   * This memory's optional maximum size, in wasm pages (`bigint`), or `null`
+   * if unbounded.
+   */
+  get maximum(): bigint | null
+  /** Set this memory's optional maximum size, in wasm pages. `null` clears it. */
+  set maximum(value: bigint | undefined | null)
+  /**
+   * The log2 of this memory's custom page size (custom-page-sizes proposal),
+   * or `null` for the default 64 KiB pages. Read only (creation-time).
+   */
+  get pageSizeLog2(): number | null
+  /**
+   * Whether this memory is imported. The import handle itself is exposed by a
+   * later imports task; only the boolean is available now.
+   */
+  get isImported(): boolean
+}
+
 export declare class WasmModule {
   /**
    * Construct a new module from the given path with the default
@@ -285,6 +369,16 @@ export declare class WasmModule {
    * object reads and writes back to this module.
    */
   get globals(): WasmGlobals
+  /**
+   * The memories of this module. Each handle materialized through the returned
+   * object reads and writes back to this module.
+   */
+  get memories(): WasmMemories
+  /**
+   * The tables of this module. Each handle materialized through the returned
+   * object reads and writes back to this module.
+   */
+  get tables(): WasmTables
 }
 
 /**
@@ -302,6 +396,112 @@ export declare class WasmProducers {
   clear(): void
   /** List the fields currently present in the producers section. */
   fields(): Array<ProducerFieldInfo>
+}
+
+/**
+ * A single table in a module, as a live handle: it holds the table's id plus a
+ * strong reference to the owning [`WasmModule`], and every accessor reads or
+ * writes through to that module.
+ */
+export declare class WasmTable {
+  /**
+   * This table's stable index — its identity for numeric lookup. Readable even
+   * after the table is deleted (it never touches the arena).
+   */
+  get index(): number
+  /** This table's name from the wasm "name" custom section, if any. */
+  get name(): string | null
+  /** Set this table's name, stored in the wasm "name" custom section. */
+  set name(name: string | undefined | null)
+  /** Whether this is a 64-bit table (a creation-time property, read only). */
+  get table64(): boolean
+  /** This table's initial size, in entries (`bigint`). */
+  get initial(): bigint
+  /** Set this table's initial size, in entries. */
+  set initial(value: bigint)
+  /**
+   * This table's optional maximum size, in entries (`bigint`), or `null` if
+   * unbounded.
+   */
+  get maximum(): bigint | null
+  /** Set this table's optional maximum size, in entries. `null` clears it. */
+  set maximum(value: bigint | undefined | null)
+  /**
+   * This table's element type, always a reference type (read only).
+   *
+   * Represented as the `ValType::Ref` variant. Fallible: the ref's heap type
+   * may embed a `#[non_exhaustive]` walrus heap variant a later 0.26.x adds;
+   * that surfaces as a catchable JS error, never a process-aborting panic.
+   */
+  get elementTy(): ValType
+  /**
+   * This table's initializer expression, or `null` if it is null-initialized.
+   *
+   * A method (not a getter) because it materializes a fresh `ConstExpr`
+   * wrapper on each call. Read only: building a table WITH an initializer is
+   * deferred to a later task.
+   */
+  init(): ConstExpr | null
+  /**
+   * Whether this table is imported. The import handle itself is exposed by a
+   * later imports task; only the boolean is available now.
+   */
+  get isImported(): boolean
+}
+
+/**
+ * The tables of a module. Each accessor materializes a fresh [`WasmTable`]
+ * handle that reads and writes straight through to the owning [`WasmModule`];
+ * the collection itself caches nothing.
+ */
+export declare class WasmTables {
+  /** The number of tables in the module. */
+  get length(): number
+  /** Every table in the module, as live item handles. */
+  items(): Array<WasmTable>
+  /** The table whose stable `.index` equals `index`, or `null` if none exists. */
+  getByIndex(index: number): WasmTable | null
+  /**
+   * The module's single function (`funcref`) table, or `null` if it has none.
+   *
+   * Mirrors walrus' `main_function_table`: modules produced by compilers like
+   * LLVM typically have exactly one function table for indirect calls. Rejects
+   * with a catchable error if the module has more than one function table.
+   */
+  mainFunctionTable(): WasmTable | null
+  /**
+   * Delete a table from the module. Takes the handle itself: a JS number can
+   * never be turned back into a walrus id, so the wrapper is the only way to
+   * name an item for removal.
+   *
+   * It is the caller's responsibility to ensure nothing still references the
+   * deleted table (walrus does not check).
+   *
+   * Same no-panic invariant as the item accessors: walrus'
+   * `ModuleTables::delete` asserts the id is live, and a panic across FFI
+   * aborts the process. Id equality includes the arena_id, so this liveness
+   * scan rejects BOTH already-deleted ids (`iter()` skips tombstoned entries)
+   * AND handles that belong to a different module (arena_id mismatch),
+   * surfacing a catchable JS error instead of aborting.
+   */
+  delete(table: WasmTable): void
+  /**
+   * Add a new locally defined table, returning a live handle to it.
+   *
+   * `initial`/`maximum` are entry counts (`bigint`, so 64-bit `table64` tables
+   * are representable losslessly); `maximum` is `null` for an unbounded table.
+   * `elementTy` must be a reference type (e.g. a `funcref`/`externref`
+   * `{ type: 'Ref', ... }`); a non-reference type is rejected with a catchable
+   * error.
+   *
+   * This builds a NULL-initialized table (no `init` expression), so
+   * `elementTy` must be nullable — building a table with a non-nullable
+   * element type needs an initializer, which is deferred to a later task.
+   *
+   * The returned handle holds its own strong reference to the module (same as
+   * the accessor handles), so it stays valid as long as it is held.
+   */
+  addLocal(table64: boolean, initial: bigint, maximum: bigint | undefined | null, elementTy: ValType): WasmTable
 }
 
 /** An abstract heap type, mirroring `walrus::AbstractHeapType` 1:1. */
