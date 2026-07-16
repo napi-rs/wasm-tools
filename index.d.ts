@@ -1012,10 +1012,13 @@ export declare class WasmType {
  * handle that reads and writes straight through to the owning [`WasmModule`];
  * the collection itself caches nothing.
  *
- * The collection reflects the raw walrus type arena. That arena can contain
- * internal function-entry types (used for multi-value block entries); walrus
- * keeps their `is_for_function_entry` flag private, so they cannot be filtered
- * out from here — they surface as ordinary function types.
+ * walrus keeps internal function-entry types in its type arena (one per local
+ * function, used for multi-value block entries). walrus never assigns them an
+ * emit index, so referencing one at emit aborts, and they are not
+ * user-meaningful. This collection FILTERS them out of `length` / `items` /
+ * `getByIndex` — identified via each local function's `MultiValue` entry-block
+ * type — so it exposes only user-meaningful types and a user can never obtain a
+ * handle to an entry type.
  */
 export declare class WasmTypes {
   /** The number of types in the module. */

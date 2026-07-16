@@ -17,6 +17,14 @@ const STRUCT_FIXTURE = join(__dirname, 'fixtures', 'types-struct.wasm')
 const funcBytes = readFileSync(FUNC_FIXTURE)
 const structBytes = readFileSync(STRUCT_FIXTURE)
 
+// A module with one LOCAL function (see fixtures/functions.wat): func $imp is
+// imported (type (param i32)), func $loc is local (type (param i32)(result i32)).
+// Two REAL function types; walrus additionally mints ONE internal
+// "function-entry" type for the local function ((result i32)), which the raw
+// arena reports at index 2. WasmTypes must filter that entry type out.
+const FUNCTIONS_FIXTURE = join(__dirname, 'fixtures', 'functions.wasm')
+const functionsBytes = readFileSync(FUNCTIONS_FIXTURE)
+
 const load = () => WasmModule.fromBuffer(funcBytes)
 const loadStruct = () => new ModuleConfig().onlyStableFeatures(false).parse(structBytes)
 
@@ -164,4 +172,82 @@ test('delete-guard: cross-module delete throws and leaves both modules unchanged
   t.throws(() => a.types.delete(bHandle))
   t.is(a.types.length, aLen)
   t.is(b.types.length, bLen)
+})
+
+test('WasmTypes hides walrus internal function-entry types', (t) => {
+  const m = WasmModule.fromBuffer(functionsBytes)
+
+  // Two real function types are exposed; the local function's internal entry
+  // type (raw arena index 2) is filtered out (the raw arena has 3 types).
+  t.is(m.types.length, 2)
+  const items = m.types.items()
+  t.is(items.length, 2)
+  t.is(items.length, m.types.length)
+
+  // Every exposed type is a real, emittable function type: its params/results
+  // resolve (an entry type would still resolve, but the point is it is gone).
+  for (const it of items) {
+    t.is(it.kind, 'Function')
+    t.notThrows(() => it.params())
+    t.notThrows(() => it.results())
+  }
+  // The two real signatures are present: (param i32) and (param i32)(result i32).
+  t.truthy(m.types.find([{ type: 'I32' }], []))
+  t.truthy(m.types.find([{ type: 'I32' }], [{ type: 'I32' }]))
+})
+
+test('getByIndex is consistent with items() and hides the entry type index', (t) => {
+  const m = WasmModule.fromBuffer(functionsBytes)
+  const realIndices = m.types.items().map((it) => it.index)
+
+  // Every exposed type still resolves by its own real index (no renumbering).
+  for (const idx of realIndices) {
+    t.is(m.types.getByIndex(idx)!.index, idx)
+  }
+
+  // The entry type occupies raw arena index 2 but is not among the exposed
+  // types, so its index resolves to null.
+  t.false(realIndices.includes(2))
+  t.is(m.types.getByIndex(2), null)
+
+  // A truly out-of-range index is null too.
+  t.is(m.types.getByIndex(9999), null)
+})
+
+test('case-1 trap closed: every exposed type can be tagged and emitted (no entry type leaks)', (t) => {
+  // The B3f regression this mirrors used to expect the entry type to throw at
+  // emit; now the entry type is filtered out of items(), so EVERY add+emit must
+  // succeed. The process must also stay alive across all indices (an abort would
+  // kill the ava worker).
+  const typeCount = WasmModule.fromBuffer(functionsBytes).types.length
+  t.true(typeCount >= 1)
+
+  let emittedOk = 0
+  const emitErrors: string[] = []
+  for (let i = 0; i < typeCount; i++) {
+    const m = WasmModule.fromBuffer(functionsBytes)
+    m.tags.add(m.types.items()[i])
+    try {
+      m.emitWasm(false)
+      emittedOk++
+    } catch (e) {
+      emitErrors.push((e as Error).message)
+    }
+  }
+
+  t.is(emittedOk, typeCount, 'every exposed type emits successfully')
+  t.deepEqual(emitErrors, [], 'no exposed type triggers an emit-time error')
+})
+
+test('real function types survive emit + re-parse after filtering', (t) => {
+  const m = WasmModule.fromBuffer(functionsBytes)
+  t.is(m.types.length, 2)
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  // The re-parsed module re-mints an entry type for the local function; it is
+  // filtered too, so the exposed count is stable, and both real signatures
+  // round-trip.
+  t.is(reparsed.types.length, 2)
+  t.truthy(reparsed.types.find([{ type: 'I32' }], []))
+  t.truthy(reparsed.types.find([{ type: 'I32' }], [{ type: 'I32' }]))
 })

@@ -214,17 +214,30 @@ impl WasmModule {
   /// filter therefore captures the full set with nothing dropped.
   ///
   /// Emit itself is wrapped in [`std::panic::catch_unwind`] as a general safety
-  /// net: the module can hold references that only fail at encode time and are
-  /// undetectable from the binding — most notably walrus' internal
-  /// "function-entry" types, which emit skips when assigning type indices, so
-  /// referencing one (e.g. via `tags.add`) makes `get_type_index` panic. The
-  /// crate builds with the default `panic = unwind` (only the `wasm-fixture`
-  /// profile sets `panic = 'abort'`), so we can catch that panic and surface it
-  /// as a catchable `napi::Error` instead of letting it cross the FFI boundary
-  /// and abort the whole Node process. The saved custom sections are restored on
-  /// BOTH the ok and panic paths, so a caught emit leaves the module consistent
-  /// (emit's only `&mut` effect is draining `customs`, which the restore loop
-  /// puts back).
+  /// net: the module can hold references that only fail at encode time. The
+  /// prime example — walrus' internal "function-entry" types, which emit skips
+  /// when assigning type indices, so referencing one (e.g. via `tags.add`) makes
+  /// `get_type_index` panic — is now removed at the source: [`crate::WasmTypes`]
+  /// filters those types out of every accessor, so a user can no longer obtain a
+  /// handle to one (this closes it on ALL targets, WASI included). Two narrow
+  /// residues still reach here and rely on this net: an ORPHAN entry type left
+  /// after `funcs.delete` without a `gc()` (no longer reachable via any entry
+  /// block, so the filter misses it), and emit after deleting a still-referenced
+  /// item (walrus' `get_*_index` panics). The crate builds with the default
+  /// `panic = unwind` (only the `wasm-fixture` profile sets `panic = 'abort'`),
+  /// so we can catch that panic and surface it as a catchable `napi::Error`
+  /// instead of letting it cross the FFI boundary and abort the whole Node
+  /// process. The saved custom sections are restored on BOTH the ok and panic
+  /// paths, so a caught emit leaves the module consistent (emit's only `&mut`
+  /// effect is draining `customs`, which the restore loop puts back).
+  ///
+  /// PLATFORM LIMITATION: `catch_unwind` only unwinds under `panic = unwind`.
+  /// The published `wasm32-wasip1-threads` target builds with `panic = abort`
+  /// (the target default; `-C panic=unwind` needs nightly + build-std, not
+  /// viable), so on WASI this catch is a no-op and those two residual panics
+  /// TRAP the process instead of becoming catchable errors. The entry-type
+  /// filter in [`crate::WasmTypes`] is the target-independent defense; this
+  /// `catch_unwind` is the native-only backstop for the rest.
   fn emit_bytes(&mut self, demangle: bool) -> Result<Vec<u8>> {
     self.prepare_for_emit(demangle);
     let saved: Vec<RawCustomSection> = self

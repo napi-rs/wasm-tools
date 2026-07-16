@@ -148,14 +148,15 @@ test('delete-guard: cross-module delete throws and leaves both modules unchanged
   t.is(b.tags.length, 1)
 })
 
-test('add + emit never aborts the process: emit-time panics surface as catchable errors', (t) => {
+test('add + emit never aborts the process: every exposed type is emittable (no entry type leaks)', (t) => {
   // walrus keeps INTERNAL function-entry types in the type arena (one per local
-  // function). They are indistinguishable from a plain `(func)` in our API, so
-  // `tags.add` cannot reject them — referencing one makes walrus' emit panic in
-  // `get_type_index`, which (before the catch_unwind guard) aborts the whole
-  // Node worker via FFI. This exhaustively adds EACH type as a tag on a fresh
-  // module and emits: the process must stay alive across ALL indices, and the
-  // entry-type index(es) must throw a CATCHABLE "emit" error rather than abort.
+  // function). Referencing one makes walrus' emit panic in `get_type_index`,
+  // which aborts the Node worker via FFI on the WASI target (panic=abort, where
+  // catch_unwind is a no-op). WasmTypes now FILTERS those entry types out of
+  // `items()`, so `tags.add` can never receive one through the public API. This
+  // exhaustively adds EACH exposed type as a tag on a fresh module and emits:
+  // the process must stay alive across ALL indices AND every add+emit must
+  // succeed (no entry type is exposed anymore, so nothing throws).
   const probe = WasmModule.fromBuffer(functionsBytes)
   const typeCount = probe.types.length
   t.true(typeCount >= 1)
@@ -163,8 +164,7 @@ test('add + emit never aborts the process: emit-time panics surface as catchable
   let emittedOk = 0
   const emitErrors: string[] = []
   for (let i = 0; i < typeCount; i++) {
-    // Fresh module per iteration: a caught emit leaves the module consistent,
-    // but a fresh parse also isolates each index so one bad type can't taint
+    // Fresh module per iteration isolates each index so one type can't taint
     // another's emit.
     const m = WasmModule.fromBuffer(functionsBytes)
     m.tags.add(m.types.items()[i])
@@ -178,12 +178,8 @@ test('add + emit never aborts the process: emit-time panics surface as catchable
 
   // Reaching here at all proves no index aborted the process (an abort would
   // kill the ava worker, failing the whole file).
-  t.true(emittedOk >= 1, 'the real function types emit successfully')
-  t.true(emitErrors.length >= 1, 'at least one internal entry type is rejected at emit')
-  t.true(
-    emitErrors.some((msg) => /emit/.test(msg)),
-    'the emit failure is a catchable error mentioning "emit"',
-  )
+  t.is(emittedOk, typeCount, 'every exposed type emits successfully')
+  t.deepEqual(emitErrors, [], 'no exposed type triggers an emit-time error (entry type is hidden)')
 })
 
 test('delete-guard: using a handle after delete throws on kind/name/ty instead of crashing', (t) => {
