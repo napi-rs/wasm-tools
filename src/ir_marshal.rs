@@ -19,14 +19,18 @@
 //!
 //! ## How each element still uses the DERIVED (auto-lockstep) field code
 //! * Decode ([`InstrBody`]): per element, a fresh empty JS object receives an
-//!   own-`undefined` shadow of the three self-referential edges plus an OWN-only
-//!   shallow copy of every other enumerable property of the element, and the
-//!   DERIVED `InstrDesc::from_napi_value` runs on that copy — it cannot recurse
-//!   (the edges read as own `undefined`, so the derived read never re-enters via
-//!   a polluted `Object.prototype.seq`), and every plain field keeps its derived
+//!   own-`undefined` shadow of the three self-referential edges AND the `labels`
+//!   leaf, plus an OWN-only shallow copy of every other enumerable property of
+//!   the element, and the DERIVED `InstrDesc::from_napi_value` runs on that copy
+//!   — it cannot recurse (the edges read as own `undefined`, so the derived read
+//!   never re-enters via a polluted `Object.prototype.seq`) and cannot prealloc
+//!   from an untrusted `labels.length` (the `labels` shadow makes the derived
+//!   `Vec::<u32>` decode see `None`), and every plain field keeps its derived
 //!   decoding and error behavior, automatically tracking future field additions.
 //!   The real edges are then walked by the driver, reading OWN edges only so an
-//!   inherited edge is ignored in lockstep with the derived read's shadow.
+//!   inherited edge is ignored in lockstep with the derived read's shadow; the
+//!   real OWN `labels` is decoded as a leaf `Vec<u32>` by a non-preallocating
+//!   loop in `decode_element_shallow` (never pushed on the frame stack).
 //! * Encode ([`InstrList`]): per (owned) element, the three edge `Option`s are
 //!   `Option::take`n out, the now-edge-free descriptor is encoded with the
 //!   DERIVED `InstrDesc::to_napi_value` (cannot recurse), and each taken
@@ -45,6 +49,25 @@
 //!
 //! A field with a DIFFERENT shape (e.g. a struct wrapping a `Vec<InstrDesc>`)
 //! additionally needs its own frame bookkeeping in both drivers.
+//!
+//! ## MAINTENANCE: adding a NON-edge `Vec`/`Option<Vec<T>>` field (e.g. C8a
+//! `catches: Option<Vec<CatchClause>>`)
+//! ANY `InstrDesc` field whose type is `Vec<T>`/`Option<Vec<T>>` — even a LEAF
+//! (non-`InstrDesc` `T`, so no recursion) — inherits the untrusted-length abort:
+//! the derived `Vec::<T>::from_napi_value` calls `Vec::with_capacity(len)` from
+//! the JS `Array.length` BEFORE inspecting any element, and a sparse
+//! `length ≈ 2**32` (own OR inherited via `Object.prototype`) aborts the process
+//! (capacity overflow / `handle_alloc_error`) — uncatchable, especially under
+//! WASI `panic=abort`. Such a field MUST be handled like `labels`:
+//! * shadow it as an own `undefined` on the copy AND skip it in the copy loop of
+//!   `decode_element_shallow` (so the derived decode never reaches its `Vec`
+//!   prealloc, on any prototype chain), then
+//! * decode the original's OWN value there yourself with a NON-preallocating
+//!   loop (`Vec::new()` + push, decoding each element via its own
+//!   `FromNapiValue`), setting the field on the returned `desc`.
+//!
+//! It is a LEAF (decoded inline), NOT a frame-stack edge — do not add it to the
+//! edge lists. Today the only such field is `labels`; `catches` (C8a) is next.
 //!
 //! The generated `index.d.ts` is UNCHANGED: `build_function` keeps
 //! `body: Array<InstrDesc>` via `#[napi(ts_arg_type = "Array<InstrDesc>")]` and
@@ -262,11 +285,12 @@ struct DecodeFrame {
 }
 
 /// Decode ONE array element via the shallow-copy-except-edges trick: onto a
-/// fresh empty object, shadow the three edge names as own `undefined` and copy
-/// every OWN enumerable non-edge property of `elem`, then run the DERIVED
-/// `InstrDesc::from_napi_value` on that copy. The derived impl reads every field
-/// via a prototype-traversing `[[Get]]`, so both steps are hardened against an
-/// adversarial prototype chain:
+/// fresh empty object, shadow the three edge names AND `labels` as own
+/// `undefined` and copy every OWN enumerable non-edge, non-`labels` property of
+/// `elem`, then run the DERIVED `InstrDesc::from_napi_value` on that copy and
+/// finally decode `labels` ourselves as a leaf. The derived impl reads every
+/// field via a prototype-traversing `[[Get]]`, so both steps are hardened
+/// against an adversarial prototype chain:
 ///
 /// * The edge shadows make the derived read of `seq`/`consequent`/`alternative`
 ///   find an own `undefined` FIRST — so a polluted `Object.prototype.seq` (etc.)
@@ -274,6 +298,10 @@ struct DecodeFrame {
 ///   the native call stack. That inherited-edge recursion is an UNCATCHABLE stack
 ///   overflow, exactly the abort class this module exists to remove; the shadow
 ///   closes it on ANY prototype chain, and the driver still walks the real edges.
+/// * The `labels` shadow makes the derived read of `labels` yield `None` on any
+///   prototype chain, so the untrusted-length `Vec::<u32>::with_capacity` in the
+///   derived `Vec` decode is never reached (own OR inherited sparse `labels`).
+///   The real OWN `labels` is then decoded below by a non-preallocating loop.
 /// * Copying is OWN-only and via `napi_define_property` (a data descriptor), so
 ///   no inherited property is smuggled onto the copy, no accessor/setter runs,
 ///   and an own `"__proto__"` key can never retarget the copy's prototype.
@@ -301,6 +329,17 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
   for cname in EDGE_CSTRS {
     descriptors.push(data_descriptor_cstr(cname, undefined));
   }
+  // `labels` is a LEAF `Vec<u32>` (a `BrTable`'s target list) — NOT a recursive
+  // edge, so it is NOT walked by the frame driver — but it has the SAME
+  // untrusted-length prealloc abort as the edges: the derived
+  // `Vec::<u32>::from_napi_value` calls `Vec::with_capacity(labels.length)`
+  // BEFORE inspecting any element, so a sparse `labels.length ≈ 2**32` (own OR
+  // inherited via a polluted `Object.prototype.labels`) requests billions of
+  // slots → capacity-overflow panic / `handle_alloc_error` → uncatchable abort.
+  // Shadow it as an own `undefined` (so the derived read yields `None` on ANY
+  // prototype chain) and decode the original's OWN `labels` ourselves below with
+  // a NON-preallocating loop.
+  descriptors.push(data_descriptor_cstr(c"labels", undefined));
 
   // Enumerate the ORIGINAL's OWN enumerable string property names only (never the
   // prototype chain, never symbols). On a `null`/`undefined` element this raises
@@ -323,9 +362,9 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
   let names_len = unsafe { array_length(env, names)? };
 
   // A property name only needs enough buffer to distinguish it from the edge
-  // names (max 11 bytes, "alternative") and "__proto__" (9 bytes): a name that
-  // fills the buffer is longer than any of those and is copied without further
-  // inspection.
+  // names (max 11 bytes, "alternative"), "labels" (6 bytes), and "__proto__"
+  // (9 bytes): a name that fills the buffer is longer than any of those and is
+  // copied without further inspection.
   let mut buf = [0u8; 16];
   for i in 0..names_len {
     let name = unsafe { get_element(env, names, i)? };
@@ -339,8 +378,10 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
     if written < buf.len() - 1 {
       let nm = &buf[..written];
       // Edges keep their own-`undefined` shadow (the driver walks the real ones);
-      // `"__proto__"` is dropped so it can never retarget the copy's prototype.
-      if EDGE_NAMES.iter().any(|e| e.as_bytes() == nm) || nm == b"__proto__" {
+      // `labels` keeps its own-`undefined` shadow too (decoded as a leaf below,
+      // never via the untrusted-length derived `Vec` prealloc); `"__proto__"` is
+      // dropped so it can never retarget the copy's prototype.
+      if EDGE_NAMES.iter().any(|e| e.as_bytes() == nm) || nm == b"labels" || nm == b"__proto__" {
         continue;
       }
     }
@@ -360,7 +401,30 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
     "Failed to define properties"
   )?;
 
-  unsafe { InstrDesc::from_napi_value(env, copy) }
+  let mut desc = unsafe { InstrDesc::from_napi_value(env, copy)? };
+
+  // Decode the LEAF `labels: Option<Vec<u32>>` ourselves, from the ORIGINAL's
+  // OWN `labels` only. `get_own_named_property` never traverses the prototype, so
+  // an inherited `Object.prototype.labels` is ignored (stays `None`), in lockstep
+  // with the own-`undefined` shadow that already made the derived read of the
+  // copy yield `None`. The element loop is NON-preallocating (`Vec::new()` +
+  // push), so a sparse-wide `labels.length` never reaches `Vec::with_capacity`:
+  // it fails CATCHABLY on its first hole (a `u32` conversion / array error — the
+  // SAME error the derived `Vec::<u32>` decode surfaces), never a panic/abort. A
+  // normal small `labels` decodes element-for-element, byte-identical to the
+  // derived path. Absent/`undefined` own `labels` leaves `desc.labels` at `None`.
+  if let Some(arr) = unsafe { get_own_named_property(env, elem, c"labels")? } {
+    let len = unsafe { array_length(env, arr) }.map_err(|e| decorate(e, "labels"))?;
+    let mut labels: Vec<u32> = Vec::new();
+    for i in 0..len {
+      let el = unsafe { get_element(env, arr, i) }.map_err(|e| decorate(e, "labels"))?;
+      let n = unsafe { u32::from_napi_value(env, el) }.map_err(|e| decorate(e, "labels"))?;
+      labels.push(n);
+    }
+    desc.labels = Some(labels);
+  }
+
+  Ok(desc)
 }
 
 impl FromNapiValue for InstrBody {

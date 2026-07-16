@@ -713,15 +713,26 @@ test('CH-fix (inherited-edge): a polluted `Object.prototype` edge is ignored (tr
   }
 })
 
-test('CH-fix (__proto__ injection): an own `__proto__` data property carrying an edge cannot retarget the copy or recurse', (t) => {
+test('CH-fix (__proto__ injection): an own `__proto__` data property carrying a CYCLIC edge cannot retarget the copy or recurse', (t) => {
   // An OWN data property literally named "__proto__" (defineProperty does NOT
   // invoke the prototype setter) whose value carries an edge. Before the fix the
   // copy loop's `napi_set_property(copy, "__proto__", …)` would run the accessor
   // and retarget the copy's prototype to this edge-bearing object; the fix
   // enumerates OWN props, skips "__proto__", and writes via a data descriptor.
+  //
+  // REGRESSION SENSITIVITY: the smuggled `seq` is SELF-REFERENTIAL (cyclic), so
+  // if the copy's prototype were retargeted to it and the derived read walked it,
+  // the derived `Vec<InstrDesc>::from_napi_value` would recurse into `cyc` FOREVER
+  // (uncatchable SIGSEGV) — the exact pre-fix (af90219) failure. Post-fix the
+  // "__proto__" key is skipped (copy keeps `Object.prototype`) and the edge read
+  // is an own-`undefined` shadow / own-only walk, so the cyclic edge is ignored
+  // (→ `None`); a finite `[{ type: 'Drop' }]` here would pass even UNFIXED and
+  // prove nothing.
+  const cyc: unknown[] = []
+  cyc.push({ type: 'Block', blockType: { type: 'Empty' }, seq: cyc })
   const evil = { type: 'Drop' } as Record<string, unknown>
   Object.defineProperty(evil, '__proto__', {
-    value: { seq: [{ type: 'Drop' }] },
+    value: { seq: cyc },
     writable: true,
     configurable: true,
     enumerable: true,
@@ -759,6 +770,93 @@ test('CH-fix (sparse-wide edge): a 2**32-1-length sparse `seq` throws catchably,
   sparse.length = 2 ** 32 - 1
   const body = [{ type: 'Block', blockType: { type: 'Empty' }, seq: sparse }] as unknown as InstrDesc[]
   t.throws(() => m.buildFunction([], [], [], body))
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+// CH-fix2: `labels` (a `BrTable`'s target list, `Option<Vec<u32>>`) is NOT a
+// recursive edge, so it flowed through the DERIVED per-element decode — whose
+// `Vec::<u32>::from_napi_value` calls `Vec::with_capacity(labels.length)` BEFORE
+// inspecting any element. A sparse `labels.length ≈ 2**32` therefore requested
+// billions of slots → capacity-overflow panic / `handle_alloc_error` → the same
+// UNCATCHABLE abort class CH exists to remove (fatal under WASI `panic=abort`).
+// The fix shadows `labels` as own `undefined` (so the derived read yields `None`
+// on any prototype) and decodes the OWN `labels` with a non-preallocating loop.
+test('CH-fix2 (sparse-wide labels, own): a 2**32-1-length sparse own `labels` throws catchably (no huge alloc/abort), module survives', (t) => {
+  const m = empty()
+  const sparse: unknown[] = []
+  sparse.length = 2 ** 32 - 1
+  // The leaf decode grows from the ACTUAL elements: it hits the first hole
+  // immediately and fails with a catchable `u32` conversion error decorated
+  // `on InstrDesc.labels` — never a `Vec::with_capacity(2**32-1)` abort.
+  const body = [{ type: 'BrTable', labels: sparse, defaultLabel: 0 }] as unknown as InstrDesc[]
+  t.throws(() => m.buildFunction([], [], [], body))
+  // The process survived: the (untouched) module still emits valid wasm.
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+test('CH-fix2 (sparse-wide labels, inherited): a polluted `Object.prototype.labels` is ignored — throws catchably, no abort, module survives', (t) => {
+  const saved = Object.getOwnPropertyDescriptor(Object.prototype, 'labels')
+  t.is(saved, undefined) // sanity: nothing owned this key before us
+  try {
+    const sparse: unknown[] = []
+    sparse.length = 2 ** 32 - 1
+    // Pre-fix the derived read of `labels` was a prototype-traversing `[[Get]]`,
+    // so this INHERITED sparse array reached `Vec::with_capacity` and aborted.
+    // Post-fix the own-`undefined` shadow makes the derived read `None` and the
+    // leaf decode reads OWN `labels` only, so the inherited value is ignored: the
+    // `BrTable` ends up with no `labels` and `buildFunction` throws the catchable
+    // `BrTable requires labels` error instead of aborting.
+    Object.defineProperty(Object.prototype, 'labels', {
+      value: sparse,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    })
+    const m = empty()
+    const body = [{ type: 'BrTable', defaultLabel: 0 }] as unknown as InstrDesc[]
+    t.throws(() => m.buildFunction([], [], [], body))
+    // The process survived: the module still emits valid wasm.
+    t.true(WebAssembly.validate(m.emitWasm(false)))
+  } finally {
+    // saved is always undefined here, so this deletes the injected key.
+    if (saved) Object.defineProperty(Object.prototype, 'labels', saved)
+    else delete (Object.prototype as Record<string, unknown>)['labels']
+  }
+  // The pollution is fully gone — no later test can observe it.
+  t.false('labels' in Object.prototype)
+})
+
+// CH-fix2: a NORMAL `BrTable` (a real small `labels` array + `defaultLabel`) must
+// still decode element-for-element via the leaf path, byte-identical to before.
+// Three enclosing blocks so labels 0/1 and default 2 are all valid targets
+// (mirrors the FLAGSHIP round-trip's known-good `BrTable` shape).
+test('CH-fix2 (normal BrTable): a real small `labels` + `defaultLabel` round-trips byte-identically', (t) => {
+  const m = empty()
+  const body: InstrDesc[] = [
+    {
+      type: 'Block',
+      blockType: { type: 'Empty' },
+      seq: [
+        {
+          type: 'Block',
+          blockType: { type: 'Empty' },
+          seq: [
+            {
+              type: 'Block',
+              blockType: { type: 'Empty' },
+              seq: [
+                { type: 'Const', value: { type: 'I32', value: 0 } },
+                { type: 'BrTable', labels: [0, 1], defaultLabel: 2 },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
   t.true(WebAssembly.validate(m.emitWasm(false)))
 })
 
