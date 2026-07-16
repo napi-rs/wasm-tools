@@ -1005,6 +1005,12 @@ macro_rules! str_enum {
     fieldless: [ $($fl:ident),* $(,)? ],
     lane: [ $($ln:ident),* $(,)? ] $(,)?
   ) => {
+    // `#[inline(never)]`: these are matches over 200+ operator variants; keeping
+    // them out of line guarantees an optimizing build can never inline the huge
+    // match into the recursive walkers (`emit_one`/`read_one`), which would
+    // explode their stack frame (see `MAX_NESTING_DEPTH`). One cold call per op
+    // is negligible.
+    #[inline(never)]
     fn $to_str(op: &$Enum) -> (&'static str, Option<u8>) {
       match op {
         $( $Enum::$fl => (stringify!($fl), None), )*
@@ -1012,6 +1018,7 @@ macro_rules! str_enum {
       }
     }
 
+    #[inline(never)]
     #[allow(unused_variables)]
     fn $from_str(s: &str, lane: Option<u8>) -> Result<$Enum> {
       Ok(match s {
@@ -1159,6 +1166,14 @@ fn v128_bytes_to_u128(bytes: &[u8]) -> Result<u128> {
 #[inline(never)]
 fn v128_u128_to_bytes(value: u128) -> Uint8Array {
   Uint8Array::from(value.to_le_bytes().to_vec())
+}
+
+/// Unfold the 16-byte `I8x16Shuffle` lane-index immediate into a `Uint8Array`.
+/// `#[inline(never)]`: keeps the `[u8; 16]` out of `read_one`'s frame (same
+/// stack-frame discipline as `v128_u128_to_bytes`).
+#[inline(never)]
+fn shuffle_indices_to_bytes(indices: &[u8; 16]) -> Uint8Array {
+  Uint8Array::from(indices.to_vec())
 }
 
 /// Coerce a byte slice to the `[u8; 16]` shuffle immediate, or a catchable error
@@ -2340,7 +2355,10 @@ fn read_one(
     wir::Instr::I8x16Swizzle(_) => InstrDesc::new("I8x16Swizzle"),
     wir::Instr::I8x16Shuffle(e) => {
       let mut d = InstrDesc::new("I8x16Shuffle");
-      d.shuffle_indices = Some(Uint8Array::from(e.indices.to_vec()));
+      // 16-byte immediate built in `shuffle_indices_to_bytes` (an
+      // `#[inline(never)]` helper) so its `[u8; 16]` temporary stays out of
+      // this recursive frame — mirrors the `Const` v128 arm.
+      d.shuffle_indices = Some(shuffle_indices_to_bytes(&e.indices));
       d
     }
     wir::Instr::MemorySize(e) => {
