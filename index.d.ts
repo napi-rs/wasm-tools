@@ -1933,14 +1933,17 @@ export declare const enum ImportKindTag {
  * `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
  * `if`/`else`), making the interface self-referential.
  *
- * This is the C1a/C1b/C2 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
+ * This is the C1a/C1b/C2/C3 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
  * `Const`, local/global get/set/tee, `Call`, `Select`, the control constructs
  * (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), the
  * numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
- * `op`), and the memory + general load/store instructions (`MemorySize`/
- * `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`).
- * Any other instruction is rejected catchably by both directions (later tasks
- * add tables, refs, atomics, the lane-carrying SIMD ops, GC, and EH).
+ * `op`), the memory + general load/store instructions (`MemorySize`/
+ * `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`),
+ * and the table instructions + `call_indirect` (`TableGet`/`TableSet`/
+ * `TableGrow`/`TableSize`/`TableFill`/`TableInit`/`TableCopy`/`ElemDrop`/
+ * `CallIndirect`). Any other instruction is rejected catchably by both
+ * directions (later tasks add refs, tail-calls, atomics, the lane-carrying SIMD
+ * ops, GC, and EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -2001,6 +2004,24 @@ export interface InstrDesc {
   loadKind?: LoadKind
   /** `Store`: the kind of store (width, atomicity). */
   storeKind?: StoreKind
+  /**
+   * The referenced table's stable index, for
+   * `TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`, the
+   * DESTINATION table of `TableCopy`, and the table of `CallIndirect`.
+   */
+  table?: number
+  /**
+   * `TableCopy`: the SOURCE table's stable index (the destination uses
+   * `table`).
+   */
+  srcTable?: number
+  /** `TableInit`/`ElemDrop`: the referenced element segment's stable index. */
+  elem?: number
+  /**
+   * `CallIndirect`: the stable index of the function type being called through
+   * the table (named `typeIndex`, matching `BlockType::MultiValue`).
+   */
+  typeIndex?: number
 }
 
 /**

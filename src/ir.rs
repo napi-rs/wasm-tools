@@ -29,12 +29,13 @@
 //!
 //! ## MIRROR-WALRUS
 //! Only process-aborting hazards are guarded: an out-of-range local/global/func/
-//! memory/data index, an out-of-range branch label, a bad multi-value block-type
-//! index, or a `MemArg` offset that is not a lossless `u64` are rejected with a
-//! catchable error BEFORE a panicking walrus lookup can be reached. Nothing here
-//! validates wasm well-formedness — an ill-typed body (a non-power-of-two
-//! alignment, an out-of-bounds access, an atomic op on a non-shared memory, …)
-//! is emitted as-is and left for `WebAssembly.validate` to reject.
+//! memory/data/table/element index, an out-of-range branch label, a bad
+//! multi-value or `call_indirect` type index, or a `MemArg` offset that is not a
+//! lossless `u64` are rejected with a catchable error BEFORE a panicking walrus
+//! lookup can be reached. Nothing here validates wasm well-formedness — an
+//! ill-typed body (a non-power-of-two alignment, an out-of-bounds access, an
+//! atomic op on a non-shared memory, a `call_indirect` whose type does not match
+//! the callee, …) is emitted as-is and left for `WebAssembly.validate` to reject.
 
 use napi::bindgen_prelude::{BigInt, Result};
 use napi::Error;
@@ -42,7 +43,8 @@ use napi_derive::napi;
 use walrus::ir as wir;
 use walrus::ir::{BinaryOp, TernaryOp, UnaryOp};
 use walrus::{
-  DataId, FunctionBuilder, FunctionId, GlobalId, LocalFunction, LocalId, MemoryId, Module,
+  DataId, ElementId, FunctionBuilder, FunctionId, GlobalId, LocalFunction, LocalId, MemoryId,
+  Module, TableId,
 };
 
 use crate::convert::{resolve_type_id, val_type_to_walrus_in};
@@ -348,14 +350,17 @@ pub enum StoreKind {
 /// `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
 /// `if`/`else`), making the interface self-referential.
 ///
-/// This is the C1a/C1b/C2 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
+/// This is the C1a/C1b/C2/C3 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
 /// `Const`, local/global get/set/tee, `Call`, `Select`, the control constructs
 /// (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), the
 /// numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
-/// `op`), and the memory + general load/store instructions (`MemorySize`/
-/// `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`).
-/// Any other instruction is rejected catchably by both directions (later tasks
-/// add tables, refs, atomics, the lane-carrying SIMD ops, GC, and EH).
+/// `op`), the memory + general load/store instructions (`MemorySize`/
+/// `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`),
+/// and the table instructions + `call_indirect` (`TableGet`/`TableSet`/
+/// `TableGrow`/`TableSize`/`TableFill`/`TableInit`/`TableCopy`/`ElemDrop`/
+/// `CallIndirect`). Any other instruction is rejected catchably by both
+/// directions (later tasks add refs, tail-calls, atomics, the lane-carrying SIMD
+/// ops, GC, and EH).
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.
@@ -406,6 +411,18 @@ pub struct InstrDesc {
   pub load_kind: Option<LoadKind>,
   /// `Store`: the kind of store (width, atomicity).
   pub store_kind: Option<StoreKind>,
+  /// The referenced table's stable index, for
+  /// `TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`, the
+  /// DESTINATION table of `TableCopy`, and the table of `CallIndirect`.
+  pub table: Option<u32>,
+  /// `TableCopy`: the SOURCE table's stable index (the destination uses
+  /// `table`).
+  pub src_table: Option<u32>,
+  /// `TableInit`/`ElemDrop`: the referenced element segment's stable index.
+  pub elem: Option<u32>,
+  /// `CallIndirect`: the stable index of the function type being called through
+  /// the table (named `typeIndex`, matching `BlockType::MultiValue`).
+  pub type_index: Option<u32>,
 }
 
 impl InstrDesc {
@@ -432,6 +449,10 @@ impl InstrDesc {
       mem_arg: None,
       load_kind: None,
       store_kind: None,
+      table: None,
+      src_table: None,
+      elem: None,
+      type_index: None,
     }
   }
 }
@@ -503,6 +524,40 @@ pub(crate) fn data_id_at(module: &Module, index: u32) -> Result<DataId> {
     .find(|d| d.id().index() as u32 == index)
     .map(|d| d.id())
     .ok_or_else(|| Error::from_reason(format!("no data segment at index {index} in this module")))
+}
+
+/// Resolve a table's stable index to its live `TableId`, or a catchable error.
+///
+/// This is an ABORT GUARD, exactly like [`memory_id_at`]: a foreign/deleted table
+/// index reaching emit panics walrus (`IdsToIndices::get_table_index`), and a
+/// panic across the FFI boundary is uncatchable under `panic = abort`. Rejecting
+/// the bad index here (and in the preflight) turns that abort into an ordinary JS
+/// exception.
+pub(crate) fn table_id_at(module: &Module, index: u32) -> Result<TableId> {
+  module
+    .tables
+    .iter()
+    .find(|t| t.id().index() as u32 == index)
+    .map(|t| t.id())
+    .ok_or_else(|| Error::from_reason(format!("no table at index {index} in this module")))
+}
+
+/// Resolve an element segment's stable index to its live `ElementId`, or a
+/// catchable error.
+///
+/// This is an ABORT GUARD, exactly like [`memory_id_at`]: a foreign/deleted
+/// element index reaching emit panics walrus (`IdsToIndices::get_element_index`).
+pub(crate) fn element_id_at(module: &Module, index: u32) -> Result<ElementId> {
+  module
+    .elements
+    .iter()
+    .find(|e| e.id().index() as u32 == index)
+    .map(|e| e.id())
+    .ok_or_else(|| {
+      Error::from_reason(format!(
+        "no element segment at index {index} in this module"
+      ))
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -934,6 +989,10 @@ fn emit_one(
     mem_arg,
     load_kind,
     store_kind,
+    table,
+    src_table,
+    elem,
+    type_index,
   } = d;
 
   match r#type.as_str() {
@@ -1130,10 +1189,64 @@ fn emit_one(
       let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("Store", "memArg"))?)?;
       fb.instr_seq(seq_id).instr(wir::Store { memory, kind, arg });
     }
+    "TableGet" => {
+      let table = table_id_at(module, table.ok_or_else(|| missing("TableGet", "table"))?)?;
+      fb.instr_seq(seq_id).instr(wir::TableGet { table });
+    }
+    "TableSet" => {
+      let table = table_id_at(module, table.ok_or_else(|| missing("TableSet", "table"))?)?;
+      fb.instr_seq(seq_id).instr(wir::TableSet { table });
+    }
+    "TableGrow" => {
+      let table = table_id_at(module, table.ok_or_else(|| missing("TableGrow", "table"))?)?;
+      fb.instr_seq(seq_id).instr(wir::TableGrow { table });
+    }
+    "TableSize" => {
+      let table = table_id_at(module, table.ok_or_else(|| missing("TableSize", "table"))?)?;
+      fb.instr_seq(seq_id).instr(wir::TableSize { table });
+    }
+    "TableFill" => {
+      let table = table_id_at(module, table.ok_or_else(|| missing("TableFill", "table"))?)?;
+      fb.instr_seq(seq_id).instr(wir::TableFill { table });
+    }
+    "TableInit" => {
+      let table = table_id_at(module, table.ok_or_else(|| missing("TableInit", "table"))?)?;
+      let elem = element_id_at(module, elem.ok_or_else(|| missing("TableInit", "elem"))?)?;
+      fb.instr_seq(seq_id).instr(wir::TableInit { table, elem });
+    }
+    "TableCopy" => {
+      // `table` is the DESTINATION, `srcTable` the SOURCE (see `InstrDesc`).
+      let dst = table_id_at(module, table.ok_or_else(|| missing("TableCopy", "table"))?)?;
+      let src = table_id_at(
+        module,
+        src_table.ok_or_else(|| missing("TableCopy", "srcTable"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::TableCopy { src, dst });
+    }
+    "ElemDrop" => {
+      let elem = element_id_at(module, elem.ok_or_else(|| missing("ElemDrop", "elem"))?)?;
+      fb.instr_seq(seq_id).instr(wir::ElemDrop { elem });
+    }
+    "CallIndirect" => {
+      // Reuse `resolve_type_id` for the callee type: it rejects a nonexistent
+      // index AND an internal function-entry type index (neither is a real user
+      // type a `call_indirect` may name), turning either into a catchable error
+      // rather than an emit-time abort.
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("CallIndirect", "typeIndex"))?,
+      )?;
+      let table = table_id_at(
+        module,
+        table.ok_or_else(|| missing("CallIndirect", "table"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::CallIndirect { ty, table });
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
-         C1a/C1b/C2 core, control-flow, numeric-operator, and memory/load-store subset)"
+         C1a/C1b/C2/C3 core, control-flow, numeric-operator, memory/load-store, and \
+         table subset)"
       )));
     }
   }
@@ -1350,10 +1463,77 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
           .ok_or_else(|| missing("Store", "memArg"))?,
       )?;
     }
+    // Table instructions + call_indirect. The fallible steps mirror emit exactly:
+    // required fields present and each table/element/type index resolves (the
+    // abort guards). `TableCopy` resolves BOTH tables; `TableInit` the table AND
+    // the elem; `CallIndirect` the type (via `resolve_type_id`) AND the table — a
+    // missing preflight resolution re-opens the emit-abort / partial-mutation
+    // defect. Nothing else needs resolving.
+    "TableGet" => {
+      table_id_at(module, d.table.ok_or_else(|| missing("TableGet", "table"))?)?;
+    }
+    "TableSet" => {
+      table_id_at(module, d.table.ok_or_else(|| missing("TableSet", "table"))?)?;
+    }
+    "TableGrow" => {
+      table_id_at(
+        module,
+        d.table.ok_or_else(|| missing("TableGrow", "table"))?,
+      )?;
+    }
+    "TableSize" => {
+      table_id_at(
+        module,
+        d.table.ok_or_else(|| missing("TableSize", "table"))?,
+      )?;
+    }
+    "TableFill" => {
+      table_id_at(
+        module,
+        d.table.ok_or_else(|| missing("TableFill", "table"))?,
+      )?;
+    }
+    "TableInit" => {
+      table_id_at(
+        module,
+        d.table.ok_or_else(|| missing("TableInit", "table"))?,
+      )?;
+      element_id_at(module, d.elem.ok_or_else(|| missing("TableInit", "elem"))?)?;
+    }
+    "TableCopy" => {
+      // Same fields/ordering as emit: destination (`table`) then source
+      // (`srcTable`).
+      table_id_at(
+        module,
+        d.table.ok_or_else(|| missing("TableCopy", "table"))?,
+      )?;
+      table_id_at(
+        module,
+        d.src_table
+          .ok_or_else(|| missing("TableCopy", "srcTable"))?,
+      )?;
+    }
+    "ElemDrop" => {
+      element_id_at(module, d.elem.ok_or_else(|| missing("ElemDrop", "elem"))?)?;
+    }
+    "CallIndirect" => {
+      // Same fields/ordering as emit: the callee type (via `resolve_type_id`)
+      // then the table.
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("CallIndirect", "typeIndex"))?,
+      )?;
+      table_id_at(
+        module,
+        d.table.ok_or_else(|| missing("CallIndirect", "table"))?,
+      )?;
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
-         C1a/C1b/C2 core, control-flow, numeric-operator, and memory/load-store subset)"
+         C1a/C1b/C2/C3 core, control-flow, numeric-operator, memory/load-store, and \
+         table subset)"
       )));
     }
   }
@@ -1591,6 +1771,55 @@ fn read_one(
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
       d
     }
+    wir::Instr::TableGet(e) => {
+      let mut d = InstrDesc::new("TableGet");
+      d.table = Some(e.table.index() as u32);
+      d
+    }
+    wir::Instr::TableSet(e) => {
+      let mut d = InstrDesc::new("TableSet");
+      d.table = Some(e.table.index() as u32);
+      d
+    }
+    wir::Instr::TableGrow(e) => {
+      let mut d = InstrDesc::new("TableGrow");
+      d.table = Some(e.table.index() as u32);
+      d
+    }
+    wir::Instr::TableSize(e) => {
+      let mut d = InstrDesc::new("TableSize");
+      d.table = Some(e.table.index() as u32);
+      d
+    }
+    wir::Instr::TableFill(e) => {
+      let mut d = InstrDesc::new("TableFill");
+      d.table = Some(e.table.index() as u32);
+      d
+    }
+    wir::Instr::TableInit(e) => {
+      let mut d = InstrDesc::new("TableInit");
+      d.table = Some(e.table.index() as u32);
+      d.elem = Some(e.elem.index() as u32);
+      d
+    }
+    wir::Instr::TableCopy(e) => {
+      // `table` carries the DESTINATION, `srcTable` the SOURCE (see `emit_one`).
+      let mut d = InstrDesc::new("TableCopy");
+      d.table = Some(e.dst.index() as u32);
+      d.src_table = Some(e.src.index() as u32);
+      d
+    }
+    wir::Instr::ElemDrop(e) => {
+      let mut d = InstrDesc::new("ElemDrop");
+      d.elem = Some(e.elem.index() as u32);
+      d
+    }
+    wir::Instr::CallIndirect(e) => {
+      let mut d = InstrDesc::new("CallIndirect");
+      d.type_index = Some(e.ty.index() as u32);
+      d.table = Some(e.table.index() as u32);
+      d
+    }
     other => {
       // MIRROR-WALRUS: never panic on an out-of-subset variant — surface a
       // catchable error naming it. Later C-tasks replace these arms with real
@@ -1598,8 +1827,8 @@ fn read_one(
       let dbg = format!("{other:?}");
       let name = dbg.split(['(', ' ', '{']).next().unwrap_or("unknown");
       return Err(Error::from_reason(format!(
-        "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2 core, \
-         control-flow, numeric-operator, and memory/load-store subset is)"
+        "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2/C3 \
+         core, control-flow, numeric-operator, memory/load-store, and table subset is)"
       )));
     }
   })

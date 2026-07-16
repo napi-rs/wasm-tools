@@ -969,3 +969,181 @@ test('C2 negative: a MemArg offset that is not a lossless u64 throws catchably',
   })
   t.is(1 + 1, 2)
 })
+
+// ---------------------------------------------------------------------------
+// C3: table instructions (TableGet/Set/Grow/Size/Fill/Init/Copy, ElemDrop) +
+// call_indirect.
+//
+// TableInit/ElemDrop need a real element segment and CallIndirect a real
+// function type. The binding has no `elements.add`, so the EXHAUSTIVE test parses
+// the committed elements.wasm fixture (table 0 funcref + an ACTIVE elem[0] and a
+// PASSIVE elem[1]) for genuine table/element ids, adds a second table and a fresh
+// function type, then round-trips all 9 instrs through the IN-MEMORY read path
+// (buildFunction -> instructions() on the same module; no emit/re-parse, so the
+// ill-typed-but-well-formed body builds directly). Separate WELL-TYPED bodies
+// prove table.size and call_indirect survive emit -> bytes -> re-parse.
+//
+// MIRROR-WALRUS: buildFunction only guards process-aborting hazards (each
+// table/element/type index resolves). It does NOT type-check — a table op on a
+// mismatched value, or a call_indirect whose type does not match the callee,
+// still builds and emits as-is.
+// ---------------------------------------------------------------------------
+
+// Committed fixture (see fixtures/elements.wat): table 0 (4 funcref), func $f
+// (a `() -> ()` type at type index 0), element[0] ACTIVE, element[1] PASSIVE.
+const ELEMENTS_FIXTURE = readFileSync(join(__dirname, 'fixtures', 'elements.wasm'))
+const FUNCREF = { type: 'Ref', nullable: true, heap: { type: 'Abstract', kind: 'Func' } } as const
+
+test('C3 EXHAUSTIVE: all 9 table instrs + call_indirect round-trip in-memory', (t) => {
+  const m = WasmModule.fromBuffer(ELEMENTS_FIXTURE)
+  // Fixture gives table 0 (funcref) and element segments 0 (active) / 1 (passive).
+  const t0 = 0
+  const e0 = 0
+  const e1 = 1
+  // A SECOND table so TableCopy's dst (`table`) and src (`srcTable`) are distinct
+  // — proving they are not swapped on the round-trip.
+  const t1 = m.tables.addLocal(false, 0n, null, FUNCREF).index
+  // A fresh function type for call_indirect (a real user type, not an entry type).
+  const ty = m.types.add([], []).index
+
+  const body: InstrDesc[] = [
+    { type: 'TableGet', table: t0 },
+    { type: 'TableSet', table: t0 },
+    { type: 'TableGrow', table: t0 },
+    { type: 'TableSize', table: t1 },
+    { type: 'TableFill', table: t1 },
+    { type: 'TableInit', table: t0, elem: e0 },
+    { type: 'TableCopy', table: t1, srcTable: t0 },
+    { type: 'ElemDrop', elem: e1 },
+    { type: 'CallIndirect', typeIndex: ty, table: t0 },
+  ]
+
+  const idx = m.buildFunction([], [], [], body)
+  // Read back from the SAME in-memory module (no emit/re-parse; buildFunction is
+  // MIRROR-WALRUS, so this ill-typed-but-well-formed body builds directly).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+
+  // Sanity: all 9 instruction kinds are present.
+  const kinds = new Set(read.map((d) => d.type))
+  for (const k of [
+    'TableGet',
+    'TableSet',
+    'TableGrow',
+    'TableSize',
+    'TableFill',
+    'TableInit',
+    'TableCopy',
+    'ElemDrop',
+    'CallIndirect',
+  ]) {
+    t.true(kinds.has(k), `body should contain a ${k}`)
+  }
+  // TableCopy's dst (table) and src (srcTable) are distinct and not swapped.
+  const copy = read.find((d) => d.type === 'TableCopy')!
+  t.is(copy.table, t1)
+  t.is(copy.srcTable, t0)
+  // CallIndirect carries BOTH its callee type and its table.
+  const ci = read.find((d) => d.type === 'CallIndirect')!
+  t.is(ci.typeIndex, ty)
+  t.is(ci.table, t0)
+})
+
+test('C3: a well-typed table.size body emits valid wasm and round-trips through re-parse', (t) => {
+  const m = WasmModule.fromBuffer(ELEMENTS_FIXTURE)
+  // table.size; drop — a `() -> ()` body: table.size pushes an i32, drop pops it.
+  const body: InstrDesc[] = [{ type: 'TableSize', table: 0 }, { type: 'Drop' }]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'tblsize'
+  const bytes = m.emitWasm(false)
+
+  // Independent proof the bytes are real, well-typed wasm.
+  t.true(WebAssembly.validate(bytes))
+
+  // Re-parse and read back: the op decodes to the same descriptor.
+  const read = WasmModule.fromBuffer(bytes).functions.byName('tblsize')!.instructions()
+  t.deepEqual(read, body)
+})
+
+test('C3: a well-typed call_indirect emits valid wasm and reads back through re-parse', (t) => {
+  const m = WasmModule.fromBuffer(ELEMENTS_FIXTURE)
+  // (i32.const 0)(call_indirect (type $v) table 0), where $v is `() -> ()`: the
+  // call pops the i32 table index and calls through the funcref table 0 —
+  // well-typed as-is.
+  const ty = m.types.add([], []).index
+  const body: InstrDesc[] = [
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'CallIndirect', typeIndex: ty, table: 0 },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'callind'
+  const bytes = m.emitWasm(false)
+
+  // Independent proof the call_indirect encoded to valid, well-typed wasm.
+  t.true(WebAssembly.validate(bytes))
+
+  // Re-parse: the op decodes back to a CallIndirect through the same table. emit
+  // rewrites the type section, so the type index is renumbered — only the
+  // structural round-trip (kind + table) is asserted here, not the exact value.
+  const read = WasmModule.fromBuffer(bytes).functions.byName('callind')!.instructions()
+  t.is(read.length, 2)
+  t.is(read[0].type, 'Const')
+  t.is(read[1].type, 'CallIndirect')
+  t.is(read[1].table, 0)
+  t.is(typeof read[1].typeIndex, 'number')
+})
+
+test('C3 negative: an out-of-range table, element, or type index throws catchably (no abort)', (t) => {
+  const m = WasmModule.fromBuffer(ELEMENTS_FIXTURE)
+  // table 0 and element segments 0/1 exist; the indices below do not.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'TableGet', table: 99 }]), {
+    message: /no table at index 99/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ElemDrop', elem: 7 }]), {
+    message: /no element segment at index 7/,
+  })
+  // TableInit resolves the table first, then the elem: a bad elem throws even
+  // alongside a valid table.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'TableInit', table: 0, elem: 9 }]), {
+    message: /no element segment at index 9/,
+  })
+  // TableCopy's SOURCE table (srcTable) is guarded too, not just the dest.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'TableCopy', table: 0, srcTable: 5 }]), {
+    message: /no table at index 5/,
+  })
+  // CallIndirect resolves the callee TYPE first (via resolve_type_id): a bad type
+  // index throws even alongside a valid table.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'CallIndirect', typeIndex: 42, table: 0 }]), {
+    message: /no type at index 42/,
+  })
+  // Process is still alive and the module was never mutated (a real abort would
+  // have taken the whole run down — the proof under WASI).
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C3 negative: a table/call_indirect descriptor missing a required field throws catchably', (t) => {
+  const m = WasmModule.fromBuffer(ELEMENTS_FIXTURE)
+  const ty = m.types.add([], []).index
+
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'TableGet' }]), {
+    message: /`TableGet` instruction is missing its `table` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'TableInit', table: 0 }]), {
+    message: /`TableInit` instruction is missing its `elem` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'TableCopy', table: 0 }]), {
+    message: /`TableCopy` instruction is missing its `srcTable` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ElemDrop' }]), {
+    message: /`ElemDrop` instruction is missing its `elem` field/,
+  })
+  // CallIndirect: typeIndex is checked before table (matching emit's order).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'CallIndirect', table: 0 }]), {
+    message: /`CallIndirect` instruction is missing its `typeIndex` field/,
+  })
+  // A resolvable typeIndex isolates the missing-table error.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'CallIndirect', typeIndex: ty }]), {
+    message: /`CallIndirect` instruction is missing its `table` field/,
+  })
+})
