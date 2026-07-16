@@ -30,7 +30,7 @@ pub use exports::{ExportItemTag, WasmExport, WasmExports};
 pub use functions::{FunctionKindTag, WasmFunction, WasmFunctions};
 pub use globals::{GlobalKind, WasmGlobal, WasmGlobals};
 pub use imports::{ImportKindTag, WasmImport, WasmImports};
-pub use ir::{BlockType, ConstValue, InstrDesc};
+pub use ir::{BlockType, ConstValue, ExtendedLoad, InstrDesc, LoadKind, MemArg, StoreKind};
 pub use locals::{WasmLocal, WasmLocals};
 pub use memories::{WasmMemories, WasmMemory};
 pub use module::WasmModule;

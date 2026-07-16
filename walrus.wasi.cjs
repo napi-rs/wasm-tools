@@ -141,6 +141,7 @@ module.exports.DataKindTag = __napiModule.exports.DataKindTag
 module.exports.ElementItemsTag = __napiModule.exports.ElementItemsTag
 module.exports.ElementKindTag = __napiModule.exports.ElementKindTag
 module.exports.ExportItemTag = __napiModule.exports.ExportItemTag
+module.exports.ExtendedLoad = __napiModule.exports.ExtendedLoad
 module.exports.FunctionKindTag = __napiModule.exports.FunctionKindTag
 module.exports.GlobalKind = __napiModule.exports.GlobalKind
 module.exports.ImportKindTag = __napiModule.exports.ImportKindTag

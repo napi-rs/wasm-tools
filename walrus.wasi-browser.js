@@ -90,6 +90,7 @@ export const DataKindTag = __napiModule.exports.DataKindTag
 export const ElementItemsTag = __napiModule.exports.ElementItemsTag
 export const ElementKindTag = __napiModule.exports.ElementKindTag
 export const ExportItemTag = __napiModule.exports.ExportItemTag
+export const ExtendedLoad = __napiModule.exports.ExtendedLoad
 export const FunctionKindTag = __napiModule.exports.FunctionKindTag
 export const GlobalKind = __napiModule.exports.GlobalKind
 export const ImportKindTag = __napiModule.exports.ImportKindTag

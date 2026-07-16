@@ -4,7 +4,16 @@ import { fileURLToPath } from 'node:url'
 
 import test from 'ava'
 
-import { ConstExpr, ModuleConfig, WasmModule, type InstrDesc, type ValType } from '../index'
+import {
+  ConstExpr,
+  ModuleConfig,
+  WasmModule,
+  type InstrDesc,
+  type LoadKind,
+  type MemArg,
+  type StoreKind,
+  type ValType,
+} from '../index'
 
 const __dirname = join(fileURLToPath(import.meta.url), '..')
 
@@ -369,7 +378,8 @@ test('guard: a Block naming its own in-flight signature/entry type index is reje
   )
   // The entry type (T + 1) is the one emit actually skips — the real landmine.
   t.throws(
-    () => m.buildFunction([], [], [], [{ type: 'Block', blockType: { type: 'MultiValue', typeIndex: T + 1 }, seq: [] }]),
+    () =>
+      m.buildFunction([], [], [], [{ type: 'Block', blockType: { type: 'MultiValue', typeIndex: T + 1 }, seq: [] }]),
     { message: new RegExp(`no type at index ${T + 1}`) },
   )
   // Process is still alive after the catchable throws (a real abort would have
@@ -706,9 +716,9 @@ test('C1b negative: a deferred lane-carrier op name is not buildable (rejected c
 // directly (buildFunction cannot emit a lane op), so the read path can be
 // exercised against a genuine lane-carrying instruction.
 const LANE_CARRIER_MODULE = new Uint8Array([
-  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02,
-  0x01, 0x00, 0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00, 0x0a, 0x0c, 0x01, 0x0a, 0x00, 0x41, 0x00,
-  0xfd, 0x0f, 0xfd, 0x15, 0x00, 0x1a, 0x0b,
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00, 0x07,
+  0x05, 0x01, 0x01, 0x66, 0x00, 0x00, 0x0a, 0x0c, 0x01, 0x0a, 0x00, 0x41, 0x00, 0xfd, 0x0f, 0xfd, 0x15, 0x00, 0x1a,
+  0x0b,
 ])
 
 test('C1b negative: reading a module containing a lane-carrier op throws catchably (deferred to C6)', (t) => {
@@ -718,5 +728,244 @@ test('C1b negative: reading a module containing a lane-carrier op throws catchab
     message: /deferred to the SIMD task \(C6\)/,
   })
   // Process survived the guarded read.
+  t.is(1 + 1, 2)
+})
+
+// ---------------------------------------------------------------------------
+// C2: memory instructions (MemorySize/Grow/Init/Fill/Copy, DataDrop) + the
+// general Load/Store instructions.
+//
+// Load/Store carry a MemArg (align + a u64 offset as a bigint) and a
+// LoadKind/StoreKind. Same walrus fact as C1b: `strict_validate(false)` is a
+// no-op in 0.26.4, so an ill-typed body can never re-parse. The EXHAUSTIVE test
+// therefore uses the IN-MEMORY read path (buildFunction -> instructions() on the
+// same module, never touching the parser/validator); a separate WELL-TYPED body
+// proves the ops survive the emit -> bytes -> re-parse boundary.
+//
+// MIRROR-WALRUS: buildFunction only guards process-aborting hazards (each
+// memory/data index resolves; a MemArg offset is a lossless u64). It does NOT
+// type-check — a non-power-of-two align, an out-of-bounds access, or an atomic
+// op on a non-shared memory all build and emit as-is.
+// ---------------------------------------------------------------------------
+
+// Every LoadKind variant: each width, `atomic` true/false on the full-width
+// integers, each ExtendedLoad on each narrow width, plus V128.
+const ALL_LOAD_KINDS: LoadKind[] = [
+  { type: 'I32', atomic: false },
+  { type: 'I32', atomic: true },
+  { type: 'I64', atomic: false },
+  { type: 'I64', atomic: true },
+  { type: 'F32' },
+  { type: 'F64' },
+  { type: 'V128' },
+  { type: 'I32_8', kind: 'SignExtend' },
+  { type: 'I32_8', kind: 'ZeroExtend' },
+  { type: 'I32_8', kind: 'ZeroExtendAtomic' },
+  { type: 'I32_16', kind: 'SignExtend' },
+  { type: 'I32_16', kind: 'ZeroExtend' },
+  { type: 'I32_16', kind: 'ZeroExtendAtomic' },
+  { type: 'I64_8', kind: 'SignExtend' },
+  { type: 'I64_8', kind: 'ZeroExtend' },
+  { type: 'I64_8', kind: 'ZeroExtendAtomic' },
+  { type: 'I64_16', kind: 'SignExtend' },
+  { type: 'I64_16', kind: 'ZeroExtend' },
+  { type: 'I64_16', kind: 'ZeroExtendAtomic' },
+  { type: 'I64_32', kind: 'SignExtend' },
+  { type: 'I64_32', kind: 'ZeroExtend' },
+  { type: 'I64_32', kind: 'ZeroExtendAtomic' },
+]
+
+// Every StoreKind variant. NOTE the asymmetry with LoadKind: EVERY integer store
+// (full-width AND narrow) carries `atomic`, and there is no ExtendedLoad.
+const ALL_STORE_KINDS: StoreKind[] = [
+  { type: 'I32', atomic: false },
+  { type: 'I32', atomic: true },
+  { type: 'I64', atomic: false },
+  { type: 'I64', atomic: true },
+  { type: 'F32' },
+  { type: 'F64' },
+  { type: 'V128' },
+  { type: 'I32_8', atomic: false },
+  { type: 'I32_8', atomic: true },
+  { type: 'I32_16', atomic: false },
+  { type: 'I32_16', atomic: true },
+  { type: 'I64_8', atomic: false },
+  { type: 'I64_8', atomic: true },
+  { type: 'I64_16', atomic: false },
+  { type: 'I64_16', atomic: true },
+  { type: 'I64_32', atomic: false },
+  { type: 'I64_32', atomic: true },
+]
+
+const U64_MAX = 18446744073709551615n // 2^64 - 1, the largest lossless u64 offset
+const BIG_OFFSET = 0xdead_beef_cafen // > 2^32: proves the bigint path is exact beyond 32 bits
+const ALIGNS = [1, 2, 4, 8, 16]
+const OFFSETS = [0n, 7n, BIG_OFFSET, U64_MAX, 4096n]
+// A varied MemArg per position so aligns/offsets differ across the body; the
+// large and max-u64 offsets both appear in each of the load and store groups.
+const memArgAt = (i: number): MemArg => ({ align: ALIGNS[i % ALIGNS.length], offset: OFFSETS[i % OFFSETS.length] })
+
+// A body exercising all 8 C2 instrs and every LoadKind/StoreKind. Uses TWO
+// memories so MemoryCopy's destination (`memory`) and source (`srcMemory`) are
+// distinct — proving they are not swapped on the round-trip.
+function memoryComprehensiveBody(mem0: number, mem1: number, data: number): InstrDesc[] {
+  const body: InstrDesc[] = [
+    { type: 'MemorySize', memory: mem0 },
+    { type: 'MemoryGrow', memory: mem0 },
+    { type: 'MemoryInit', memory: mem0, data },
+    { type: 'DataDrop', data },
+    { type: 'MemoryCopy', memory: mem1, srcMemory: mem0 },
+    { type: 'MemoryFill', memory: mem1 },
+  ]
+  ALL_LOAD_KINDS.forEach((k, i) => body.push({ type: 'Load', memory: mem0, loadKind: k, memArg: memArgAt(i) }))
+  ALL_STORE_KINDS.forEach((k, i) => body.push({ type: 'Store', memory: mem1, storeKind: k, memArg: memArgAt(i + 2) }))
+  return body
+}
+
+test('C2 EXHAUSTIVE: all 8 memory/load-store instrs + every LoadKind/StoreKind round-trip in-memory', (t) => {
+  const m = empty()
+  const mem0 = m.memories.addLocal(false, false, 1n, null, null).index
+  const mem1 = m.memories.addLocal(false, false, 1n, null, null).index
+  const data = m.data.addPassive(new Uint8Array([1, 2, 3, 4])).index
+  const body = memoryComprehensiveBody(mem0, mem1, data)
+
+  const idx = m.buildFunction([], [], [], body)
+  // Read back from the SAME in-memory module (no emit/re-parse; buildFunction is
+  // MIRROR-WALRUS, so this ill-typed-but-well-formed body builds directly).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+
+  // Sanity: all 8 instruction kinds are present, and a u64::MAX offset survived
+  // exactly (proving the MemArg bigint path is lossless at the full width).
+  const kinds = new Set(read.map((d) => d.type))
+  for (const k of ['MemorySize', 'MemoryGrow', 'MemoryInit', 'DataDrop', 'MemoryCopy', 'MemoryFill', 'Load', 'Store']) {
+    t.true(kinds.has(k), `body should contain a ${k}`)
+  }
+  t.true(
+    read.some((d) => d.memArg?.offset === U64_MAX),
+    'a u64::MAX MemArg offset must round-trip exactly',
+  )
+  // MemoryCopy's dst (memory) and src (srcMemory) are distinct and not swapped.
+  const copy = read.find((d) => d.type === 'MemoryCopy')!
+  t.is(copy.memory, mem1)
+  t.is(copy.srcMemory, mem0)
+})
+
+test('C2: a well-typed memory.size/load/store body emits valid wasm and round-trips through re-parse', (t) => {
+  const m = empty()
+  const mem = m.memories.addLocal(false, false, 1n, null, null).index
+  // memory.size; drop; (i32.const 0)(i32.load); drop; (i32.const 0)(i32.const 42)(i32.store).
+  // align 4 = the natural i32 alignment (walrus emits it as align exponent 2).
+  const body: InstrDesc[] = [
+    { type: 'MemorySize', memory: mem },
+    { type: 'Drop' },
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Load', memory: mem, loadKind: { type: 'I32', atomic: false }, memArg: { align: 4, offset: 0n } },
+    { type: 'Drop' },
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'I32', value: 42 } },
+    { type: 'Store', memory: mem, storeKind: { type: 'I32', atomic: false }, memArg: { align: 4, offset: 0n } },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'memops'
+  const bytes = m.emitWasm(false)
+
+  // Independent proof the bytes are real, well-typed wasm.
+  t.true(WebAssembly.validate(bytes))
+
+  // Re-parse and read back: the ops decode to the same descriptors (align 4 and
+  // offset 0 survive the log2 round-trip in the binary encoding).
+  const read = WasmModule.fromBuffer(bytes).functions.byName('memops')!.instructions()
+  t.deepEqual(read, body)
+})
+
+test('C2: a large MemArg offset survives the emit -> bytes -> re-parse boundary (memory64)', (t) => {
+  // A 64-bit offset needs a memory64 memory to stay well-typed on re-parse.
+  const m = empty()
+  const mem = m.memories.addLocal(false, true, 1n, null, null).index
+  const body: InstrDesc[] = [
+    { type: 'Const', value: { type: 'I64', value: 0n } },
+    { type: 'Load', memory: mem, loadKind: { type: 'I32', atomic: false }, memArg: { align: 1, offset: BIG_OFFSET } },
+    { type: 'Drop' },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'bigoffset'
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+  const read = WasmModule.fromBuffer(bytes).functions.byName('bigoffset')!.instructions()
+  t.deepEqual(read, body)
+  // The large offset survived the byte boundary exactly.
+  t.is(read[1].memArg!.offset, BIG_OFFSET)
+})
+
+test('C2 negative: an out-of-range memory or data index throws catchably (no abort)', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null) // memory index 0 exists; 5 does not
+
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'MemorySize', memory: 5 }]), {
+    message: /no memory at index 5/,
+  })
+  // No data segments exist, so any data index is out of range.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'DataDrop', data: 3 }]), {
+    message: /no data segment at index 3/,
+  })
+  // MemoryInit resolves the memory first, then the data: a bad data index throws
+  // even alongside a valid memory.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'MemoryInit', memory: 0, data: 9 }]), {
+    message: /no data segment at index 9/,
+  })
+  // MemoryCopy's SOURCE memory (srcMemory) is guarded too, not just the dest.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'MemoryCopy', memory: 0, srcMemory: 7 }]), {
+    message: /no memory at index 7/,
+  })
+  // Process is still alive and the module was never mutated (a real abort would
+  // have taken the whole run down — the proof under WASI).
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C2 negative: a memory/load-store descriptor missing a required field throws catchably', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null)
+
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'MemorySize' }]), {
+    message: /`MemorySize` instruction is missing its `memory` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'MemoryInit', memory: 0 }]), {
+    message: /`MemoryInit` instruction is missing its `data` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'MemoryCopy', memory: 0 }]), {
+    message: /`MemoryCopy` instruction is missing its `srcMemory` field/,
+  })
+  // Load: loadKind is checked before memArg (matching emit's order).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Load', memory: 0, memArg: { align: 1, offset: 0n } }]), {
+    message: /`Load` instruction is missing its `loadKind` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Load', memory: 0, loadKind: { type: 'I32', atomic: false } }]), {
+    message: /`Load` instruction is missing its `memArg` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Store', memory: 0, memArg: { align: 1, offset: 0n } }]), {
+    message: /`Store` instruction is missing its `storeKind` field/,
+  })
+})
+
+test('C2 negative: a MemArg offset that is not a lossless u64 throws catchably', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null)
+  const load = (offset: bigint): InstrDesc => ({
+    type: 'Load',
+    memory: 0,
+    loadKind: { type: 'I32', atomic: false },
+    memArg: { align: 4, offset },
+  })
+
+  // 2^64 is one past u64::MAX — not lossless.
+  t.throws(() => m.buildFunction([], [], [], [load(1n << 64n)]), {
+    message: /MemArg offset must be a non-negative integer that fits in a u64/,
+  })
+  // A negative offset is rejected too (a u64 has no sign).
+  t.throws(() => m.buildFunction([], [], [], [load(-1n)]), {
+    message: /MemArg offset must be a non-negative integer that fits in a u64/,
+  })
   t.is(1 + 1, 2)
 })

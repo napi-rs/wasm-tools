@@ -28,20 +28,25 @@
 //! arm's own sequence id — the same shape as `block`/`loop`.
 //!
 //! ## MIRROR-WALRUS
-//! Only process-aborting hazards are guarded: an out-of-range local/global/func
-//! index, an out-of-range branch label, or a bad multi-value block-type index
-//! are rejected with a catchable error BEFORE a panicking walrus lookup can be
-//! reached. Nothing here validates wasm well-formedness — an ill-typed body is
-//! emitted as-is and left for `WebAssembly.validate` to reject.
+//! Only process-aborting hazards are guarded: an out-of-range local/global/func/
+//! memory/data index, an out-of-range branch label, a bad multi-value block-type
+//! index, or a `MemArg` offset that is not a lossless `u64` are rejected with a
+//! catchable error BEFORE a panicking walrus lookup can be reached. Nothing here
+//! validates wasm well-formedness — an ill-typed body (a non-power-of-two
+//! alignment, an out-of-bounds access, an atomic op on a non-shared memory, …)
+//! is emitted as-is and left for `WebAssembly.validate` to reject.
 
 use napi::bindgen_prelude::{BigInt, Result};
 use napi::Error;
 use napi_derive::napi;
 use walrus::ir as wir;
 use walrus::ir::{BinaryOp, TernaryOp, UnaryOp};
-use walrus::{FunctionBuilder, FunctionId, GlobalId, LocalFunction, LocalId, Module};
+use walrus::{
+  DataId, FunctionBuilder, FunctionId, GlobalId, LocalFunction, LocalId, MemoryId, Module,
+};
 
 use crate::convert::{resolve_type_id, val_type_to_walrus_in};
+use crate::handle::bigint_to_u64;
 use crate::valtype::ValType;
 
 /// The maximum control-flow nesting depth the three instruction walks
@@ -167,6 +172,172 @@ pub enum BlockType {
   },
 }
 
+/// The alignment and offset immediate of a `Load`/`Store`, mirroring
+/// `walrus::ir::MemArg` (`ir/mod.rs:1655`).
+///
+/// Generated as a `#[napi(object)]`: `{ align: number, offset: bigint }`.
+///
+/// `align` is the RAW alignment in bytes (a power of two per wasm, e.g. `4` for
+/// a natural `i32.load`), NOT the log2 exponent the binary format encodes —
+/// walrus converts between the two on parse (`1 << exp`) and emit (counting the
+/// trailing shift), so this stores the same power-of-two value both directions.
+/// `offset` is the constant byte offset from the dynamic address; it is a wasm
+/// `u64` (memory64 uses the full range), so it crosses the boundary as a JS
+/// `bigint` for exactness and is rejected on build if negative or not lossless.
+///
+/// MIRROR-WALRUS: neither field is validated for wasm well-formedness — `align`
+/// is NOT checked to be a power of two and `offset` is NOT range-checked against
+/// the memory; both are stored verbatim.
+#[napi(object)]
+pub struct MemArg {
+  /// The raw alignment in bytes (a power of two per wasm; stored verbatim, not
+  /// validated).
+  pub align: u32,
+  /// The constant byte offset of the access (a JS `bigint`, for exact `u64`
+  /// range).
+  pub offset: BigInt,
+}
+
+/// The sign/zero-extension behavior of a narrowing load, mirroring
+/// `walrus::ir::ExtendedLoad` (`ir/mod.rs:1562`). Carried in the `kind` field of
+/// the narrow [`LoadKind`] variants (`I32_8`/`I32_16`/`I64_8`/`I64_16`/`I64_32`).
+///
+/// Generated as a string enum: `'SignExtend' | 'ZeroExtend' | 'ZeroExtendAtomic'`.
+///
+/// `SignExtend`/`ZeroExtend` are the ordinary narrow loads (`i32.load8_s` /
+/// `i32.load8_u`); `ZeroExtendAtomic` is the atomic narrow load
+/// (`i32.atomic.load8_u`, which is always zero-extending).
+#[napi(string_enum)]
+pub enum ExtendedLoad {
+  /// Sign-extend the narrow value to the full result width.
+  SignExtend,
+  /// Zero-extend the narrow value to the full result width.
+  ZeroExtend,
+  /// Zero-extend an atomic narrow load to the full result width.
+  ZeroExtendAtomic,
+}
+
+/// The kind of a `Load` instruction, mirroring `walrus::ir::LoadKind`
+/// (`ir/mod.rs:1514`).
+///
+/// Generated as a TypeScript discriminated union keyed on `type`:
+/// `{ type: 'I32', atomic: boolean } | { type: 'I64', atomic: boolean }`
+/// `| { type: 'F32' } | { type: 'F64' } | { type: 'V128' }`
+/// `| { type: 'I32_8', kind: ExtendedLoad } | { type: 'I32_16', kind: ExtendedLoad }`
+/// `| { type: 'I64_8', kind: ExtendedLoad } | { type: 'I64_16', kind: ExtendedLoad }`
+/// `| { type: 'I64_32', kind: ExtendedLoad }`.
+///
+/// The full-width `I32`/`I64` carry an `atomic` flag (`i32.atomic.load` is a
+/// plain `Load` with `atomic: true`); the narrow variants carry an
+/// [`ExtendedLoad`] describing sign/zero/atomic extension (this is the ASYMMETRY
+/// with [`StoreKind`], whose narrow variants carry `atomic: bool` instead).
+/// `V128` is the plain `v128.load` (the lane/splat SIMD loads are the separate,
+/// deferred `LoadSimd` instruction).
+#[napi]
+pub enum LoadKind {
+  /// A full-width `i32` load (`atomic` => `i32.atomic.load`).
+  I32 {
+    /// Whether this is the atomic form.
+    atomic: bool,
+  },
+  /// A full-width `i64` load (`atomic` => `i64.atomic.load`).
+  I64 {
+    /// Whether this is the atomic form.
+    atomic: bool,
+  },
+  /// An `f32` load.
+  F32,
+  /// An `f64` load.
+  F64,
+  /// A `v128` load (plain `v128.load`).
+  V128,
+  /// An 8-bit load extended to `i32`.
+  I32_8 {
+    /// The extension behavior.
+    kind: ExtendedLoad,
+  },
+  /// A 16-bit load extended to `i32`.
+  I32_16 {
+    /// The extension behavior.
+    kind: ExtendedLoad,
+  },
+  /// An 8-bit load extended to `i64`.
+  I64_8 {
+    /// The extension behavior.
+    kind: ExtendedLoad,
+  },
+  /// A 16-bit load extended to `i64`.
+  I64_16 {
+    /// The extension behavior.
+    kind: ExtendedLoad,
+  },
+  /// A 32-bit load extended to `i64`.
+  I64_32 {
+    /// The extension behavior.
+    kind: ExtendedLoad,
+  },
+}
+
+/// The kind of a `Store` instruction, mirroring `walrus::ir::StoreKind`
+/// (`ir/mod.rs:1609`).
+///
+/// Generated as a TypeScript discriminated union keyed on `type`:
+/// `{ type: 'I32', atomic: boolean } | { type: 'I64', atomic: boolean }`
+/// `| { type: 'F32' } | { type: 'F64' } | { type: 'V128' }`
+/// `| { type: 'I32_8', atomic: boolean } | { type: 'I32_16', atomic: boolean }`
+/// `| { type: 'I64_8', atomic: boolean } | { type: 'I64_16', atomic: boolean }`
+/// `| { type: 'I64_32', atomic: boolean }`.
+///
+/// Note the ASYMMETRY with [`LoadKind`]: EVERY integer store variant (full-width
+/// AND narrow) carries an `atomic: bool`, because a store has no sign/zero
+/// extension to describe — so there is no `ExtendedLoad` here. `V128` is the
+/// plain `v128.store` (the lane SIMD stores are the separate, deferred
+/// `LoadSimd` instruction).
+#[napi]
+pub enum StoreKind {
+  /// A full-width `i32` store (`atomic` => `i32.atomic.store`).
+  I32 {
+    /// Whether this is the atomic form.
+    atomic: bool,
+  },
+  /// A full-width `i64` store (`atomic` => `i64.atomic.store`).
+  I64 {
+    /// Whether this is the atomic form.
+    atomic: bool,
+  },
+  /// An `f32` store.
+  F32,
+  /// An `f64` store.
+  F64,
+  /// A `v128` store (plain `v128.store`).
+  V128,
+  /// An 8-bit store of an `i32` (`atomic` => `i32.atomic.store8`).
+  I32_8 {
+    /// Whether this is the atomic form.
+    atomic: bool,
+  },
+  /// A 16-bit store of an `i32` (`atomic` => `i32.atomic.store16`).
+  I32_16 {
+    /// Whether this is the atomic form.
+    atomic: bool,
+  },
+  /// An 8-bit store of an `i64` (`atomic` => `i64.atomic.store8`).
+  I64_8 {
+    /// Whether this is the atomic form.
+    atomic: bool,
+  },
+  /// A 16-bit store of an `i64` (`atomic` => `i64.atomic.store16`).
+  I64_16 {
+    /// Whether this is the atomic form.
+    atomic: bool,
+  },
+  /// A 32-bit store of an `i64` (`atomic` => `i64.atomic.store32`).
+  I64_32 {
+    /// Whether this is the atomic form.
+    atomic: bool,
+  },
+}
+
 /// A single wasm instruction, as a wide tagged record shared by both the read
 /// (`WasmFunction::instructions`) and build (`WasmModule::buildFunction`)
 /// directions.
@@ -177,13 +348,14 @@ pub enum BlockType {
 /// `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
 /// `if`/`else`), making the interface self-referential.
 ///
-/// This is the C1a/C1b subset: leaf ops (`Unreachable`/`Return`/`Drop`),
+/// This is the C1a/C1b/C2 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
 /// `Const`, local/global get/set/tee, `Call`, `Select`, the control constructs
-/// (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), and the
+/// (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), the
 /// numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
-/// `op`). Any other instruction is rejected catchably by both directions (later
-/// tasks add memory, tables, refs, atomics, the lane-carrying SIMD ops, GC, and
-/// EH).
+/// `op`), and the memory + general load/store instructions (`MemorySize`/
+/// `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`).
+/// Any other instruction is rejected catchably by both directions (later tasks
+/// add tables, refs, atomics, the lane-carrying SIMD ops, GC, and EH).
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.
@@ -219,6 +391,21 @@ pub struct InstrDesc {
   /// `"F32x4RelaxedMadd"`). The `type` discriminant selects which of the three
   /// operator enums decodes it, so one shared field is unambiguous.
   pub op: Option<String>,
+  /// The referenced memory's stable index, for
+  /// `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`, and the
+  /// DESTINATION memory of `MemoryCopy`.
+  pub memory: Option<u32>,
+  /// `MemoryCopy`: the SOURCE memory's stable index (the destination uses
+  /// `memory`).
+  pub src_memory: Option<u32>,
+  /// `MemoryInit`/`DataDrop`: the referenced data segment's stable index.
+  pub data: Option<u32>,
+  /// `Load`/`Store`: the alignment and offset immediate.
+  pub mem_arg: Option<MemArg>,
+  /// `Load`: the kind of load (width, atomicity, extension).
+  pub load_kind: Option<LoadKind>,
+  /// `Store`: the kind of store (width, atomicity).
+  pub store_kind: Option<StoreKind>,
 }
 
 impl InstrDesc {
@@ -239,6 +426,12 @@ impl InstrDesc {
       labels: None,
       default_label: None,
       op: None,
+      memory: None,
+      src_memory: None,
+      data: None,
+      mem_arg: None,
+      load_kind: None,
+      store_kind: None,
     }
   }
 }
@@ -283,6 +476,35 @@ pub(crate) fn function_id_at(module: &Module, index: u32) -> Result<FunctionId> 
     .ok_or_else(|| Error::from_reason(format!("no function at index {index} in this module")))
 }
 
+/// Resolve a memory's stable index to its live `MemoryId`, or a catchable error.
+///
+/// This is an ABORT GUARD: a foreign/deleted memory index reaching emit panics
+/// walrus (`IdsToIndices::get_memory_index`), and a panic across the FFI boundary
+/// is uncatchable under `panic = abort`. Rejecting the bad index here (and in the
+/// preflight) turns that abort into an ordinary JS exception.
+pub(crate) fn memory_id_at(module: &Module, index: u32) -> Result<MemoryId> {
+  module
+    .memories
+    .iter()
+    .find(|m| m.id().index() as u32 == index)
+    .map(|m| m.id())
+    .ok_or_else(|| Error::from_reason(format!("no memory at index {index} in this module")))
+}
+
+/// Resolve a data segment's stable index to its live `DataId`, or a catchable
+/// error.
+///
+/// This is an ABORT GUARD, exactly like [`memory_id_at`]: a foreign/deleted data
+/// index reaching emit panics walrus (`IdsToIndices::get_data_index`).
+pub(crate) fn data_id_at(module: &Module, index: u32) -> Result<DataId> {
+  module
+    .data
+    .iter()
+    .find(|d| d.id().index() as u32 == index)
+    .map(|d| d.id())
+    .ok_or_else(|| Error::from_reason(format!("no data segment at index {index} in this module")))
+}
+
 // ---------------------------------------------------------------------------
 // Block-type <-> InstrSeqType.
 // ---------------------------------------------------------------------------
@@ -315,6 +537,137 @@ fn from_instr_seq_type(ty: wir::InstrSeqType) -> Result<BlockType> {
       type_index: id.index() as u32,
     },
   })
+}
+
+// ---------------------------------------------------------------------------
+// MemArg / LoadKind / StoreKind / ExtendedLoad <-> walrus. All pure value
+// conversions: the kind enums carry no arena ids (so no resolution), and the
+// only fallible step is MemArg's `u64` offset losslessness on the write side.
+// The kind matches are EXHAUSTIVE (no `_`) so a future walrus variant is a
+// COMPILE error rather than a silent mismap.
+// ---------------------------------------------------------------------------
+
+/// Build a walrus `MemArg` from a JS `MemArg`, rejecting an `offset` that is
+/// negative or does not fit losslessly in a `u64` (mirror of the size-write
+/// path). `align` is stored verbatim — MIRROR-WALRUS does NOT check it is a
+/// power of two. Shared by emit and its preflight so the two never disagree.
+fn mem_arg_to_walrus(arg: &MemArg) -> Result<wir::MemArg> {
+  Ok(wir::MemArg {
+    align: arg.align,
+    offset: bigint_to_u64(arg.offset.clone(), "MemArg offset")?,
+  })
+}
+
+/// Read a walrus `MemArg` back into a JS `MemArg` (`offset` as an exact bigint).
+fn mem_arg_from_walrus(arg: &wir::MemArg) -> MemArg {
+  MemArg {
+    align: arg.align,
+    offset: BigInt::from(arg.offset),
+  }
+}
+
+/// `ExtendedLoad` -> walrus. Total 1:1 mapping (no fallibility, no `_`).
+fn extended_load_to_walrus(kind: &ExtendedLoad) -> wir::ExtendedLoad {
+  match kind {
+    ExtendedLoad::SignExtend => wir::ExtendedLoad::SignExtend,
+    ExtendedLoad::ZeroExtend => wir::ExtendedLoad::ZeroExtend,
+    ExtendedLoad::ZeroExtendAtomic => wir::ExtendedLoad::ZeroExtendAtomic,
+  }
+}
+
+/// walrus `ExtendedLoad` -> our enum. Total 1:1 mapping.
+fn extended_load_from_walrus(kind: wir::ExtendedLoad) -> ExtendedLoad {
+  match kind {
+    wir::ExtendedLoad::SignExtend => ExtendedLoad::SignExtend,
+    wir::ExtendedLoad::ZeroExtend => ExtendedLoad::ZeroExtend,
+    wir::ExtendedLoad::ZeroExtendAtomic => ExtendedLoad::ZeroExtendAtomic,
+  }
+}
+
+/// `LoadKind` -> walrus. Total 1:1 mapping (the narrow variants carry an
+/// [`ExtendedLoad`]; the full-width integers carry `atomic`).
+fn load_kind_to_walrus(kind: &LoadKind) -> wir::LoadKind {
+  match kind {
+    LoadKind::I32 { atomic } => wir::LoadKind::I32 { atomic: *atomic },
+    LoadKind::I64 { atomic } => wir::LoadKind::I64 { atomic: *atomic },
+    LoadKind::F32 => wir::LoadKind::F32,
+    LoadKind::F64 => wir::LoadKind::F64,
+    LoadKind::V128 => wir::LoadKind::V128,
+    LoadKind::I32_8 { kind } => wir::LoadKind::I32_8 {
+      kind: extended_load_to_walrus(kind),
+    },
+    LoadKind::I32_16 { kind } => wir::LoadKind::I32_16 {
+      kind: extended_load_to_walrus(kind),
+    },
+    LoadKind::I64_8 { kind } => wir::LoadKind::I64_8 {
+      kind: extended_load_to_walrus(kind),
+    },
+    LoadKind::I64_16 { kind } => wir::LoadKind::I64_16 {
+      kind: extended_load_to_walrus(kind),
+    },
+    LoadKind::I64_32 { kind } => wir::LoadKind::I64_32 {
+      kind: extended_load_to_walrus(kind),
+    },
+  }
+}
+
+/// walrus `LoadKind` -> our enum. Total 1:1 mapping.
+fn load_kind_from_walrus(kind: wir::LoadKind) -> LoadKind {
+  match kind {
+    wir::LoadKind::I32 { atomic } => LoadKind::I32 { atomic },
+    wir::LoadKind::I64 { atomic } => LoadKind::I64 { atomic },
+    wir::LoadKind::F32 => LoadKind::F32,
+    wir::LoadKind::F64 => LoadKind::F64,
+    wir::LoadKind::V128 => LoadKind::V128,
+    wir::LoadKind::I32_8 { kind } => LoadKind::I32_8 {
+      kind: extended_load_from_walrus(kind),
+    },
+    wir::LoadKind::I32_16 { kind } => LoadKind::I32_16 {
+      kind: extended_load_from_walrus(kind),
+    },
+    wir::LoadKind::I64_8 { kind } => LoadKind::I64_8 {
+      kind: extended_load_from_walrus(kind),
+    },
+    wir::LoadKind::I64_16 { kind } => LoadKind::I64_16 {
+      kind: extended_load_from_walrus(kind),
+    },
+    wir::LoadKind::I64_32 { kind } => LoadKind::I64_32 {
+      kind: extended_load_from_walrus(kind),
+    },
+  }
+}
+
+/// `StoreKind` -> walrus. Total 1:1 mapping (EVERY integer variant carries
+/// `atomic`; there is no `ExtendedLoad` on a store).
+fn store_kind_to_walrus(kind: &StoreKind) -> wir::StoreKind {
+  match kind {
+    StoreKind::I32 { atomic } => wir::StoreKind::I32 { atomic: *atomic },
+    StoreKind::I64 { atomic } => wir::StoreKind::I64 { atomic: *atomic },
+    StoreKind::F32 => wir::StoreKind::F32,
+    StoreKind::F64 => wir::StoreKind::F64,
+    StoreKind::V128 => wir::StoreKind::V128,
+    StoreKind::I32_8 { atomic } => wir::StoreKind::I32_8 { atomic: *atomic },
+    StoreKind::I32_16 { atomic } => wir::StoreKind::I32_16 { atomic: *atomic },
+    StoreKind::I64_8 { atomic } => wir::StoreKind::I64_8 { atomic: *atomic },
+    StoreKind::I64_16 { atomic } => wir::StoreKind::I64_16 { atomic: *atomic },
+    StoreKind::I64_32 { atomic } => wir::StoreKind::I64_32 { atomic: *atomic },
+  }
+}
+
+/// walrus `StoreKind` -> our enum. Total 1:1 mapping.
+fn store_kind_from_walrus(kind: wir::StoreKind) -> StoreKind {
+  match kind {
+    wir::StoreKind::I32 { atomic } => StoreKind::I32 { atomic },
+    wir::StoreKind::I64 { atomic } => StoreKind::I64 { atomic },
+    wir::StoreKind::F32 => StoreKind::F32,
+    wir::StoreKind::F64 => StoreKind::F64,
+    wir::StoreKind::V128 => StoreKind::V128,
+    wir::StoreKind::I32_8 { atomic } => StoreKind::I32_8 { atomic },
+    wir::StoreKind::I32_16 { atomic } => StoreKind::I32_16 { atomic },
+    wir::StoreKind::I64_8 { atomic } => StoreKind::I64_8 { atomic },
+    wir::StoreKind::I64_16 { atomic } => StoreKind::I64_16 { atomic },
+    wir::StoreKind::I64_32 { atomic } => StoreKind::I64_32 { atomic },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -575,6 +928,12 @@ fn emit_one(
     labels,
     default_label,
     op,
+    memory,
+    src_memory,
+    data,
+    mem_arg,
+    load_kind,
+    store_kind,
   } = d;
 
   match r#type.as_str() {
@@ -714,10 +1073,67 @@ fn emit_one(
       let op = ternop_from_str(&op.ok_or_else(|| missing("TernOp", "op"))?)?;
       fb.instr_seq(seq_id).instr(wir::TernOp { op });
     }
+    "MemorySize" => {
+      let memory = memory_id_at(
+        module,
+        memory.ok_or_else(|| missing("MemorySize", "memory"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::MemorySize { memory });
+    }
+    "MemoryGrow" => {
+      let memory = memory_id_at(
+        module,
+        memory.ok_or_else(|| missing("MemoryGrow", "memory"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::MemoryGrow { memory });
+    }
+    "MemoryInit" => {
+      let memory = memory_id_at(
+        module,
+        memory.ok_or_else(|| missing("MemoryInit", "memory"))?,
+      )?;
+      let data = data_id_at(module, data.ok_or_else(|| missing("MemoryInit", "data"))?)?;
+      fb.instr_seq(seq_id).instr(wir::MemoryInit { memory, data });
+    }
+    "DataDrop" => {
+      let data = data_id_at(module, data.ok_or_else(|| missing("DataDrop", "data"))?)?;
+      fb.instr_seq(seq_id).instr(wir::DataDrop { data });
+    }
+    "MemoryCopy" => {
+      // `memory` is the DESTINATION, `srcMemory` the SOURCE (see `InstrDesc`).
+      let dst = memory_id_at(
+        module,
+        memory.ok_or_else(|| missing("MemoryCopy", "memory"))?,
+      )?;
+      let src = memory_id_at(
+        module,
+        src_memory.ok_or_else(|| missing("MemoryCopy", "srcMemory"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::MemoryCopy { src, dst });
+    }
+    "MemoryFill" => {
+      let memory = memory_id_at(
+        module,
+        memory.ok_or_else(|| missing("MemoryFill", "memory"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::MemoryFill { memory });
+    }
+    "Load" => {
+      let memory = memory_id_at(module, memory.ok_or_else(|| missing("Load", "memory"))?)?;
+      let kind = load_kind_to_walrus(&load_kind.ok_or_else(|| missing("Load", "loadKind"))?);
+      let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("Load", "memArg"))?)?;
+      fb.instr_seq(seq_id).instr(wir::Load { memory, kind, arg });
+    }
+    "Store" => {
+      let memory = memory_id_at(module, memory.ok_or_else(|| missing("Store", "memory"))?)?;
+      let kind = store_kind_to_walrus(&store_kind.ok_or_else(|| missing("Store", "storeKind"))?);
+      let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("Store", "memArg"))?)?;
+      fb.instr_seq(seq_id).instr(wir::Store { memory, kind, arg });
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
-         C1a/C1b core, control-flow, and numeric-operator subset)"
+         C1a/C1b/C2 core, control-flow, numeric-operator, and memory/load-store subset)"
       )));
     }
   }
@@ -867,10 +1283,77 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
     "TernOp" => {
       ternop_from_str(d.op.as_deref().ok_or_else(|| missing("TernOp", "op"))?)?;
     }
+    // Memory + load/store. The fallible steps mirror emit exactly: required
+    // fields present, each memory/data index resolves (the abort guards), and a
+    // `Load`/`Store`'s MemArg offset is a lossless `u64`. The kind enums carry no
+    // ids, so nothing else needs resolving.
+    "MemorySize" => {
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("MemorySize", "memory"))?,
+      )?;
+    }
+    "MemoryGrow" => {
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("MemoryGrow", "memory"))?,
+      )?;
+    }
+    "MemoryInit" => {
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("MemoryInit", "memory"))?,
+      )?;
+      data_id_at(module, d.data.ok_or_else(|| missing("MemoryInit", "data"))?)?;
+    }
+    "DataDrop" => {
+      data_id_at(module, d.data.ok_or_else(|| missing("DataDrop", "data"))?)?;
+    }
+    "MemoryCopy" => {
+      // Same fields/ordering as emit: destination (`memory`) then source
+      // (`srcMemory`).
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("MemoryCopy", "memory"))?,
+      )?;
+      memory_id_at(
+        module,
+        d.src_memory
+          .ok_or_else(|| missing("MemoryCopy", "srcMemory"))?,
+      )?;
+    }
+    "MemoryFill" => {
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("MemoryFill", "memory"))?,
+      )?;
+    }
+    "Load" => {
+      memory_id_at(module, d.memory.ok_or_else(|| missing("Load", "memory"))?)?;
+      d.load_kind
+        .as_ref()
+        .ok_or_else(|| missing("Load", "loadKind"))?;
+      mem_arg_to_walrus(
+        d.mem_arg
+          .as_ref()
+          .ok_or_else(|| missing("Load", "memArg"))?,
+      )?;
+    }
+    "Store" => {
+      memory_id_at(module, d.memory.ok_or_else(|| missing("Store", "memory"))?)?;
+      d.store_kind
+        .as_ref()
+        .ok_or_else(|| missing("Store", "storeKind"))?;
+      mem_arg_to_walrus(
+        d.mem_arg
+          .as_ref()
+          .ok_or_else(|| missing("Store", "memArg"))?,
+      )?;
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
-         C1a/C1b core, control-flow, and numeric-operator subset)"
+         C1a/C1b/C2 core, control-flow, numeric-operator, and memory/load-store subset)"
       )));
     }
   }
@@ -1061,6 +1544,53 @@ fn read_one(
       d.op = Some(ternop_to_str(&t.op)?.to_string());
       d
     }
+    wir::Instr::MemorySize(e) => {
+      let mut d = InstrDesc::new("MemorySize");
+      d.memory = Some(e.memory.index() as u32);
+      d
+    }
+    wir::Instr::MemoryGrow(e) => {
+      let mut d = InstrDesc::new("MemoryGrow");
+      d.memory = Some(e.memory.index() as u32);
+      d
+    }
+    wir::Instr::MemoryInit(e) => {
+      let mut d = InstrDesc::new("MemoryInit");
+      d.memory = Some(e.memory.index() as u32);
+      d.data = Some(e.data.index() as u32);
+      d
+    }
+    wir::Instr::DataDrop(e) => {
+      let mut d = InstrDesc::new("DataDrop");
+      d.data = Some(e.data.index() as u32);
+      d
+    }
+    wir::Instr::MemoryCopy(e) => {
+      // `memory` carries the DESTINATION, `srcMemory` the SOURCE (see `emit_one`).
+      let mut d = InstrDesc::new("MemoryCopy");
+      d.memory = Some(e.dst.index() as u32);
+      d.src_memory = Some(e.src.index() as u32);
+      d
+    }
+    wir::Instr::MemoryFill(e) => {
+      let mut d = InstrDesc::new("MemoryFill");
+      d.memory = Some(e.memory.index() as u32);
+      d
+    }
+    wir::Instr::Load(e) => {
+      let mut d = InstrDesc::new("Load");
+      d.memory = Some(e.memory.index() as u32);
+      d.load_kind = Some(load_kind_from_walrus(e.kind));
+      d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
+      d
+    }
+    wir::Instr::Store(e) => {
+      let mut d = InstrDesc::new("Store");
+      d.memory = Some(e.memory.index() as u32);
+      d.store_kind = Some(store_kind_from_walrus(e.kind));
+      d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
+      d
+    }
     other => {
       // MIRROR-WALRUS: never panic on an out-of-subset variant — surface a
       // catchable error naming it. Later C-tasks replace these arms with real
@@ -1068,8 +1598,8 @@ fn read_one(
       let dbg = format!("{other:?}");
       let name = dbg.split(['(', ' ', '{']).next().unwrap_or("unknown");
       return Err(Error::from_reason(format!(
-        "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b core, \
-         control-flow, and numeric-operator subset is)"
+        "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2 core, \
+         control-flow, numeric-operator, and memory/load-store subset is)"
       )));
     }
   })

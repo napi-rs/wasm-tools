@@ -1817,6 +1817,26 @@ export declare const enum ExportItemTag {
 }
 
 /**
+ * The sign/zero-extension behavior of a narrowing load, mirroring
+ * `walrus::ir::ExtendedLoad` (`ir/mod.rs:1562`). Carried in the `kind` field of
+ * the narrow [`LoadKind`] variants (`I32_8`/`I32_16`/`I64_8`/`I64_16`/`I64_32`).
+ *
+ * Generated as a string enum: `'SignExtend' | 'ZeroExtend' | 'ZeroExtendAtomic'`.
+ *
+ * `SignExtend`/`ZeroExtend` are the ordinary narrow loads (`i32.load8_s` /
+ * `i32.load8_u`); `ZeroExtendAtomic` is the atomic narrow load
+ * (`i32.atomic.load8_u`, which is always zero-extending).
+ */
+export declare const enum ExtendedLoad {
+  /** Sign-extend the narrow value to the full result width. */
+  SignExtend = 'SignExtend',
+  /** Zero-extend the narrow value to the full result width. */
+  ZeroExtend = 'ZeroExtend',
+  /** Zero-extend an atomic narrow load to the full result width. */
+  ZeroExtendAtomic = 'ZeroExtendAtomic'
+}
+
+/**
  * A field type for GC struct and array fields, mirroring `walrus::FieldType`.
  *
  * Combines a [`StorageType`] with a mutability flag. Generated as a TypeScript
@@ -1913,13 +1933,14 @@ export declare const enum ImportKindTag {
  * `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
  * `if`/`else`), making the interface self-referential.
  *
- * This is the C1a/C1b subset: leaf ops (`Unreachable`/`Return`/`Drop`),
+ * This is the C1a/C1b/C2 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
  * `Const`, local/global get/set/tee, `Call`, `Select`, the control constructs
- * (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), and the
+ * (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), the
  * numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
- * `op`). Any other instruction is rejected catchably by both directions (later
- * tasks add memory, tables, refs, atomics, the lane-carrying SIMD ops, GC, and
- * EH).
+ * `op`), and the memory + general load/store instructions (`MemorySize`/
+ * `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`).
+ * Any other instruction is rejected catchably by both directions (later tasks
+ * add tables, refs, atomics, the lane-carrying SIMD ops, GC, and EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -1961,6 +1982,93 @@ export interface InstrDesc {
    * operator enums decodes it, so one shared field is unambiguous.
    */
   op?: string
+  /**
+   * The referenced memory's stable index, for
+   * `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`, and the
+   * DESTINATION memory of `MemoryCopy`.
+   */
+  memory?: number
+  /**
+   * `MemoryCopy`: the SOURCE memory's stable index (the destination uses
+   * `memory`).
+   */
+  srcMemory?: number
+  /** `MemoryInit`/`DataDrop`: the referenced data segment's stable index. */
+  data?: number
+  /** `Load`/`Store`: the alignment and offset immediate. */
+  memArg?: MemArg
+  /** `Load`: the kind of load (width, atomicity, extension). */
+  loadKind?: LoadKind
+  /** `Store`: the kind of store (width, atomicity). */
+  storeKind?: StoreKind
+}
+
+/**
+ * The kind of a `Load` instruction, mirroring `walrus::ir::LoadKind`
+ * (`ir/mod.rs:1514`).
+ *
+ * Generated as a TypeScript discriminated union keyed on `type`:
+ * `{ type: 'I32', atomic: boolean } | { type: 'I64', atomic: boolean }`
+ * `| { type: 'F32' } | { type: 'F64' } | { type: 'V128' }`
+ * `| { type: 'I32_8', kind: ExtendedLoad } | { type: 'I32_16', kind: ExtendedLoad }`
+ * `| { type: 'I64_8', kind: ExtendedLoad } | { type: 'I64_16', kind: ExtendedLoad }`
+ * `| { type: 'I64_32', kind: ExtendedLoad }`.
+ *
+ * The full-width `I32`/`I64` carry an `atomic` flag (`i32.atomic.load` is a
+ * plain `Load` with `atomic: true`); the narrow variants carry an
+ * [`ExtendedLoad`] describing sign/zero/atomic extension (this is the ASYMMETRY
+ * with [`StoreKind`], whose narrow variants carry `atomic: bool` instead).
+ * `V128` is the plain `v128.load` (the lane/splat SIMD loads are the separate,
+ * deferred `LoadSimd` instruction).
+ */
+export type LoadKind =
+  | { type: 'I32', /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64', /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'F32' }
+| { type: 'F64' }
+| { type: 'V128' }
+| { type: 'I32_8', /** The extension behavior. */
+kind: ExtendedLoad }
+| { type: 'I32_16', /** The extension behavior. */
+kind: ExtendedLoad }
+| { type: 'I64_8', /** The extension behavior. */
+kind: ExtendedLoad }
+| { type: 'I64_16', /** The extension behavior. */
+kind: ExtendedLoad }
+| { type: 'I64_32', /** The extension behavior. */
+kind: ExtendedLoad }
+
+/**
+ * The alignment and offset immediate of a `Load`/`Store`, mirroring
+ * `walrus::ir::MemArg` (`ir/mod.rs:1655`).
+ *
+ * Generated as a `#[napi(object)]`: `{ align: number, offset: bigint }`.
+ *
+ * `align` is the RAW alignment in bytes (a power of two per wasm, e.g. `4` for
+ * a natural `i32.load`), NOT the log2 exponent the binary format encodes —
+ * walrus converts between the two on parse (`1 << exp`) and emit (counting the
+ * trailing shift), so this stores the same power-of-two value both directions.
+ * `offset` is the constant byte offset from the dynamic address; it is a wasm
+ * `u64` (memory64 uses the full range), so it crosses the boundary as a JS
+ * `bigint` for exactness and is rejected on build if negative or not lossless.
+ *
+ * MIRROR-WALRUS: neither field is validated for wasm well-formedness — `align`
+ * is NOT checked to be a power of two and `offset` is NOT range-checked against
+ * the memory; both are stored verbatim.
+ */
+export interface MemArg {
+  /**
+   * The raw alignment in bytes (a power of two per wasm; stored verbatim, not
+   * validated).
+   */
+  align: number
+  /**
+   * The constant byte offset of the access (a JS `bigint`, for exact `u64`
+   * range).
+   */
+  offset: bigint
 }
 
 /**
@@ -2000,6 +2108,42 @@ export type StorageType =
   | { type: 'I8' }
   | { type: 'I16' }
   | { type: 'Val', value: ValType }
+
+/**
+ * The kind of a `Store` instruction, mirroring `walrus::ir::StoreKind`
+ * (`ir/mod.rs:1609`).
+ *
+ * Generated as a TypeScript discriminated union keyed on `type`:
+ * `{ type: 'I32', atomic: boolean } | { type: 'I64', atomic: boolean }`
+ * `| { type: 'F32' } | { type: 'F64' } | { type: 'V128' }`
+ * `| { type: 'I32_8', atomic: boolean } | { type: 'I32_16', atomic: boolean }`
+ * `| { type: 'I64_8', atomic: boolean } | { type: 'I64_16', atomic: boolean }`
+ * `| { type: 'I64_32', atomic: boolean }`.
+ *
+ * Note the ASYMMETRY with [`LoadKind`]: EVERY integer store variant (full-width
+ * AND narrow) carries an `atomic: bool`, because a store has no sign/zero
+ * extension to describe — so there is no `ExtendedLoad` here. `V128` is the
+ * plain `v128.store` (the lane SIMD stores are the separate, deferred
+ * `LoadSimd` instruction).
+ */
+export type StoreKind =
+  | { type: 'I32', /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64', /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'F32' }
+| { type: 'F64' }
+| { type: 'V128' }
+| { type: 'I32_8', /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I32_16', /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64_8', /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64_16', /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64_32', /** Whether this is the atomic form. */
+atomic: boolean }
 
 /**
  * Whether a tag is imported or locally defined.

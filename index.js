@@ -609,6 +609,7 @@ module.exports.DataKindTag = nativeBinding.DataKindTag
 module.exports.ElementItemsTag = nativeBinding.ElementItemsTag
 module.exports.ElementKindTag = nativeBinding.ElementKindTag
 module.exports.ExportItemTag = nativeBinding.ExportItemTag
+module.exports.ExtendedLoad = nativeBinding.ExtendedLoad
 module.exports.FunctionKindTag = nativeBinding.FunctionKindTag
 module.exports.GlobalKind = nativeBinding.GlobalKind
 module.exports.ImportKindTag = nativeBinding.ImportKindTag
