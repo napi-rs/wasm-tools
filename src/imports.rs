@@ -1,5 +1,5 @@
-use napi::bindgen_prelude::{Reference, Result};
-use napi::Env;
+use napi::bindgen_prelude::{BigInt, Reference, Result};
+use napi::{Env, Error};
 use napi_derive::napi;
 use walrus::{ImportId, ImportKind};
 
@@ -8,6 +8,8 @@ use crate::globals::WasmGlobal;
 use crate::memories::WasmMemory;
 use crate::tables::WasmTable;
 use crate::tags::WasmTag;
+use crate::types::WasmType;
+use crate::valtype::ValType;
 use crate::WasmModule;
 
 /// The kind of item an import brings into a module.
@@ -35,7 +37,10 @@ pub enum ImportKindTag {
 /// handle that reads and writes straight through to the owning [`WasmModule`];
 /// the collection itself caches nothing.
 ///
-/// Import *creation* (`add_import_*`) is intentionally not exposed here.
+/// Import *creation* is exposed via the typed `add*` methods, symmetric with the
+/// typed adds on [`crate::exports::WasmExports`]. Each creates the imported item
+/// plus its import record in one call and returns the ITEM handle (the
+/// [`WasmImport`] itself is reachable via `item.import()`).
 #[napi]
 pub struct WasmImports {
   pub(crate) module: Reference<WasmModule>,
@@ -128,6 +133,202 @@ impl WasmImports {
     } else {
       Err(crate::handle::deleted("import"))
     }
+  }
+
+  #[napi]
+  /// Add an imported function under `moduleName`/`name`, returning a live handle
+  /// to the newly created (imported) function. The import record itself is
+  /// reachable via the returned handle's `import()`.
+  ///
+  /// `ty` is a CONSUME site for an arena id: walrus stores the raw `TypeId` and
+  /// resolves it to an index at emit via a panicking `get_type_index`; a
+  /// foreign-module or already-deleted type handle would abort the whole Node
+  /// process there. We reject such an id with a catchable error BEFORE touching
+  /// the arena, so a failed add never mutates the module. Same id-ref rule as
+  /// `tags.add` / the typed adds on `WasmExports`.
+  pub fn add_function(
+    &mut self,
+    env: Env,
+    module_name: String,
+    name: String,
+    ty: &WasmType,
+  ) -> Result<WasmFunction> {
+    if !self.module.inner.types.iter().any(|t| t.id() == ty.id) {
+      return Err(Error::from_reason(
+        "type is not in this module (or was deleted)",
+      ));
+    }
+    let (id, _import) = self
+      .module
+      .inner
+      .add_import_func(&module_name, &name, ty.id);
+    Ok(WasmFunction {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
+
+  #[napi]
+  #[allow(clippy::too_many_arguments)]
+  /// Add an imported memory under `moduleName`/`name`, returning a live handle to
+  /// the newly created (imported) memory.
+  ///
+  /// `initial`/`maximum` are page counts (`bigint`, so 64-bit `memory64`
+  /// memories are representable losslessly); `maximum` is `null` for an
+  /// unbounded memory. `pageSizeLog2` is the custom-page-sizes proposal's log2
+  /// page size, or `null` for the default 64 KiB pages.
+  ///
+  /// MIRROR-WALRUS: the sizes are stored verbatim — no `initial <= maximum`
+  /// check (`WebAssembly.validate` is the user's tool). A negative or
+  /// out-of-`u64`-range size is still rejected (via `bigint_to_u64`), because
+  /// that is silent data corruption rather than a semantic-validity question.
+  pub fn add_memory(
+    &mut self,
+    env: Env,
+    module_name: String,
+    name: String,
+    shared: bool,
+    memory64: bool,
+    initial: BigInt,
+    maximum: Option<BigInt>,
+    page_size_log2: Option<u32>,
+  ) -> Result<WasmMemory> {
+    let initial = crate::handle::bigint_to_u64(initial, "initial")?;
+    let maximum = maximum
+      .map(|m| crate::handle::bigint_to_u64(m, "maximum"))
+      .transpose()?;
+    let (id, _import) = self.module.inner.add_import_memory(
+      &module_name,
+      &name,
+      shared,
+      memory64,
+      initial,
+      maximum,
+      page_size_log2,
+    );
+    Ok(WasmMemory {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
+
+  #[napi]
+  #[allow(clippy::too_many_arguments)]
+  /// Add an imported table under `moduleName`/`name`, returning a live handle to
+  /// the newly created (imported) table.
+  ///
+  /// `initial`/`maximum` are entry counts (`bigint`, so 64-bit `table64` tables
+  /// are representable losslessly); `maximum` is `null` for an unbounded table.
+  /// `elementType` must be a reference type (e.g. a `funcref`/`externref`
+  /// `{ type: 'Ref', ... }`); a non-reference type — or a concrete/indexed ref
+  /// type, which embeds a `TypeId` not yet threadable (deferred to the GC-types
+  /// task) — is rejected with a catchable error.
+  ///
+  /// Unlike `tables.addLocal`, a NON-NULLABLE element type is accepted: an
+  /// imported table carries no init segment (the host supplies the table), so a
+  /// non-nullable imported table is valid.
+  ///
+  /// MIRROR-WALRUS: the sizes are stored verbatim (no `initial <= maximum`
+  /// check); an out-of-`u64`-range size is still rejected (silent corruption).
+  pub fn add_table(
+    &mut self,
+    env: Env,
+    module_name: String,
+    name: String,
+    table64: bool,
+    initial: BigInt,
+    maximum: Option<BigInt>,
+    element_type: ValType,
+  ) -> Result<WasmTable> {
+    // Reject a non-reference / concrete-ref element type BEFORE touching the
+    // arena, so a failed add never mutates the module. The `try_into` rejects a
+    // concrete/indexed ref (embeds a not-yet-threadable `TypeId`); the match
+    // rejects a non-reference value type.
+    let wty: walrus::ValType = element_type.try_into()?;
+    let element_type = match wty {
+      walrus::ValType::Ref(rt) => rt,
+      _ => {
+        return Err(Error::from_reason(
+          "table element type must be a reference type",
+        ))
+      }
+    };
+    let initial = crate::handle::bigint_to_u64(initial, "initial")?;
+    let maximum = maximum
+      .map(|m| crate::handle::bigint_to_u64(m, "maximum"))
+      .transpose()?;
+    let (id, _import) = self.module.inner.add_import_table(
+      &module_name,
+      &name,
+      table64,
+      initial,
+      maximum,
+      element_type,
+    );
+    Ok(WasmTable {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
+
+  #[napi]
+  /// Add an imported global under `moduleName`/`name`, returning a live handle to
+  /// the newly created (imported) global.
+  ///
+  /// `ty` is the global's value type (e.g. `{ type: 'I32' }` or a `Ref`).
+  /// Fallible: a concrete/indexed ref type — which needs a type handle we do not
+  /// yet thread through — is rejected with a catchable error rather than
+  /// aborting. MIRROR-WALRUS otherwise.
+  pub fn add_global(
+    &mut self,
+    env: Env,
+    module_name: String,
+    name: String,
+    ty: ValType,
+    mutable: bool,
+    shared: bool,
+  ) -> Result<WasmGlobal> {
+    // Reject an unsupported value type BEFORE touching the arena, so a failed
+    // add never mutates the module.
+    let wty: walrus::ValType = ty.try_into()?;
+    let (id, _import) =
+      self
+        .module
+        .inner
+        .add_import_global(&module_name, &name, wty, mutable, shared);
+    Ok(WasmGlobal {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
+
+  #[napi]
+  /// Add an imported tag under `moduleName`/`name`, returning a live handle to
+  /// the newly created (imported) tag. `ty` is the tag's (function) type
+  /// signature — for an exception tag its params are the exception's payload
+  /// value types.
+  ///
+  /// Same id-ref rule as [`WasmImports::add_function`]: `ty` must be a live type
+  /// in THIS module, or the stored `TypeId` would abort emit via a panicking
+  /// `get_type_index`. We reject a foreign/deleted type with a catchable error
+  /// BEFORE touching the arena.
+  pub fn add_tag(
+    &mut self,
+    env: Env,
+    module_name: String,
+    name: String,
+    ty: &WasmType,
+  ) -> Result<WasmTag> {
+    if !self.module.inner.types.iter().any(|t| t.id() == ty.id) {
+      return Err(Error::from_reason(
+        "type is not in this module (or was deleted)",
+      ));
+    }
+    let (id, _import) = self.module.inner.add_import_tag(&module_name, &name, ty.id);
+    Ok(WasmTag {
+      id,
+      module: self.module.clone(env)?,
+    })
   }
 }
 

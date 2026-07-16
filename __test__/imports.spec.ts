@@ -31,6 +31,17 @@ const LINKS_FIXTURE = join(__dirname, 'fixtures', 'import-links.wasm')
 const linksBytes = readFileSync(LINKS_FIXTURE)
 const loadLinks = () => WasmModule.fromBuffer(linksBytes)
 
+// A memory-free base (see fixtures/tables.wat: two tables, no memory) used by
+// the add-import-memory tests, so a freshly added imported memory yields a
+// module with exactly one memory (unambiguously valid on re-parse).
+const TABLES_FIXTURE = join(__dirname, 'fixtures', 'tables.wasm')
+const tablesBytes = readFileSync(TABLES_FIXTURE)
+const loadNoMemory = () => WasmModule.fromBuffer(tablesBytes)
+
+const FUNCREF = { type: 'Ref', nullable: true, heap: { type: 'Abstract', kind: 'Func' } } as const
+const NON_NULLABLE_FUNCREF = { type: 'Ref', nullable: false, heap: { type: 'Abstract', kind: 'Func' } } as const
+const CONCRETE_REF = { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: 0 } } as const
+
 test('imports collection reports length and materializes item handles', (t) => {
   const m = load()
   t.is(m.imports.length, 2)
@@ -225,4 +236,245 @@ test('reverse cross-link delete-guard: import() on a deleted item throws instead
   m.globals.delete(g)
   const errG = t.throws(() => g.import())
   t.regex(errG!.message, /deleted/)
+})
+
+// ---------------------------------------------------------------------------
+// Import CREATION (add_import_* on WasmImports) — task B4b.
+// ---------------------------------------------------------------------------
+
+test('addFunction creates an imported function whose import round-trips', (t) => {
+  const m = load()
+  const beforeImports = m.imports.length
+  const beforeFuncs = m.functions.length
+
+  // A distinctive signature so it is findable after re-parse.
+  const ty = m.types.add([{ type: 'F64' }], [{ type: 'F64' }])
+  const fn = m.imports.addFunction('env', 'fi', ty)
+
+  // The returned handle is the ITEM; its import record is reachable via import().
+  t.is(fn.kind, 'Import')
+  const imp = fn.import()
+  t.truthy(imp)
+  t.is(imp!.module, 'env')
+  t.is(imp!.name, 'fi')
+  t.is(imp!.kind, 'Function')
+  t.is(m.imports.length, beforeImports + 1)
+  t.is(m.functions.length, beforeFuncs + 1)
+  t.deepEqual(fn.ty().params(), [{ type: 'F64' }])
+  t.deepEqual(fn.ty().results(), [{ type: 'F64' }])
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const found = reparsed.imports.find('env', 'fi')
+  t.truthy(found)
+  t.is(found!.kind, 'Function')
+  const rfn = found!.func()!
+  t.deepEqual(rfn.ty().params(), [{ type: 'F64' }])
+  t.deepEqual(rfn.ty().results(), [{ type: 'F64' }])
+})
+
+test('addMemory creates an imported memory whose initial/maximum/shared round-trip', (t) => {
+  const m = loadNoMemory()
+  t.is(m.memories.length, 0)
+
+  const mem = m.imports.addMemory('env', 'm', false, false, 2n, 5n, null)
+  t.is(m.memories.length, 1)
+  t.is(mem.initial, 2n)
+  t.is(mem.maximum, 5n)
+  t.is(mem.shared, false)
+  t.is(mem.memory64, false)
+
+  const imp = mem.import()
+  t.truthy(imp)
+  t.is(imp!.module, 'env')
+  t.is(imp!.name, 'm')
+  t.is(imp!.kind, 'Memory')
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const found = reparsed.imports.find('env', 'm')!
+  t.is(found.kind, 'Memory')
+  const rmem = found.memory()!
+  t.is(rmem.initial, 2n)
+  t.is(rmem.maximum, 5n)
+  t.is(rmem.shared, false)
+
+  // The `shared` flag is wired through (asserted in-memory; a shared+re-parse
+  // would additionally depend on the threads feature, out of scope here).
+  const m2 = loadNoMemory()
+  const sharedMem = m2.imports.addMemory('env', 's', true, false, 1n, 2n, null)
+  t.is(sharedMem.shared, true)
+})
+
+test('addTable creates an imported table whose element type and limits round-trip', (t) => {
+  const m = load()
+  const before = m.tables.length
+
+  const tbl = m.imports.addTable('env', 't', false, 1n, 4n, FUNCREF)
+  t.is(m.tables.length, before + 1)
+  t.is(tbl.initial, 1n)
+  t.is(tbl.maximum, 4n)
+  t.is(tbl.table64, false)
+  t.deepEqual(tbl.elementTy, FUNCREF)
+
+  const imp = tbl.import()
+  t.truthy(imp)
+  t.is(imp!.module, 'env')
+  t.is(imp!.name, 't')
+  t.is(imp!.kind, 'Table')
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const found = reparsed.imports.find('env', 't')!
+  t.is(found.kind, 'Table')
+  const rtbl = found.table()!
+  t.deepEqual(rtbl.elementTy, FUNCREF)
+  t.is(rtbl.initial, 1n)
+  t.is(rtbl.maximum, 4n)
+})
+
+test('addGlobal creates an imported global whose type and mutability round-trip', (t) => {
+  const m = load()
+  const before = m.globals.length
+
+  const g = m.imports.addGlobal('env', 'gi', { type: 'I64' }, true, false)
+  t.is(m.globals.length, before + 1)
+  t.is(g.kind, 'Import')
+  t.deepEqual(g.ty, { type: 'I64' })
+  t.is(g.mutable, true)
+
+  const imp = g.import()
+  t.truthy(imp)
+  t.is(imp!.module, 'env')
+  t.is(imp!.name, 'gi')
+  t.is(imp!.kind, 'Global')
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const found = reparsed.imports.find('env', 'gi')!
+  t.is(found.kind, 'Global')
+  const rg = found.global()!
+  t.deepEqual(rg.ty, { type: 'I64' })
+  t.is(rg.mutable, true)
+})
+
+test('addTag creates an imported tag whose type round-trips', (t) => {
+  const m = load()
+  const before = m.tags.length
+
+  const ty = m.types.add([{ type: 'I32' }], [])
+  const tag = m.imports.addTag('env', 'ti', ty)
+  t.is(m.tags.length, before + 1)
+  t.is(tag.kind, 'Import')
+  t.deepEqual(tag.ty().params(), [{ type: 'I32' }])
+
+  const imp = tag.import()
+  t.truthy(imp)
+  t.is(imp!.module, 'env')
+  t.is(imp!.name, 'ti')
+  t.is(imp!.kind, 'Tag')
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const found = reparsed.imports.find('env', 'ti')!
+  t.is(found.kind, 'Tag')
+  t.deepEqual(found.tag()!.ty().params(), [{ type: 'I32' }])
+})
+
+test('id-ref guard: addFunction rejects a type from a different module instead of aborting', (t) => {
+  const a = load()
+  const b = load()
+
+  // A WasmType minted from module B carries B's arena_id; walrus would resolve
+  // it via a panicking get_type_index at A's emit and abort the whole process.
+  // The id-ref guard rejects it with a catchable JS error first.
+  const foreignType = b.types.add([{ type: 'F64' }], [])
+  const err = t.throws(() => a.imports.addFunction('env', 'f', foreignType))
+  t.regex(err!.message, /not in this module/)
+
+  // The rejected add did not mutate A, and the process is still alive.
+  t.is(a.imports.length, 2)
+})
+
+test('id-ref guard: addTag rejects a type from a different module instead of aborting', (t) => {
+  const a = load()
+  const b = load()
+
+  const foreignType = b.types.add([{ type: 'I32' }], [])
+  const err = t.throws(() => a.imports.addTag('env', 't', foreignType))
+  t.regex(err!.message, /not in this module/)
+  t.is(a.imports.length, 2)
+})
+
+test('id-ref guard: addFunction rejects a deleted type from the same module', (t) => {
+  const m = load()
+  const ty = m.types.add([{ type: 'F32' }], [])
+  m.types.delete(ty)
+
+  const err = t.throws(() => m.imports.addFunction('env', 'f', ty))
+  t.regex(err!.message, /not in this module|deleted/)
+  t.is(m.imports.length, 2)
+})
+
+test('bigint corruption guard: addMemory rejects a negative initial size', (t) => {
+  const m = loadNoMemory()
+  const err = t.throws(() => m.imports.addMemory('env', 'm', false, false, -1n, null, null))
+  t.regex(err!.message, /non-negative/)
+  // The rejected add never mutated the module.
+  t.is(m.memories.length, 0)
+})
+
+test('bigint corruption guard: addMemory rejects an out-of-range (u64 overflow) initial size', (t) => {
+  const m = loadNoMemory()
+  const err = t.throws(() => m.imports.addMemory('env', 'm', false, false, 2n ** 64n, null, null))
+  t.regex(err!.message, /non-negative/)
+  t.is(m.memories.length, 0)
+})
+
+test('element-type guard: addTable rejects a non-reference element type', (t) => {
+  const m = load()
+  const before = m.tables.length
+  const err = t.throws(() => m.imports.addTable('env', 't', false, 1n, null, { type: 'I32' }))
+  t.regex(err!.message, /reference type/i)
+  t.is(m.tables.length, before)
+})
+
+test('element-type guard: addTable rejects a concrete/indexed ref type (deferred to GC types)', (t) => {
+  const m = load()
+  const before = m.tables.length
+  const err = t.throws(() => m.imports.addTable('env', 't', false, 1n, null, CONCRETE_REF))
+  t.regex(err!.message, /concrete|type handle/i)
+  t.is(m.tables.length, before)
+})
+
+test('element-type guard: addTable accepts BOTH a nullable and a non-nullable funcref (imported table, no init)', (t) => {
+  // A nullable funcref imported table is MVP-valid and validates.
+  const m1 = load()
+  const nullable = m1.imports.addTable('env', 'tn', false, 1n, null, FUNCREF)
+  t.deepEqual(nullable.elementTy, FUNCREF)
+  t.true(WebAssembly.validate(m1.emitWasm(false)))
+
+  // Unlike tables.addLocal, a NON-nullable element type is ALSO accepted here:
+  // an imported table has no init segment, so a non-nullable element is valid.
+  // (Validated via walrus re-parse, which enables the function-references
+  // feature; Node's WebAssembly.validate may gate non-nullable refs.)
+  const m2 = load()
+  const nonNullable = m2.imports.addTable('env', 'tnn', false, 1n, null, NON_NULLABLE_FUNCREF)
+  t.deepEqual(nonNullable.elementTy, NON_NULLABLE_FUNCREF)
+  const reparsed = WasmModule.fromBuffer(m2.emitWasm(false))
+  t.deepEqual(reparsed.imports.find('env', 'tnn')!.table()!.elementTy, NON_NULLABLE_FUNCREF)
+})
+
+test('mirror-walrus: addMemory stores min>max verbatim (no semantic check); WebAssembly.validate flags it', (t) => {
+  const m = loadNoMemory()
+
+  // min > max is wasm-invalid, but mirror-walrus stores it verbatim rather than
+  // second-guessing the caller — WebAssembly.validate is the user's tool. The
+  // add must NOT throw and the values must be stored exactly as given.
+  const mem = m.imports.addMemory('env', 'm', false, false, 5n, 1n, null)
+  t.is(m.memories.length, 1)
+  t.is(mem.initial, 5n)
+  t.is(mem.maximum, 1n)
+
+  // Emit still succeeds (walrus does not validate on emit), producing bytes...
+  const bytes = m.emitWasm(false)
+  // ...that WebAssembly.validate correctly rejects (the user's tool catches the
+  // semantic error we intentionally did not). A walrus re-parse would also
+  // reject it (from_buffer validates), which is exactly the point.
+  t.false(WebAssembly.validate(bytes))
 })

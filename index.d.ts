@@ -730,7 +730,10 @@ export declare class WasmImport {
  * handle that reads and writes straight through to the owning [`WasmModule`];
  * the collection itself caches nothing.
  *
- * Import *creation* (`add_import_*`) is intentionally not exposed here.
+ * Import *creation* is exposed via the typed `add*` methods, symmetric with the
+ * typed adds on [`crate::exports::WasmExports`]. Each creates the imported item
+ * plus its import record in one call and returns the ITEM handle (the
+ * [`WasmImport`] itself is reachable via `item.import()`).
  */
 export declare class WasmImports {
   /** The number of imports in the module. */
@@ -763,6 +766,75 @@ export declare class WasmImports {
    * process across FFI.
    */
   delete(handle: WasmImport): void
+  /**
+   * Add an imported function under `moduleName`/`name`, returning a live handle
+   * to the newly created (imported) function. The import record itself is
+   * reachable via the returned handle's `import()`.
+   *
+   * `ty` is a CONSUME site for an arena id: walrus stores the raw `TypeId` and
+   * resolves it to an index at emit via a panicking `get_type_index`; a
+   * foreign-module or already-deleted type handle would abort the whole Node
+   * process there. We reject such an id with a catchable error BEFORE touching
+   * the arena, so a failed add never mutates the module. Same id-ref rule as
+   * `tags.add` / the typed adds on `WasmExports`.
+   */
+  addFunction(moduleName: string, name: string, ty: WasmType): WasmFunction
+  /**
+   * Add an imported memory under `moduleName`/`name`, returning a live handle to
+   * the newly created (imported) memory.
+   *
+   * `initial`/`maximum` are page counts (`bigint`, so 64-bit `memory64`
+   * memories are representable losslessly); `maximum` is `null` for an
+   * unbounded memory. `pageSizeLog2` is the custom-page-sizes proposal's log2
+   * page size, or `null` for the default 64 KiB pages.
+   *
+   * MIRROR-WALRUS: the sizes are stored verbatim — no `initial <= maximum`
+   * check (`WebAssembly.validate` is the user's tool). A negative or
+   * out-of-`u64`-range size is still rejected (via `bigint_to_u64`), because
+   * that is silent data corruption rather than a semantic-validity question.
+   */
+  addMemory(moduleName: string, name: string, shared: boolean, memory64: boolean, initial: bigint, maximum?: bigint | undefined | null, pageSizeLog2?: number | undefined | null): WasmMemory
+  /**
+   * Add an imported table under `moduleName`/`name`, returning a live handle to
+   * the newly created (imported) table.
+   *
+   * `initial`/`maximum` are entry counts (`bigint`, so 64-bit `table64` tables
+   * are representable losslessly); `maximum` is `null` for an unbounded table.
+   * `elementType` must be a reference type (e.g. a `funcref`/`externref`
+   * `{ type: 'Ref', ... }`); a non-reference type — or a concrete/indexed ref
+   * type, which embeds a `TypeId` not yet threadable (deferred to the GC-types
+   * task) — is rejected with a catchable error.
+   *
+   * Unlike `tables.addLocal`, a NON-NULLABLE element type is accepted: an
+   * imported table carries no init segment (the host supplies the table), so a
+   * non-nullable imported table is valid.
+   *
+   * MIRROR-WALRUS: the sizes are stored verbatim (no `initial <= maximum`
+   * check); an out-of-`u64`-range size is still rejected (silent corruption).
+   */
+  addTable(moduleName: string, name: string, table64: boolean, initial: bigint, maximum: bigint | undefined | null, elementType: ValType): WasmTable
+  /**
+   * Add an imported global under `moduleName`/`name`, returning a live handle to
+   * the newly created (imported) global.
+   *
+   * `ty` is the global's value type (e.g. `{ type: 'I32' }` or a `Ref`).
+   * Fallible: a concrete/indexed ref type — which needs a type handle we do not
+   * yet thread through — is rejected with a catchable error rather than
+   * aborting. MIRROR-WALRUS otherwise.
+   */
+  addGlobal(moduleName: string, name: string, ty: ValType, mutable: boolean, shared: boolean): WasmGlobal
+  /**
+   * Add an imported tag under `moduleName`/`name`, returning a live handle to
+   * the newly created (imported) tag. `ty` is the tag's (function) type
+   * signature — for an exception tag its params are the exception's payload
+   * value types.
+   *
+   * Same id-ref rule as [`WasmImports::add_function`]: `ty` must be a live type
+   * in THIS module, or the stored `TypeId` would abort emit via a panicking
+   * `get_type_index`. We reject a foreign/deleted type with a catchable error
+   * BEFORE touching the arena.
+   */
+  addTag(moduleName: string, name: string, ty: WasmType): WasmTag
 }
 
 /**
