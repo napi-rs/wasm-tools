@@ -1913,11 +1913,13 @@ export declare const enum ImportKindTag {
  * `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
  * `if`/`else`), making the interface self-referential.
  *
- * This is the C1a subset: leaf ops (`Unreachable`/`Return`/`Drop`), `Const`,
- * local/global get/set/tee, `Call`, `Select`, the control constructs
- * (`Block`/`Loop`/`IfElse`), and the branches (`Br`/`BrIf`/`BrTable`). Any
- * other instruction is rejected catchably by both directions (later tasks add
- * numeric ops, memory, tables, refs, atomics, SIMD, GC, and EH).
+ * This is the C1a/C1b subset: leaf ops (`Unreachable`/`Return`/`Drop`),
+ * `Const`, local/global get/set/tee, `Call`, `Select`, the control constructs
+ * (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), and the
+ * numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
+ * `op`). Any other instruction is rejected catchably by both directions (later
+ * tasks add memory, tables, refs, atomics, the lane-carrying SIMD ops, GC, and
+ * EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -1952,6 +1954,13 @@ export interface InstrDesc {
   labels?: Array<number>
   /** `BrTable`: the relative label depth of the default (fallthrough) target. */
   defaultLabel?: number
+  /**
+   * `Binop`/`Unop`/`TernOp`: the operator name (the walrus
+   * `BinaryOp`/`UnaryOp`/`TernaryOp` variant name, e.g. `"I32Add"`, `"I32Eqz"`,
+   * `"F32x4RelaxedMadd"`). The `type` discriminant selects which of the three
+   * operator enums decodes it, so one shared field is unambiguous.
+   */
+  op?: string
 }
 
 /**

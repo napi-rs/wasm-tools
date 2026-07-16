@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 import test from 'ava'
 
-import { ConstExpr, WasmModule, type InstrDesc, type ValType } from '../index'
+import { ConstExpr, ModuleConfig, WasmModule, type InstrDesc, type ValType } from '../index'
 
 const __dirname = join(fileURLToPath(import.meta.url), '..')
 
@@ -527,4 +527,196 @@ test('C1a-fix2 (round-trip): a body nested at exactly the cap builds → emits �
   t.true(WebAssembly.validate(bytes))
   const read = WasmModule.fromBuffer(bytes).functions.byName('deep')!.instructions()
   t.deepEqual(read, body)
+})
+
+// ---------------------------------------------------------------------------
+// C1b: numeric/comparison/conversion operators (Binop / Unop / TernOp).
+//
+// The three walrus operator enums have 352 FIELDLESS variants in scope
+// (BinaryOp 214 + UnaryOp 129 + TernaryOp 9); the 14 lane-carrying SIMD variants
+// (`*ReplaceLane` / `*ExtractLane*`) are DEFERRED to the SIMD task (C6).
+//
+// IMPORTANT walrus fact (verified on disk): walrus 0.26.4 ALWAYS type-checks a
+// function body on parse — `strict_validate(false)` is a no-op in this version
+// (the `skip_strict_validate` flag is set but never read; the wasmparser
+// `FuncValidator::op` runs unconditionally). So an ill-typed body of BARE ops
+// (no operands) can never re-parse. The exhaustive round-trip therefore uses the
+// IN-MEMORY read path (`buildFunction` -> `instructions()` on the same module),
+// which never invokes the parser/validator; a separate WELL-TYPED body proves the
+// emit -> bytes -> re-parse path decodes real operator opcodes.
+// ---------------------------------------------------------------------------
+
+const FIELDLESS_OPS = JSON.parse(readFileSync(join(__dirname, 'fieldless-ops.json'), 'utf8')) as {
+  binop: string[]
+  unop: string[]
+  ternop: string[]
+}
+
+// One bare descriptor per fieldless op, in a stable order (all binops, then all
+// unops, then all ternops). Bare = no operands: buildFunction is MIRROR-WALRUS
+// and does not type-check, so this ill-typed body still builds and emits.
+function allFieldlessOpDescs(): InstrDesc[] {
+  return [
+    ...FIELDLESS_OPS.binop.map((op): InstrDesc => ({ type: 'Binop', op })),
+    ...FIELDLESS_OPS.unop.map((op): InstrDesc => ({ type: 'Unop', op })),
+    ...FIELDLESS_OPS.ternop.map((op): InstrDesc => ({ type: 'TernOp', op })),
+  ]
+}
+
+test('C1b EXHAUSTIVE: all 352 fieldless operators build and read back (in-memory round-trip)', (t) => {
+  // Sanity on the committed op list (must match the walrus enum counts).
+  t.is(FIELDLESS_OPS.binop.length, 214)
+  t.is(FIELDLESS_OPS.unop.length, 129)
+  t.is(FIELDLESS_OPS.ternop.length, 9)
+
+  const descs = allFieldlessOpDescs()
+  t.is(descs.length, 352)
+
+  const m = empty()
+  const idx = m.buildFunction([], [], [], descs)
+  // Read back from the SAME in-memory module (no emit/re-parse, so walrus'
+  // always-on function-body validator never runs on this ill-typed body).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, descs)
+})
+
+// A WELL-TYPED body of stable (non-SIMD) numeric ops: correct operands so the
+// emitted module is valid wasm a real engine accepts.
+const STABLE_OPS_BODY: InstrDesc[] = [
+  { type: 'Const', value: { type: 'I32', value: 1 } },
+  { type: 'Const', value: { type: 'I32', value: 2 } },
+  { type: 'Binop', op: 'I32Add' },
+  { type: 'Drop' },
+  { type: 'Const', value: { type: 'I32', value: 0 } },
+  { type: 'Unop', op: 'I32Eqz' },
+  { type: 'Drop' },
+  { type: 'Const', value: { type: 'I64', value: 1n } },
+  { type: 'Const', value: { type: 'I64', value: 2n } },
+  { type: 'Binop', op: 'I64Add' },
+  { type: 'Drop' },
+  { type: 'Const', value: { type: 'F32', value: 4 } },
+  { type: 'Unop', op: 'F32Sqrt' },
+  { type: 'Drop' },
+  { type: 'Const', value: { type: 'F64', value: 1 } },
+  { type: 'Const', value: { type: 'F64', value: 2 } },
+  { type: 'Binop', op: 'F64Copysign' },
+  { type: 'Drop' },
+  { type: 'Const', value: { type: 'I32', value: 1 } },
+  { type: 'Unop', op: 'I64ExtendSI32' },
+  { type: 'Drop' },
+]
+
+test('C1b: a well-typed stable numeric body emits valid wasm and round-trips through re-parse', (t) => {
+  const m = empty()
+  const idx = m.buildFunction([], [], [], STABLE_OPS_BODY)
+  m.functions.getByIndex(idx)!.name = 'stableops'
+  const bytes = m.emitWasm(false)
+
+  // Independent proof the bytes are real, well-typed wasm.
+  t.true(WebAssembly.validate(bytes))
+
+  // Re-parse and read back: the operator opcodes decode to the same names.
+  const read = WasmModule.fromBuffer(bytes).functions.byName('stableops')!.instructions()
+  t.deepEqual(read, STABLE_OPS_BODY)
+})
+
+// A WELL-TYPED body exercising v128 and relaxed-SIMD operators (all three
+// arities). v128 operands are produced by `*.splat` unops (ConstValue has no
+// V128 variant yet). WebAssembly.validate is intentionally NOT asserted here:
+// relaxed-SIMD validity depends on the host V8's enabled features, whereas the
+// walrus re-parse (features on) is deterministic.
+const SIMD_OPS_BODY: InstrDesc[] = [
+  // v128 unop via splat
+  { type: 'Const', value: { type: 'I32', value: 0 } },
+  { type: 'Unop', op: 'I8x16Splat' },
+  { type: 'Drop' },
+  // v128 binop
+  { type: 'Const', value: { type: 'I32', value: 0 } },
+  { type: 'Unop', op: 'I8x16Splat' },
+  { type: 'Const', value: { type: 'I32', value: 0 } },
+  { type: 'Unop', op: 'I8x16Splat' },
+  { type: 'Binop', op: 'I8x16Eq' },
+  { type: 'Drop' },
+  // relaxed-SIMD ternop (integer laneselect)
+  { type: 'Const', value: { type: 'I32', value: 0 } },
+  { type: 'Unop', op: 'I8x16Splat' },
+  { type: 'Const', value: { type: 'I32', value: 0 } },
+  { type: 'Unop', op: 'I8x16Splat' },
+  { type: 'Const', value: { type: 'I32', value: 0 } },
+  { type: 'Unop', op: 'I8x16Splat' },
+  { type: 'TernOp', op: 'I8x16RelaxedLaneselect' },
+  { type: 'Drop' },
+  // relaxed-SIMD ternop (float fused-multiply-add)
+  { type: 'Const', value: { type: 'F32', value: 0 } },
+  { type: 'Unop', op: 'F32x4Splat' },
+  { type: 'Const', value: { type: 'F32', value: 0 } },
+  { type: 'Unop', op: 'F32x4Splat' },
+  { type: 'Const', value: { type: 'F32', value: 0 } },
+  { type: 'Unop', op: 'F32x4Splat' },
+  { type: 'TernOp', op: 'F32x4RelaxedMadd' },
+  { type: 'Drop' },
+]
+
+test('C1b: a well-typed v128/relaxed-SIMD body round-trips through re-parse (features on)', (t) => {
+  const m = empty()
+  const idx = m.buildFunction([], [], [], SIMD_OPS_BODY)
+  m.functions.getByIndex(idx)!.name = 'simdops'
+  const bytes = m.emitWasm(false)
+
+  // Re-parse with all proposals enabled (SIMD + relaxed-SIMD opcodes must decode)
+  // and validation relaxed, then read the operator names back.
+  const reparsed = new ModuleConfig().onlyStableFeatures(false).strictValidate(false).parse(bytes)
+  const read = reparsed.functions.byName('simdops')!.instructions()
+  t.deepEqual(read, SIMD_OPS_BODY)
+})
+
+test('C1b negative: an unknown operator name throws catchably', (t) => {
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'Binop', op: 'NotARealOp' }]), {
+    message: /unknown binary operator `NotARealOp`/,
+  })
+  // Process is still alive after the catchable throw.
+  t.is(1 + 1, 2)
+})
+
+test('C1b negative: a Binop/Unop/TernOp descriptor missing its `op` field throws catchably', (t) => {
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'Binop' }]), {
+    message: /`Binop` instruction is missing its `op` field/,
+  })
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'Unop' }]), {
+    message: /`Unop` instruction is missing its `op` field/,
+  })
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'TernOp' }]), {
+    message: /`TernOp` instruction is missing its `op` field/,
+  })
+})
+
+test('C1b negative: a deferred lane-carrier op name is not buildable (rejected catchably)', (t) => {
+  // The 14 lane-carrying SIMD ops are deferred to C6; from_str rejects their
+  // names (they are not buildable without a lane index this task does not model).
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'Unop', op: 'I8x16ExtractLaneS' }]), {
+    message: /unknown unary operator `I8x16ExtractLaneS`/,
+  })
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'Binop', op: 'I8x16ReplaceLane' }]), {
+    message: /unknown binary operator `I8x16ReplaceLane`/,
+  })
+})
+
+// A hand-authored module whose one function contains a lane-carrier op:
+// (i32.const 0)(i8x16.splat)(i8x16.extract_lane_s 0)(drop). Produced from walrus
+// directly (buildFunction cannot emit a lane op), so the read path can be
+// exercised against a genuine lane-carrying instruction.
+const LANE_CARRIER_MODULE = new Uint8Array([
+  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02,
+  0x01, 0x00, 0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00, 0x0a, 0x0c, 0x01, 0x0a, 0x00, 0x41, 0x00,
+  0xfd, 0x0f, 0xfd, 0x15, 0x00, 0x1a, 0x0b,
+])
+
+test('C1b negative: reading a module containing a lane-carrier op throws catchably (deferred to C6)', (t) => {
+  const m = new ModuleConfig().onlyStableFeatures(false).parse(LANE_CARRIER_MODULE)
+  const f = m.functions.getByIndex(0)!
+  t.throws(() => f.instructions(), {
+    message: /deferred to the SIMD task \(C6\)/,
+  })
+  // Process survived the guarded read.
+  t.is(1 + 1, 2)
 })
