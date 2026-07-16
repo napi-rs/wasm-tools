@@ -371,6 +371,47 @@ test('concrete-ref resolution guard: a field referencing a nonexistent type inde
   t.is(m.types.length, 1)
 })
 
+test('concrete-ref to an internal entry-type index throws catchably (WASI-safe, no emit abort)', (t) => {
+  // functions.wasm raw arena: [0]=func type, [1]=func type, [2]=internal
+  // function-entry type minted for the LOCAL function. items() hides the entry
+  // type, so it is a real arena slot that resolves to null via getByIndex — the
+  // exact footgun a concrete ref could otherwise wire to an unemittable type.
+  const m = WasmModule.fromBuffer(functionsBytes)
+  const realIndices = m.types.items().map((it) => it.index)
+  const maxReal = Math.max(...realIndices)
+
+  // The entry type sits in the contiguous arena at the first slot items() hides.
+  // Bound the scan to the arena (real-max + the single local-fn entry type) so
+  // we pick a REAL hidden slot, never a genuinely out-of-range index.
+  let entryIndex = -1
+  for (let i = 0; i <= maxReal + 1; i++) {
+    if (m.types.getByIndex(i) === null) {
+      entryIndex = i
+      break
+    }
+  }
+  t.true(entryIndex >= 0, 'found the hidden entry-type arena slot')
+  t.false(realIndices.includes(entryIndex))
+
+  // A concrete ref to that entry-type index must be REJECTED at creation with a
+  // catchable error — identical to a nonexistent index — never resolved to an
+  // unvalidated entry TypeId that aborts the process at emit (on WASI the emit
+  // catch_unwind backstop is a no-op, so the filter is what keeps us alive).
+  const err = t.throws(() =>
+    m.types.addStruct([
+      {
+        storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: entryIndex } } },
+        mutable: false,
+      },
+    ]),
+  )
+  t.regex(err!.message, new RegExp(`no type at index ${entryIndex} in this module`))
+
+  // The process is alive and the module is untouched + still usable.
+  t.notThrows(() => m.types.items())
+  t.notThrows(() => m.types.addStruct([{ storage: { type: 'I16' }, mutable: true }]))
+})
+
 test('addStruct structurally dedups (mirror walrus): an identical struct returns the same index', (t) => {
   const m = emptyModule()
   const first = m.types.addStruct([{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: true }])

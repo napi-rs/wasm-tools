@@ -225,11 +225,13 @@ pub(crate) fn resolve_type_id(
   module: &walrus::Module,
   type_index: u32,
 ) -> napi::Result<walrus::TypeId> {
+  let entry_ids = crate::types::entry_type_ids(module);
   module
     .types
     .iter()
     .find(|t| t.id().index() as u32 == type_index)
     .map(|t| t.id())
+    .filter(|id| !entry_ids.contains(id))
     .ok_or_else(|| {
       napi::Error::from_reason(format!("no type at index {type_index} in this module"))
     })

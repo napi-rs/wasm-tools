@@ -14,7 +14,7 @@ use crate::WasmModule;
 /// one at emit aborts; they are not user-meaningful. Recover them from the
 /// public function side: every local function's entry block has type
 /// `MultiValue(entry_ty)`.
-fn entry_type_ids(module: &walrus::Module) -> HashSet<TypeId> {
+pub(crate) fn entry_type_ids(module: &walrus::Module) -> HashSet<TypeId> {
   module
     .funcs
     .iter_local()
