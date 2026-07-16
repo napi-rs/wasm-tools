@@ -379,6 +379,11 @@ export declare class WasmModule {
    * object reads and writes back to this module.
    */
   get tables(): WasmTables
+  /**
+   * The types of this module. Each handle materialized through the returned
+   * object reads and writes back to this module.
+   */
+  get types(): WasmTypes
 }
 
 /**
@@ -504,6 +509,117 @@ export declare class WasmTables {
   addLocal(table64: boolean, initial: bigint, maximum: bigint | undefined | null, elementTy: ValType): WasmTable
 }
 
+/**
+ * A single type in a module, as a live handle: it holds the type's id plus a
+ * strong reference to the owning [`WasmModule`], and every accessor reads or
+ * writes through to that module.
+ */
+export declare class WasmType {
+  /**
+   * This type's stable index — its identity for numeric lookup. Readable even
+   * after the type is deleted (it never touches the arena).
+   */
+  get index(): number
+  /**
+   * This type's name, if any. walrus does not preserve type names through
+   * parsing, so this is `null` for a freshly parsed type; it reflects a name
+   * set in memory via the setter.
+   */
+  get name(): string | null
+  /** Set this type's name. */
+  set name(name: string | undefined | null)
+  /**
+   * This type's kind (`Function`, `Struct`, or `Array`). Only `Function`
+   * types have `params()` / `results()`.
+   */
+  get kind(): TypeKind
+  /**
+   * This function type's parameter value types.
+   *
+   * A method (not a getter) because it can fail: it throws a catchable error
+   * if this type is not a function type (a `Struct`/`Array` GC type). This is
+   * deliberate — walrus' `Type::params` calls `unwrap_function()` and PANICS
+   * on a non-function type, which would abort the process across FFI, so we
+   * go through `as_function()` and surface an error instead.
+   */
+  params(): Array<ValType>
+  /**
+   * This function type's result value types.
+   *
+   * Same fallibility as [`WasmType::params`]: throws for a non-function type
+   * rather than hitting walrus' `unwrap_function` panic.
+   */
+  results(): Array<ValType>
+}
+
+/**
+ * The types of a module. Each accessor materializes a fresh [`WasmType`]
+ * handle that reads and writes straight through to the owning [`WasmModule`];
+ * the collection itself caches nothing.
+ *
+ * The collection reflects the raw walrus type arena. That arena can contain
+ * internal function-entry types (used for multi-value block entries); walrus
+ * keeps their `is_for_function_entry` flag private, so they cannot be filtered
+ * out from here — they surface as ordinary function types.
+ */
+export declare class WasmTypes {
+  /** The number of types in the module. */
+  get length(): number
+  /** Every type in the module, as live item handles. */
+  items(): Array<WasmType>
+  /** The type whose stable `.index` equals `index`, or `null` if none exists. */
+  getByIndex(index: number): WasmType | null
+  /**
+   * The first type with the given name, or `null` if none is named that.
+   *
+   * Note: walrus does not preserve type names through parsing, so this always
+   * returns `null` for a freshly parsed module. It matches names set in
+   * memory (via the `name` setter).
+   */
+  byName(name: string): WasmType | null
+  /**
+   * Delete a type from the module. Takes the handle itself: a JS number can
+   * never be turned back into a walrus id, so the wrapper is the only way to
+   * name an item for removal.
+   *
+   * It is the caller's responsibility to ensure nothing still references the
+   * deleted type (walrus does not check, and a dangling reference aborts at
+   * emit time).
+   *
+   * Same no-panic invariant as the item accessors: walrus' `ModuleTypes::delete`
+   * indexes the arena first, which panics on a deleted/foreign id, and a panic
+   * across FFI aborts the process. Id equality includes the arena_id, so this
+   * liveness scan rejects BOTH already-deleted ids (`iter()` skips tombstoned
+   * entries) AND handles that belong to a different module (arena_id mismatch),
+   * surfacing a catchable JS error instead of aborting.
+   */
+  delete(ty: WasmType): void
+  /**
+   * Add a new function type, returning a live handle to it.
+   *
+   * `params`/`results` are the function signature's value types. Fallible: an
+   * unsupported value type — currently a concrete/indexed ref type, which
+   * needs a type handle we do not yet thread through — is rejected with a
+   * catchable error rather than aborting.
+   *
+   * walrus deduplicates structurally: adding a signature identical to an
+   * existing type returns a handle to that existing type (the arena does not
+   * grow). This mirrors walrus and is intended behavior.
+   *
+   * The returned handle holds its own strong reference to the module (same as
+   * the accessor handles), so it stays valid as long as it is held.
+   */
+  add(params: Array<ValType>, results: Array<ValType>): WasmType
+  /**
+   * Find an existing function type with the given signature, or `null` if none
+   * matches.
+   *
+   * Fallible only because an unsupported (concrete/indexed) ref type in the
+   * query is rejected with a catchable error, same as `add`.
+   */
+  find(params: Array<ValType>, results: Array<ValType>): WasmType | null
+}
+
 /** An abstract heap type, mirroring `walrus::AbstractHeapType` 1:1. */
 export declare const enum AbstractHeapType {
   /** The abstract `func` heap type (any function). */
@@ -595,6 +711,23 @@ export interface ProducerValueInfo {
 export interface RawSectionInfo {
   name: string
   data?: Uint8Array
+}
+
+/**
+ * The kind of a wasm type: which composite-type shape it is.
+ *
+ * Mirrors the discriminant of `walrus::CompositeType`
+ * (`Function | Struct | Array`). Only `Function` types have `params()` /
+ * `results()`; the `Struct` / `Array` variants are the GC composite types and
+ * their field types are not yet exposed (a later GC-types task).
+ */
+export declare const enum TypeKind {
+  /** A function type: has parameter and result value types. */
+  Function = 'Function',
+  /** A GC struct type. */
+  Struct = 'Struct',
+  /** A GC array type. */
+  Array = 'Array'
 }
 
 /**

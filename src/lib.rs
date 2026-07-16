@@ -10,6 +10,7 @@ mod memories;
 mod module;
 mod producers;
 mod tables;
+mod types;
 mod valtype;
 
 pub use config::ModuleConfig;
@@ -20,4 +21,5 @@ pub use memories::{WasmMemories, WasmMemory};
 pub use module::WasmModule;
 pub use producers::{ProducerFieldInfo, ProducerValueInfo, WasmProducers};
 pub use tables::{WasmTable, WasmTables};
+pub use types::{TypeKind, WasmType, WasmTypes};
 pub use valtype::{AbstractHeapType, HeapType, ValType};

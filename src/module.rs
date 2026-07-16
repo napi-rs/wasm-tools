@@ -4,7 +4,7 @@ use napi_derive::napi;
 use walrus::{Module, RawCustomSection};
 
 use crate::{
-  ModuleConfig, WasmCustomSections, WasmGlobals, WasmMemories, WasmProducers, WasmTables,
+  ModuleConfig, WasmCustomSections, WasmGlobals, WasmMemories, WasmProducers, WasmTables, WasmTypes,
 };
 
 #[napi]
@@ -131,6 +131,15 @@ impl WasmModule {
   /// object reads and writes back to this module.
   pub fn tables(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmTables> {
     Ok(WasmTables {
+      module: this.clone(env)?,
+    })
+  }
+
+  #[napi(getter)]
+  /// The types of this module. Each handle materialized through the returned
+  /// object reads and writes back to this module.
+  pub fn types(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmTypes> {
+    Ok(WasmTypes {
       module: this.clone(env)?,
     })
   }
