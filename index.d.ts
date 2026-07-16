@@ -374,6 +374,125 @@ export declare class WasmElements {
 }
 
 /**
+ * A single export in a module, as a live handle: it holds the export's id plus
+ * a strong reference to the owning [`WasmModule`], and every accessor reads or
+ * writes through to that module.
+ */
+export declare class WasmExport {
+  /**
+   * This export's stable index — its identity for numeric lookup. Readable even
+   * after the export is deleted (it never touches the arena).
+   */
+  get index(): number
+  /** The name this item is exported under. */
+  get name(): string
+  /** Set the name this item is exported under. */
+  set name(name: string)
+  /** The kind of item this export exposes (read only). */
+  get kind(): ExportItemTag
+  /**
+   * The exported function as a live [`WasmFunction`] handle, or `null` if this
+   * export is not a function.
+   *
+   * A method (not a getter) because it materializes a fresh wrapper on each
+   * call. Wrapping the id is a pure cross-link; a later access on the returned
+   * handle self-guards against the target having been deleted.
+   */
+  func(): WasmFunction | null
+  /**
+   * The exported table as a live [`WasmTable`] handle, or `null` if this export
+   * is not a table.
+   */
+  table(): WasmTable | null
+  /**
+   * The exported memory as a live [`WasmMemory`] handle, or `null` if this
+   * export is not a memory.
+   */
+  memory(): WasmMemory | null
+  /**
+   * The exported global as a live [`WasmGlobal`] handle, or `null` if this
+   * export is not a global.
+   */
+  global(): WasmGlobal | null
+  /**
+   * The exported tag as a live [`WasmTag`] handle, or `null` if this export is
+   * not a tag.
+   */
+  tag(): WasmTag | null
+}
+
+/**
+ * The exports of a module. Each accessor materializes a fresh [`WasmExport`]
+ * handle that reads and writes straight through to the owning [`WasmModule`];
+ * the collection itself caches nothing.
+ */
+export declare class WasmExports {
+  /** The number of exports in the module. */
+  get length(): number
+  /** Every export in the module, as live item handles. */
+  items(): Array<WasmExport>
+  /** The export whose stable `.index` equals `index`, or `null` if none exists. */
+  getByIndex(index: number): WasmExport | null
+  /**
+   * The export with the given `name`, or `null` if none exists. Exports have no
+   * name index in walrus, so this scans (the id-bridge "scan and return the
+   * real id" design); export names are unique in a valid module.
+   */
+  byName(name: string): WasmExport | null
+  /**
+   * Delete an export from the module. Takes the handle itself: a JS number can
+   * never be turned back into a walrus id, so the wrapper is the only way to
+   * name an item for removal.
+   *
+   * Unlike active data/element segments, an export id is NOT stored in any
+   * parser-maintained back-link set that gc/emit dereferences (verified: no
+   * `exports.get(<id>)` call exists in walrus' passes/emit — exports are read
+   * only via `exports.iter()`). So a plain guarded delete is sufficient — there
+   * is no back-link to clean. Id equality includes the arena_id, so this
+   * liveness scan rejects BOTH already-deleted ids AND handles from a different
+   * module, surfacing a catchable JS error instead of tripping walrus'
+   * `delete` assertion and aborting the process across FFI.
+   */
+  delete(handle: WasmExport): void
+  /**
+   * Export the given function under `name`, returning a live handle to the new
+   * export.
+   *
+   * `add_function` is a CONSUME site for an arena id: walrus stores the raw
+   * `FunctionId` and resolves it to an index at emit via a panicking
+   * `get_func_index`; a foreign-module or already-deleted handle would abort
+   * the whole Node process there. We reject such an id with a catchable error
+   * BEFORE touching the arena, so a failed add never mutates the module. Same
+   * id-ref rule as `data.addActive` / `tags.add`.
+   */
+  addFunction(name: string, func: WasmFunction): WasmExport
+  /**
+   * Export the given table under `name`, returning a live handle to the new
+   * export. The table must belong to THIS module (id-ref guard; see
+   * [`WasmExports::add_function`]).
+   */
+  addTable(name: string, table: WasmTable): WasmExport
+  /**
+   * Export the given memory under `name`, returning a live handle to the new
+   * export. The memory must belong to THIS module (id-ref guard; see
+   * [`WasmExports::add_function`]).
+   */
+  addMemory(name: string, memory: WasmMemory): WasmExport
+  /**
+   * Export the given global under `name`, returning a live handle to the new
+   * export. The global must belong to THIS module (id-ref guard; see
+   * [`WasmExports::add_function`]).
+   */
+  addGlobal(name: string, global: WasmGlobal): WasmExport
+  /**
+   * Export the given tag under `name`, returning a live handle to the new
+   * export. The tag must belong to THIS module (id-ref guard; see
+   * [`WasmExports::add_function`]).
+   */
+  addTag(name: string, tag: WasmTag): WasmExport
+}
+
+/**
  * A single function in a module, as a live handle: it holds the function's id
  * plus a strong reference to the owning [`WasmModule`], and every accessor
  * reads or writes through to that module.
@@ -531,6 +650,98 @@ export declare class WasmGlobals {
    * the accessor handles), so it stays valid as long as it is held.
    */
   addLocal(ty: ValType, mutable: boolean, shared: boolean, init: ConstExpr): WasmGlobal
+}
+
+/**
+ * A single import in a module, as a live handle: it holds the import's id plus
+ * a strong reference to the owning [`WasmModule`], and every accessor reads or
+ * writes through to that module.
+ */
+export declare class WasmImport {
+  /**
+   * This import's stable index — its identity for numeric lookup. Readable even
+   * after the import is deleted (it never touches the arena).
+   */
+  get index(): number
+  /** The module name this item is imported from (e.g. `"env"`). */
+  get module(): string
+  /** Set the module name this item is imported from. */
+  set module(module: string)
+  /** The field name of this import within its module. */
+  get name(): string
+  /** Set the field name of this import within its module. */
+  set name(name: string)
+  /** The kind of item this import brings in (read only). */
+  get kind(): ImportKindTag
+  /**
+   * The imported function as a live [`WasmFunction`] handle, or `null` if this
+   * import is not a function.
+   *
+   * A method (not a getter) because it materializes a fresh wrapper on each
+   * call. Wrapping the id is a pure cross-link; a later access on the returned
+   * handle self-guards against the target having been deleted.
+   */
+  func(): WasmFunction | null
+  /**
+   * The imported table as a live [`WasmTable`] handle, or `null` if this import
+   * is not a table.
+   */
+  table(): WasmTable | null
+  /**
+   * The imported memory as a live [`WasmMemory`] handle, or `null` if this
+   * import is not a memory.
+   */
+  memory(): WasmMemory | null
+  /**
+   * The imported global as a live [`WasmGlobal`] handle, or `null` if this
+   * import is not a global.
+   */
+  global(): WasmGlobal | null
+  /**
+   * The imported tag as a live [`WasmTag`] handle, or `null` if this import is
+   * not a tag.
+   */
+  tag(): WasmTag | null
+}
+
+/**
+ * The imports of a module. Each accessor materializes a fresh [`WasmImport`]
+ * handle that reads and writes straight through to the owning [`WasmModule`];
+ * the collection itself caches nothing.
+ *
+ * Import *creation* (`add_import_*`) is intentionally not exposed here.
+ */
+export declare class WasmImports {
+  /** The number of imports in the module. */
+  get length(): number
+  /** Every import in the module, as live item handles. */
+  items(): Array<WasmImport>
+  /** The import whose stable `.index` equals `index`, or `null` if none exists. */
+  getByIndex(index: number): WasmImport | null
+  /** The import with the given `module` and `name`, or `null` if none exists. */
+  find(module: string, name: string): WasmImport | null
+  /**
+   * Delete an import from the module. Takes the handle itself: a JS number can
+   * never be turned back into a walrus id, so the wrapper is the only way to
+   * name an item for removal.
+   *
+   * Deleting an import that still has a defined item (the imported function /
+   * table / memory / global / tag) ORPHANS that item, producing a wasm-invalid
+   * module — the caller's responsibility, catchable via `WebAssembly.validate`
+   * / re-parse (mirror-walrus policy: we do not try to prevent it).
+   *
+   * Unlike active data/element segments, an import id is NOT stored in any
+   * parser-maintained back-link set that gc/emit dereferences: gc and emit only
+   * read `item.import` as an `Option`/bool and never call `imports.get(id)` on
+   * a stored id (verified: no `imports.get(<id>)` call exists in walrus'
+   * passes/emit). So a plain guarded delete is sufficient — there is no
+   * back-link to clean. Id equality includes the arena_id, so this liveness
+   * scan rejects BOTH already-deleted ids (`iter()` skips tombstoned entries)
+   * AND handles that belong to a different module, surfacing a catchable JS
+   * error instead of tripping walrus' `delete` assertion and aborting the
+   * process across FFI.
+   */
+  delete(handle: WasmImport): void
 }
 
 /**
@@ -760,6 +971,16 @@ export declare class WasmModule {
    * module.
    */
   get tags(): WasmTags
+  /**
+   * The imports of this module. Each handle materialized through the returned
+   * object reads and writes back to this module.
+   */
+  get imports(): WasmImports
+  /**
+   * The exports of this module. Each handle materialized through the returned
+   * object reads and writes back to this module.
+   */
+  get exports(): WasmExports
 }
 
 /**
@@ -1184,6 +1405,28 @@ export declare const enum ElementKindTag {
 }
 
 /**
+ * The kind of item an export exposes from a module.
+ *
+ * Mirrors the discriminant of `walrus::ExportItem`
+ * (`Function`/`Table`/`Memory`/`Global`/`Tag`). The exported item itself is
+ * read through the matching typed accessor on [`WasmExport`]
+ * (`func`/`table`/`memory`/`global`/`tag`), each of which returns the handle
+ * for its variant and `null` for the others.
+ */
+export declare const enum ExportItemTag {
+  /** An exported function. */
+  Function = 'Function',
+  /** An exported table. */
+  Table = 'Table',
+  /** An exported memory. */
+  Memory = 'Memory',
+  /** An exported global. */
+  Global = 'Global',
+  /** An exported tag (exception handling). */
+  Tag = 'Tag'
+}
+
+/**
  * Whether a function is imported, locally defined, or an uninitialized
  * placeholder.
  *
@@ -1231,6 +1474,28 @@ export type HeapType =
   | { type: 'Abstract', kind: AbstractHeapType }
   | { type: 'Concrete', typeIndex: number }
   | { type: 'Exact', typeIndex: number }
+
+/**
+ * The kind of item an import brings into a module.
+ *
+ * Mirrors the discriminant of `walrus::ImportKind`
+ * (`Function`/`Table`/`Memory`/`Global`/`Tag`). The imported item itself is
+ * read through the matching typed accessor on [`WasmImport`]
+ * (`func`/`table`/`memory`/`global`/`tag`), each of which returns the handle
+ * for its variant and `null` for the others.
+ */
+export declare const enum ImportKindTag {
+  /** An imported function. */
+  Function = 'Function',
+  /** An imported table. */
+  Table = 'Table',
+  /** An imported memory. */
+  Memory = 'Memory',
+  /** An imported global. */
+  Global = 'Global',
+  /** An imported tag (exception handling). */
+  Tag = 'Tag'
+}
 
 /**
  * A single field (e.g. `language`, `sdk`, `processed-by`) of the producers
