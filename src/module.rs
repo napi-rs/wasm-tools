@@ -4,7 +4,7 @@ use napi_derive::napi;
 use walrus::{FunctionBuilder, Module, RawCustomSection};
 
 use crate::convert::val_type_to_walrus_in;
-use crate::ir::{emit_desc, local_id_at, InstrDesc};
+use crate::ir::{emit_desc, local_id_at, validate_body, InstrDesc};
 use crate::valtype::ValType;
 use crate::{
   ModuleConfig, WasmCustomSections, WasmDataSegments, WasmElements, WasmExports, WasmFunction,
@@ -103,6 +103,15 @@ impl WasmModule {
   /// ill-typed body is built and emitted as-is, and `WebAssembly.validate` (or
   /// a re-parse) is the place to catch it.
   ///
+  /// All-or-nothing: the entire body is validated by a read-only preflight
+  /// ([`crate::ir::validate_body`]) BEFORE any arena mutation, so a rejected
+  /// body leaves the module completely unchanged — no orphaned signature/entry
+  /// type is ever left behind. Because that preflight runs against the pre-call
+  /// arena, a body can never name the function's own in-flight signature/entry
+  /// type (those indices do not exist yet, so they are out of range and
+  /// rejected catchably, rather than aborting the process at emit under
+  /// `panic = abort`).
+  ///
   /// Self-reference limitation: a walrus `FunctionId` is only minted when the
   /// builder finishes, so a body cannot `Call` the function it is defining (the
   /// index names no live function yet, and that errs).
@@ -114,8 +123,7 @@ impl WasmModule {
     body: Vec<InstrDesc>,
   ) -> Result<u32> {
     // Convert the signature and resolve the argument locals BEFORE creating the
-    // builder, so a failed conversion/lookup never leaves a half-built function
-    // behind. `val_type_to_walrus_in` resolves concrete refs and rejects
+    // builder. `val_type_to_walrus_in` resolves concrete refs and rejects
     // unsupported/entry-type indices catchably.
     let params_w = params
       .into_iter()
@@ -130,9 +138,22 @@ impl WasmModule {
       .map(|i| local_id_at(&self.inner, i))
       .collect::<Result<Vec<_>>>()?;
 
+    // Preflight the WHOLE body against the pre-call module BEFORE any mutation.
+    // `FunctionBuilder::new` (below) inserts this function's signature and entry
+    // types into `self.inner.types`; validating first is what makes the whole
+    // call all-or-nothing and closes two aborts: (1) a body can never resolve
+    // its own not-yet-created signature/entry type index (out of range against
+    // the pre-call arena => caught here, not an uncatchable emit-time trap under
+    // `panic = abort`), and (2) any error returns with the module completely
+    // unchanged, so no orphan entry/sig type is left in the arena. The label
+    // stack starts at length 1 (the entry frame emit pushes first).
+    validate_body(&self.inner, &body, 1)?;
+
     // `FunctionBuilder::new` borrows `&mut types` only for this call (it returns
     // an owned builder holding no borrow of the module), so `emit_desc` may then
     // borrow `&self.inner` to resolve ids/types while pushing into the builder.
+    // After a passing preflight its resolvers cannot fail, but it still returns
+    // `Result` and propagates (defense in depth against future drift).
     let mut fb = FunctionBuilder::new(&mut self.inner.types, &params_w, &results_w);
     let entry = fb.func_body_id();
     let mut label_stack = Vec::new();

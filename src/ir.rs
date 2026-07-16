@@ -472,6 +472,164 @@ fn missing(ty: &str, field: &str) -> Error {
 }
 
 // ---------------------------------------------------------------------------
+// Preflight: a read-only mirror of the emit walk, run BEFORE any arena mutation.
+// ---------------------------------------------------------------------------
+
+/// Validate a descriptor array against the PRE-CALL module, without mutating
+/// anything. This is a structural mirror of [`emit_desc`]/[`emit_one`] that
+/// REUSES the exact same leaf resolvers (`local_id_at`/`global_id_at`/
+/// `function_id_at`/`resolve_type_id`/`val_type_to_walrus_in`), so preflight and
+/// emit can never disagree about which bodies are accepted.
+///
+/// `build_function` runs this against `&self.inner` BEFORE `FunctionBuilder::new`
+/// inserts the function's signature and entry types into the arena. Two things
+/// follow: a body can never resolve its own not-yet-created signature/entry type
+/// index (that index is simply out of range against the pre-call arena, so it is
+/// rejected catchably here instead of aborting the process at emit under
+/// `panic = abort`), and because preflight completes before the first mutation,
+/// ANY error leaves the module completely unchanged (no orphan entry/sig type is
+/// left behind on a late failure).
+///
+/// `label_len` models `label_stack.len()` at the current scope. The top-level
+/// body is validated at `label_len == 1` (emit pushes the entry sequence first,
+/// making the stack length 1 there); each nested `block`/`loop` body and each
+/// `if`/`else` arm adds exactly one frame — identical to how emit grows the label
+/// stack — so a branch depth resolves in preflight exactly as it would in emit.
+pub(crate) fn validate_body(module: &Module, body: &[InstrDesc], label_len: usize) -> Result<()> {
+  for d in body {
+    validate_one(module, d, label_len)?;
+  }
+  Ok(())
+}
+
+/// Validate a single descriptor. Mirrors [`emit_one`] arm-for-arm, including the
+/// same missing-field and unknown-variant errors, so preflight rejects exactly
+/// the input emit would.
+fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> {
+  match d.r#type.as_str() {
+    "Unreachable" | "Return" | "Drop" => {}
+    "Const" => {
+      // Mirror emit's only fallible Const check: an i64 that is not lossless.
+      let value = d.value.as_ref().ok_or_else(|| missing("Const", "value"))?;
+      if let ConstValue::I64 { value } = value {
+        if !value.get_i64().1 {
+          return Err(Error::from_reason(
+            "i64 const value does not fit losslessly in a signed 64-bit integer",
+          ));
+        }
+      }
+    }
+    "LocalGet" => {
+      local_id_at(module, d.local.ok_or_else(|| missing("LocalGet", "local"))?)?;
+    }
+    "LocalSet" => {
+      local_id_at(module, d.local.ok_or_else(|| missing("LocalSet", "local"))?)?;
+    }
+    "LocalTee" => {
+      local_id_at(module, d.local.ok_or_else(|| missing("LocalTee", "local"))?)?;
+    }
+    "GlobalGet" => {
+      global_id_at(
+        module,
+        d.global.ok_or_else(|| missing("GlobalGet", "global"))?,
+      )?;
+    }
+    "GlobalSet" => {
+      global_id_at(
+        module,
+        d.global.ok_or_else(|| missing("GlobalSet", "global"))?,
+      )?;
+    }
+    "Call" => {
+      function_id_at(module, d.func.ok_or_else(|| missing("Call", "func"))?)?;
+    }
+    "Select" => {
+      if let Some(vt) = d.select_type.as_ref() {
+        val_type_to_walrus_in(module, vt.clone())?;
+      }
+    }
+    "Block" | "Loop" => {
+      validate_block_type(module, &d.block_type)?;
+      validate_body(module, d.seq.as_deref().unwrap_or(&[]), label_len + 1)?;
+    }
+    "IfElse" => {
+      // Each arm is its own label frame (see the module-level note), exactly like
+      // emit — so recurse into both at `label_len + 1`.
+      validate_block_type(module, &d.block_type)?;
+      validate_body(
+        module,
+        d.consequent.as_deref().unwrap_or(&[]),
+        label_len + 1,
+      )?;
+      validate_body(
+        module,
+        d.alternative.as_deref().unwrap_or(&[]),
+        label_len + 1,
+      )?;
+    }
+    "Br" => {
+      validate_label(d.label.ok_or_else(|| missing("Br", "label"))?, label_len)?;
+    }
+    "BrIf" => {
+      validate_label(d.label.ok_or_else(|| missing("BrIf", "label"))?, label_len)?;
+    }
+    "BrTable" => {
+      // Same field/ordering as emit: labels present, then default in range, then
+      // every table entry in range.
+      let labels = d
+        .labels
+        .as_ref()
+        .ok_or_else(|| missing("BrTable", "labels"))?;
+      validate_label(
+        d.default_label
+          .ok_or_else(|| missing("BrTable", "defaultLabel"))?,
+        label_len,
+      )?;
+      for &l in labels {
+        validate_label(l, label_len)?;
+      }
+    }
+    other => {
+      return Err(Error::from_reason(format!(
+        "unknown or unsupported instruction type `{other}` (buildFunction handles only the C1a \
+         core/control-flow subset)"
+      )));
+    }
+  }
+  Ok(())
+}
+
+/// Validate a block type against the pre-call arena, mirroring
+/// [`to_instr_seq_type`] and reusing its resolvers. `MultiValue` is the primary
+/// abort vector: an index naming the function's own future entry/sig type is out
+/// of range here and rejected catchably.
+fn validate_block_type(module: &Module, bt: &Option<BlockType>) -> Result<()> {
+  match bt {
+    None | Some(BlockType::Empty) => {}
+    Some(BlockType::Value { value }) => {
+      val_type_to_walrus_in(module, value.clone())?;
+    }
+    Some(BlockType::MultiValue { type_index }) => {
+      resolve_type_id(module, *type_index)?;
+    }
+  }
+  Ok(())
+}
+
+/// Validate a relative branch label depth against the enclosing-scope count,
+/// mirroring [`label_target`]'s `depth >= len` guard and its error message. Only
+/// the stack LENGTH matters for range validity, which emit and preflight compute
+/// identically, so no real `InstrSeqId`s are needed here.
+fn validate_label(depth: u32, label_len: usize) -> Result<()> {
+  if (depth as usize) >= label_len {
+    return Err(Error::from_reason(format!(
+      "branch label depth {depth} is out of range: only {label_len} enclosing block(s)"
+    )));
+  }
+  Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Read path: walrus function body -> InstrDesc array (mirrors the emit path).
 // ---------------------------------------------------------------------------
 

@@ -15,7 +15,13 @@ use napi_derive::napi;
 ///
 /// `walrus::RefType { nullable, heap_type }` is inlined into the `Ref` variant;
 /// there is no standalone `RefType` napi type.
+///
+/// `Clone` is derived so the read-only `buildFunction` preflight
+/// ([`crate::ir::validate_body`]) can hand a borrowed value type to the same
+/// consuming resolver (`val_type_to_walrus_in`) the emit path uses, without
+/// diverging from it.
 #[napi]
+#[derive(Clone)]
 pub enum ValType {
   /// 32-bit integer.
   I32,
@@ -41,6 +47,7 @@ pub enum ValType {
 /// module-aware converters in [`crate::convert`] (`resolve_type_id`), used when
 /// a struct/array field references another type via `(ref $t)`.
 #[napi]
+#[derive(Clone)]
 pub enum HeapType {
   /// An abstract heap type (`func`, `extern`, `any`, ...).
   Abstract { kind: AbstractHeapType },
@@ -54,6 +61,7 @@ pub enum HeapType {
 
 /// An abstract heap type, mirroring `walrus::AbstractHeapType` 1:1.
 #[napi(string_enum)]
+#[derive(Clone)]
 pub enum AbstractHeapType {
   /// The abstract `func` heap type (any function).
   Func,

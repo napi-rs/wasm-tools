@@ -354,3 +354,80 @@ test('i64 BigInt: a value that does not fit losslessly in a signed i64 throws', 
     },
   )
 })
+
+test('guard: a Block naming its own in-flight signature/entry type index is rejected without aborting, and the module still emits', (t) => {
+  const m = empty()
+  // `FunctionBuilder::new` would mint this function's signature type at the next
+  // raw arena index and its entry type at the one after. A `MultiValue` block
+  // naming either is the process-abort vector under `panic = abort` (emit skips
+  // the entry-type rec group, so `get_type_index` traps). The pre-call preflight
+  // must reject both catchably because neither index exists in the arena yet.
+  const T = m.types.length
+  t.throws(
+    () => m.buildFunction([], [], [], [{ type: 'Block', blockType: { type: 'MultiValue', typeIndex: T }, seq: [] }]),
+    { message: new RegExp(`no type at index ${T}`) },
+  )
+  // The entry type (T + 1) is the one emit actually skips — the real landmine.
+  t.throws(
+    () => m.buildFunction([], [], [], [{ type: 'Block', blockType: { type: 'MultiValue', typeIndex: T + 1 }, seq: [] }]),
+    { message: new RegExp(`no type at index ${T + 1}`) },
+  )
+  // Process is still alive after the catchable throws (a real abort would have
+  // taken the whole test run down — this line is the proof under WASI)...
+  t.is(1 + 1, 2)
+  // ...and the module was never mutated, so it still emits cleanly.
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('guard: a body that fails late leaves the type arena unchanged, and a later valid build/emit still works', (t) => {
+  const m = empty()
+  const before = m.types.length
+
+  // Valid prefix (Const i32) then a bad local index: with the old ordering this
+  // failed only AFTER FunctionBuilder::new had already inserted the signature +
+  // entry types, orphaning them in the arena. The preflight must fail first, so
+  // the arena is untouched.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [
+          { type: 'Const', value: { type: 'I32', value: 1 } },
+          { type: 'LocalGet', local: 99 },
+        ],
+      ),
+    { message: /no local at index 99/ },
+  )
+  t.is(m.types.length, before)
+
+  // A bad MultiValue index nested inside an otherwise-valid Block also fails late
+  // but must leave the arena unchanged.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [
+          { type: 'Const', value: { type: 'I32', value: 0 } },
+          { type: 'Drop' },
+          { type: 'Block', blockType: { type: 'MultiValue', typeIndex: 123 }, seq: [] },
+        ],
+      ),
+    { message: /no type at index 123/ },
+  )
+  t.is(m.types.length, before)
+
+  // No newly-visible (orphan) type leaked from either failure.
+  t.is(m.types.length, before)
+
+  // The module is still fully usable: a normal valid function builds and emits.
+  const p0 = m.locals.add(I32)
+  const idx = m.buildFunction([I32], [I32], [p0.index], [{ type: 'LocalGet', local: p0.index }])
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+  const reparsed = WasmModule.fromBuffer(bytes)
+  t.deepEqual(reparsed.functions.getByIndex(idx)!.instructions(), [{ type: 'LocalGet', local: 0 }])
+})

@@ -1051,6 +1051,15 @@ export declare class WasmModule {
    * ill-typed body is built and emitted as-is, and `WebAssembly.validate` (or
    * a re-parse) is the place to catch it.
    *
+   * All-or-nothing: the entire body is validated by a read-only preflight
+   * ([`crate::ir::validate_body`]) BEFORE any arena mutation, so a rejected
+   * body leaves the module completely unchanged — no orphaned signature/entry
+   * type is ever left behind. Because that preflight runs against the pre-call
+   * arena, a body can never name the function's own in-flight signature/entry
+   * type (those indices do not exist yet, so they are out of range and
+   * rejected catchably, rather than aborting the process at emit under
+   * `panic = abort`).
+   *
    * Self-reference limitation: a walrus `FunctionId` is only minted when the
    * builder finishes, so a body cannot `Call` the function it is defining (the
    * index names no live function yet, and that errs).
@@ -2022,6 +2031,11 @@ export declare const enum TypeKind {
  *
  * `walrus::RefType { nullable, heap_type }` is inlined into the `Ref` variant;
  * there is no standalone `RefType` napi type.
+ *
+ * `Clone` is derived so the read-only `buildFunction` preflight
+ * ([`crate::ir::validate_body`]) can hand a borrowed value type to the same
+ * consuming resolver (`val_type_to_walrus_in`) the emit path uses, without
+ * diverging from it.
  */
 export type ValType =
   | { type: 'I32' }
