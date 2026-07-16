@@ -112,12 +112,42 @@ impl WasmFunctions {
   /// different module (arena_id mismatch), surfacing a catchable JS error
   /// instead of aborting.
   pub fn delete(&mut self, func: &WasmFunction) -> Result<()> {
-    if self.module.inner.funcs.iter().any(|f| f.id() == func.id) {
-      self.module.inner.funcs.delete(func.id);
-      Ok(())
-    } else {
-      Err(crate::handle::deleted("function"))
+    if !self.module.inner.funcs.iter().any(|f| f.id() == func.id) {
+      return Err(crate::handle::deleted("function"));
     }
+    // walrus mints an internal "function-entry" type per local function (the
+    // `MultiValue` type of its entry block) but `ModuleFunctions::delete` only
+    // tombstones the function — it leaves that entry type live in the type
+    // arena. An orphaned entry type is invisible to `entry_type_ids` (nothing
+    // references it any more), so it would leak back into `WasmTypes` and
+    // become resolvable by `add*` — a concrete ref to it then aborts at emit
+    // (uncatchable on WASI). So after deleting a LOCAL function we drop its
+    // entry type too, but only once NO remaining local function still uses it:
+    // walrus dedups entry types structurally, so several functions with the
+    // same result signature share one entry type and it must survive until its
+    // last owner is gone.
+    //
+    // Capture the entry type of a LOCAL function BEFORE deleting it (a `TypeId`
+    // is `Copy`, so this immutable borrow of `funcs` ends before the delete).
+    let entry_ty: Option<walrus::TypeId> = match &self.module.inner.funcs.get(func.id).kind {
+      walrus::FunctionKind::Local(lf) => match lf.block(lf.entry_block()).ty {
+        walrus::ir::InstrSeqType::MultiValue(id) => Some(id),
+        walrus::ir::InstrSeqType::Simple(_) => None,
+      },
+      _ => None,
+    };
+    self.module.inner.funcs.delete(func.id);
+    // Drop the now-orphaned internal entry type, but only if no remaining local
+    // function still shares it (entry types are deduped by result signature).
+    if let Some(ety) = entry_ty {
+      let still_used = self.module.inner.funcs.iter_local().any(|(_, lf)| {
+        matches!(lf.block(lf.entry_block()).ty, walrus::ir::InstrSeqType::MultiValue(id) if id == ety)
+      });
+      if !still_used {
+        self.module.inner.types.delete(ety);
+      }
+    }
+    Ok(())
   }
 }
 

@@ -300,24 +300,27 @@ impl WasmModule {
   /// when assigning type indices, so referencing one (e.g. via `tags.add`) makes
   /// `get_type_index` panic — is now removed at the source: [`crate::WasmTypes`]
   /// filters those types out of every accessor, so a user can no longer obtain a
-  /// handle to one (this closes it on ALL targets, WASI included). Two narrow
-  /// residues still reach here and rely on this net: an ORPHAN entry type left
-  /// after `funcs.delete` without a `gc()` (no longer reachable via any entry
-  /// block, so the filter misses it), and emit after deleting a still-referenced
-  /// item (walrus' `get_*_index` panics). The crate builds with the default
-  /// `panic = unwind` (only the `wasm-fixture` profile sets `panic = 'abort'`),
-  /// so we can catch that panic and surface it as a catchable `napi::Error`
-  /// instead of letting it cross the FFI boundary and abort the whole Node
-  /// process. The saved custom sections are restored on BOTH the ok and panic
-  /// paths, so a caught emit leaves the module consistent (emit's only `&mut`
-  /// effect is draining `customs`, which the restore loop puts back).
+  /// handle to one (this closes it on ALL targets, WASI included). Orphaned entry
+  /// types cannot reach here either: [`crate::WasmFunctions::delete`] drops a
+  /// local function's entry type when its last owner is deleted, so no orphan
+  /// ever persists in the arena to leak back through the filter. The one narrow
+  /// residue that still reaches here and relies on this net is emit after
+  /// deleting a still-referenced item (walrus' `get_*_index` panics). The crate
+  /// builds with the default `panic = unwind` (only the `wasm-fixture` profile
+  /// sets `panic = 'abort'`), so we can catch that panic and surface it as a
+  /// catchable `napi::Error` instead of letting it cross the FFI boundary and
+  /// abort the whole Node process. The saved custom sections are restored on
+  /// BOTH the ok and panic paths, so a caught emit leaves the module consistent
+  /// (emit's only `&mut` effect is draining `customs`, which the restore loop
+  /// puts back).
   ///
   /// PLATFORM LIMITATION: `catch_unwind` only unwinds under `panic = unwind`.
   /// The published `wasm32-wasip1-threads` target builds with `panic = abort`
   /// (the target default; `-C panic=unwind` needs nightly + build-std, not
-  /// viable), so on WASI this catch is a no-op and those two residual panics
-  /// TRAP the process instead of becoming catchable errors. The entry-type
-  /// filter in [`crate::WasmTypes`] is the target-independent defense; this
+  /// viable), so on WASI this catch is a no-op and that residual panic TRAPS the
+  /// process instead of becoming a catchable error. The entry-type filter in
+  /// [`crate::WasmTypes`] plus the orphan cleanup in
+  /// [`crate::WasmFunctions::delete`] are the target-independent defenses; this
   /// `catch_unwind` is the native-only backstop for the rest.
   fn emit_bytes(&mut self, demangle: bool) -> Result<Vec<u8>> {
     self.prepare_for_emit(demangle);

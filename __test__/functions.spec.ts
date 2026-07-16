@@ -16,6 +16,13 @@ const __dirname = join(fileURLToPath(import.meta.url), '..')
 const FIXTURE = join(__dirname, 'fixtures', 'functions.wasm')
 const fixtureBytes = readFileSync(FIXTURE)
 
+// Two LOCAL functions with distinct function types but the SAME result
+// signature (see fixtures/functions-shared-entry.wat). walrus mints one
+// internal function-entry type from the result signature and dedups it, so both
+// functions SHARE that single entry type.
+const SHARED_ENTRY_FIXTURE = join(__dirname, 'fixtures', 'functions-shared-entry.wasm')
+const sharedEntryBytes = readFileSync(SHARED_ENTRY_FIXTURE)
+
 const load = () => WasmModule.fromBuffer(fixtureBytes)
 
 test('functions collection reports length and materializes item handles', (t) => {
@@ -150,4 +157,82 @@ test('delete-guard: cross-module delete throws and leaves both modules unchanged
   t.throws(() => a.functions.delete(bHandle))
   t.is(a.functions.length, aLen)
   t.is(b.functions.length, bLen)
+})
+
+test('delete drops the orphaned internal entry type of the last local function', (t) => {
+  // functions.wasm has one import ($imp) and one LOCAL function ($loc). The
+  // local function owns an internal "function-entry" type (raw arena index 2)
+  // that WasmTypes hides. walrus' ModuleFunctions::delete only tombstones the
+  // function and leaves that entry type live; deleting its last owner must drop
+  // it too, or it orphans and leaks back through the entry-type filter.
+  const m = load()
+  const typesBefore = m.types.length // 2 real function types; entry type hidden
+
+  // Locate the hidden entry-type raw arena index the way the B5a entry-type
+  // test does: the first arena slot items()/getByIndex hides (a gap), bounded
+  // to the arena so we never pick a genuinely out-of-range index.
+  const realIndices = m.types.items().map((it) => it.index)
+  const maxReal = Math.max(...realIndices)
+  let entryIndex = -1
+  for (let i = 0; i <= maxReal + 1; i++) {
+    if (m.types.getByIndex(i) === null) {
+      entryIndex = i
+      break
+    }
+  }
+  t.true(entryIndex >= 0, 'found the hidden entry-type arena slot')
+  t.false(realIndices.includes(entryIndex))
+
+  // Delete the sole local function. Nothing references it, so no dangling ref.
+  m.functions.delete(m.functions.byName('loc')!)
+
+  // (1) The entry type is STILL not user-visible and the arena did not grow.
+  t.true(m.types.length <= typesBefore)
+  const itemsAfter = m.types.items()
+  t.is(itemsAfter.length, m.types.length)
+  t.false(itemsAfter.map((it) => it.index).includes(entryIndex))
+
+  // (2) The orphan was actually removed from the arena: a concrete ref to its
+  // former index no longer resolves to a live entry TypeId — it is rejected at
+  // creation exactly like a nonexistent index, never wired to an unemittable
+  // ref that aborts at emit (on WASI the emit catch_unwind is a no-op, so this
+  // cleanup is what keeps the process alive). The process stays alive.
+  const err = t.throws(() =>
+    m.types.addStruct([
+      {
+        storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: entryIndex } } },
+        mutable: false,
+      },
+    ]),
+  )
+  t.regex(err!.message, new RegExp(`no type at index ${entryIndex} in this module`))
+
+  // (3) Emit succeeds after the delete (no abort).
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('delete keeps a shared internal entry type until its last owner is gone', (t) => {
+  // Two local functions with distinct function types but the same result
+  // signature share ONE internal entry type (hidden). Two real function types
+  // are exposed.
+  const m = WasmModule.fromBuffer(sharedEntryBytes)
+  t.is(m.functions.length, 2)
+  t.is(m.types.length, 2)
+
+  // Delete ONE owner. The shared entry type is still used by the other, so it
+  // must NOT be dropped — the survivor's entry block still points at a LIVE
+  // type, so emit does not abort and the survivor is fully intact.
+  m.functions.delete(m.functions.byName('a')!)
+  t.is(m.functions.length, 1)
+  const b = m.functions.byName('b')
+  t.truthy(b)
+  t.is(b!.kind, 'Local')
+  t.notThrows(() => b!.ty())
+  t.notThrows(() => m.emitWasm(false))
+
+  // Delete the LAST owner. Now the entry type is orphaned and is dropped; emit
+  // still succeeds (no orphan leaks to trap at emit).
+  m.functions.delete(b!)
+  t.is(m.functions.length, 0)
+  t.notThrows(() => m.emitWasm(false))
 })
