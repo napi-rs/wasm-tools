@@ -343,6 +343,59 @@ pub enum StoreKind {
   },
 }
 
+/// The read/modify/write operation of an `AtomicRmw`, mirroring
+/// `walrus::ir::AtomicOp` (`ir/mod.rs:1665`, fieldless).
+///
+/// Generated as a string enum: `'Add' | 'Sub' | 'And' | 'Or' | 'Xor' | 'Xchg'`.
+///
+/// These are the six atomic rmw ops (`i32.atomic.rmw.add`, `…​.sub`, `…​.and`,
+/// `…​.or`, `…​.xor`, `…​.xchg`); the compare-exchange rmw is the separate
+/// [`InstrDesc`] `Cmpxchg` instruction, not an `AtomicOp`.
+#[napi(string_enum)]
+pub enum AtomicOp {
+  /// Atomic add (`*.atomic.rmw.add`).
+  Add,
+  /// Atomic subtract (`*.atomic.rmw.sub`).
+  Sub,
+  /// Atomic bitwise and (`*.atomic.rmw.and`).
+  And,
+  /// Atomic bitwise or (`*.atomic.rmw.or`).
+  Or,
+  /// Atomic bitwise xor (`*.atomic.rmw.xor`).
+  Xor,
+  /// Atomic exchange (`*.atomic.rmw.xchg`).
+  Xchg,
+}
+
+/// The access width of an atomic memory operation, mirroring
+/// `walrus::ir::AtomicWidth` (`ir/mod.rs:1677`, fieldless). Carried by
+/// `AtomicRmw` (with an [`AtomicOp`]) and `Cmpxchg`.
+///
+/// Generated as a string enum:
+/// `'I32' | 'I32_8' | 'I32_16' | 'I64' | 'I64_8' | 'I64_16' | 'I64_32'`.
+///
+/// The bare `I32`/`I64` are the full-width ops; the `_8`/`_16`/`_32` suffixes are
+/// the sub-word ops that operate on a narrow slice of the value (`I32_8` =
+/// `i32.atomic.rmw8`, `I64_32` = `i64.atomic.rmw32`, …). MIRROR-WALRUS: whether
+/// the width is legal for a given op is NOT checked here.
+#[napi(string_enum)]
+pub enum AtomicWidth {
+  /// A full-width 32-bit atomic op.
+  I32,
+  /// An 8-bit-wide atomic op on an `i32` value.
+  I32_8,
+  /// A 16-bit-wide atomic op on an `i32` value.
+  I32_16,
+  /// A full-width 64-bit atomic op.
+  I64,
+  /// An 8-bit-wide atomic op on an `i64` value.
+  I64_8,
+  /// A 16-bit-wide atomic op on an `i64` value.
+  I64_16,
+  /// A 32-bit-wide atomic op on an `i64` value.
+  I64_32,
+}
+
 /// The reference type carried by a `RefNull` instruction, mirroring
 /// `walrus::RefType` (`ty.rs:874`): a `nullable` flag plus the [`HeapType`] the
 /// null belongs to (`(ref null $t)`).
@@ -375,18 +428,20 @@ pub struct RefType {
 /// `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
 /// `if`/`else`), making the interface self-referential.
 ///
-/// This is the C1a/C1b/C2/C3/C4 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
-/// `Const`, local/global get/set/tee, `Call`, `Select`, the control constructs
-/// (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), the
-/// numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
+/// This is the C1a/C1b/C2/C3/C4/C5 subset: leaf ops (`Unreachable`/`Return`/
+/// `Drop`), `Const`, local/global get/set/tee, `Call`, `Select`, the control
+/// constructs (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`),
+/// the numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
 /// `op`), the memory + general load/store instructions (`MemorySize`/
 /// `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`),
-/// the table instructions + `call_indirect` (`TableGet`/`TableSet`/
-/// `TableGrow`/`TableSize`/`TableFill`/`TableInit`/`TableCopy`/`ElemDrop`/
-/// `CallIndirect`), and the core reference + tail-call instructions
-/// (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/`ReturnCallIndirect`). Any other
-/// instruction is rejected catchably by both directions (later tasks add the GC
-/// reference ops, atomics, the lane-carrying SIMD ops, and EH).
+/// the atomic (threads) instructions (`AtomicRmw`/`Cmpxchg`/`AtomicNotify`/
+/// `AtomicWait`/`AtomicFence`), the table instructions + `call_indirect`
+/// (`TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`/
+/// `TableCopy`/`ElemDrop`/`CallIndirect`), and the core reference + tail-call
+/// instructions (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/
+/// `ReturnCallIndirect`). Any other instruction is rejected catchably by both
+/// directions (later tasks add the GC reference ops, the lane-carrying SIMD ops,
+/// and EH).
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.
@@ -454,6 +509,13 @@ pub struct InstrDesc {
   pub type_index: Option<u32>,
   /// `RefNull`: the reference type of the null being produced (`(ref null $t)`).
   pub ref_type: Option<RefType>,
+  /// `AtomicRmw`: the read/modify/write operation.
+  pub atomic_op: Option<AtomicOp>,
+  /// `AtomicRmw`/`Cmpxchg`: the access width of the atomic operation.
+  pub atomic_width: Option<AtomicWidth>,
+  /// `AtomicWait`: whether this is a 64-bit (`memory.atomic.wait64`) wait; `false`
+  /// is the 32-bit (`memory.atomic.wait32`) form.
+  pub sixty_four: Option<bool>,
 }
 
 impl InstrDesc {
@@ -485,6 +547,9 @@ impl InstrDesc {
       elem: None,
       type_index: None,
       ref_type: None,
+      atomic_op: None,
+      atomic_width: None,
+      sixty_four: None,
     }
   }
 }
@@ -758,6 +823,63 @@ fn store_kind_from_walrus(kind: wir::StoreKind) -> StoreKind {
 }
 
 // ---------------------------------------------------------------------------
+// AtomicOp / AtomicWidth <-> walrus. Pure value conversions (fieldless enums,
+// no arena ids, so no resolution and no fallibility). Both matches are
+// EXHAUSTIVE (no `_`) so a future walrus variant is a COMPILE error rather than
+// a silent mismap.
+// ---------------------------------------------------------------------------
+
+/// `AtomicOp` -> walrus. Total 1:1 mapping.
+fn atomic_op_to_walrus(op: &AtomicOp) -> wir::AtomicOp {
+  match op {
+    AtomicOp::Add => wir::AtomicOp::Add,
+    AtomicOp::Sub => wir::AtomicOp::Sub,
+    AtomicOp::And => wir::AtomicOp::And,
+    AtomicOp::Or => wir::AtomicOp::Or,
+    AtomicOp::Xor => wir::AtomicOp::Xor,
+    AtomicOp::Xchg => wir::AtomicOp::Xchg,
+  }
+}
+
+/// walrus `AtomicOp` -> our enum. Total 1:1 mapping.
+fn atomic_op_from_walrus(op: wir::AtomicOp) -> AtomicOp {
+  match op {
+    wir::AtomicOp::Add => AtomicOp::Add,
+    wir::AtomicOp::Sub => AtomicOp::Sub,
+    wir::AtomicOp::And => AtomicOp::And,
+    wir::AtomicOp::Or => AtomicOp::Or,
+    wir::AtomicOp::Xor => AtomicOp::Xor,
+    wir::AtomicOp::Xchg => AtomicOp::Xchg,
+  }
+}
+
+/// `AtomicWidth` -> walrus. Total 1:1 mapping.
+fn atomic_width_to_walrus(width: &AtomicWidth) -> wir::AtomicWidth {
+  match width {
+    AtomicWidth::I32 => wir::AtomicWidth::I32,
+    AtomicWidth::I32_8 => wir::AtomicWidth::I32_8,
+    AtomicWidth::I32_16 => wir::AtomicWidth::I32_16,
+    AtomicWidth::I64 => wir::AtomicWidth::I64,
+    AtomicWidth::I64_8 => wir::AtomicWidth::I64_8,
+    AtomicWidth::I64_16 => wir::AtomicWidth::I64_16,
+    AtomicWidth::I64_32 => wir::AtomicWidth::I64_32,
+  }
+}
+
+/// walrus `AtomicWidth` -> our enum. Total 1:1 mapping.
+fn atomic_width_from_walrus(width: wir::AtomicWidth) -> AtomicWidth {
+  match width {
+    wir::AtomicWidth::I32 => AtomicWidth::I32,
+    wir::AtomicWidth::I32_8 => AtomicWidth::I32_8,
+    wir::AtomicWidth::I32_16 => AtomicWidth::I32_16,
+    wir::AtomicWidth::I64 => AtomicWidth::I64,
+    wir::AtomicWidth::I64_8 => AtomicWidth::I64_8,
+    wir::AtomicWidth::I64_16 => AtomicWidth::I64_16,
+    wir::AtomicWidth::I64_32 => AtomicWidth::I64_32,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Label stack: relative depth <-> absolute InstrSeqId.
 // ---------------------------------------------------------------------------
 
@@ -1026,6 +1148,9 @@ fn emit_one(
     elem,
     type_index,
     ref_type,
+    atomic_op,
+    atomic_width,
+    sixty_four,
   } = d;
 
   match r#type.as_str() {
@@ -1222,6 +1347,26 @@ fn emit_one(
       let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("Store", "memArg"))?)?;
       fb.instr_seq(seq_id).instr(wir::Store { memory, kind, arg });
     }
+    // Atomic (threads) instructions. Delegated to `emit_atomic` (a separate,
+    // non-inlined function) SO THAT the atomic arms' locals do NOT inflate this
+    // recursive walker's stack frame: `emit_one` recurses once per control-flow
+    // nesting level (via the `Block`/`Loop`/`IfElse` arms), and in a debug build a
+    // single big `match` reserves frame space for EVERY arm's locals at every
+    // level. Keeping the atomic locals in their own frame preserves the
+    // `MAX_NESTING_DEPTH` headroom the deep-nesting abort guard depends on.
+    "AtomicRmw" | "Cmpxchg" | "AtomicNotify" | "AtomicWait" | "AtomicFence" => {
+      emit_atomic(
+        fb,
+        module,
+        seq_id,
+        r#type.as_str(),
+        memory,
+        atomic_op,
+        atomic_width,
+        mem_arg,
+        sixty_four,
+      )?;
+    }
     "TableGet" => {
       let table = table_id_at(module, table.ok_or_else(|| missing("TableGet", "table"))?)?;
       fb.instr_seq(seq_id).instr(wir::TableGet { table });
@@ -1324,8 +1469,8 @@ fn emit_one(
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
-         C1a/C1b/C2/C3/C4 core, control-flow, numeric-operator, memory/load-store, \
-         table, and reference/tail-call subset)"
+         C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
+         atomic, table, and reference/tail-call subset)"
       )));
     }
   }
@@ -1335,6 +1480,87 @@ fn emit_one(
 /// The error for a descriptor missing a payload field its `type` requires.
 fn missing(ty: &str, field: &str) -> Error {
   Error::from_reason(format!("`{ty}` instruction is missing its `{field}` field"))
+}
+
+/// Emit one atomic (threads) instruction. Split out of [`emit_one`] and marked
+/// `#[inline(never)]` so its locals live in their OWN frame rather than bloating
+/// the recursive `emit_one` frame (see the call site) — this preserves the
+/// deep-nesting stack headroom. `ty` is one of the five atomic discriminants; the
+/// caller guarantees that, so the final arm is `unreachable!`. Each memory-bearing
+/// atomic resolves its `memory` (the abort guard) and converts its `MemArg`
+/// (offset losslessness), exactly like Load/Store; the `AtomicOp`/`AtomicWidth`/
+/// `sixtyFour` immediates are plain values needing no resolution.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn emit_atomic(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  seq_id: wir::InstrSeqId,
+  ty: &str,
+  memory: Option<u32>,
+  atomic_op: Option<AtomicOp>,
+  atomic_width: Option<AtomicWidth>,
+  mem_arg: Option<MemArg>,
+  sixty_four: Option<bool>,
+) -> Result<()> {
+  match ty {
+    "AtomicRmw" => {
+      let memory = memory_id_at(
+        module,
+        memory.ok_or_else(|| missing("AtomicRmw", "memory"))?,
+      )?;
+      let op = atomic_op_to_walrus(&atomic_op.ok_or_else(|| missing("AtomicRmw", "atomicOp"))?);
+      let width =
+        atomic_width_to_walrus(&atomic_width.ok_or_else(|| missing("AtomicRmw", "atomicWidth"))?);
+      let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("AtomicRmw", "memArg"))?)?;
+      fb.instr_seq(seq_id).instr(wir::AtomicRmw {
+        memory,
+        op,
+        width,
+        arg,
+      });
+    }
+    "Cmpxchg" => {
+      let memory = memory_id_at(module, memory.ok_or_else(|| missing("Cmpxchg", "memory"))?)?;
+      let width =
+        atomic_width_to_walrus(&atomic_width.ok_or_else(|| missing("Cmpxchg", "atomicWidth"))?);
+      let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("Cmpxchg", "memArg"))?)?;
+      fb.instr_seq(seq_id)
+        .instr(wir::Cmpxchg { memory, width, arg });
+    }
+    "AtomicNotify" => {
+      let memory = memory_id_at(
+        module,
+        memory.ok_or_else(|| missing("AtomicNotify", "memory"))?,
+      )?;
+      let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("AtomicNotify", "memArg"))?)?;
+      fb.instr_seq(seq_id)
+        .instr(wir::AtomicNotify { memory, arg });
+    }
+    "AtomicWait" => {
+      let memory = memory_id_at(
+        module,
+        memory.ok_or_else(|| missing("AtomicWait", "memory"))?,
+      )?;
+      let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("AtomicWait", "memArg"))?)?;
+      let sixty_four = sixty_four.ok_or_else(|| missing("AtomicWait", "sixtyFour"))?;
+      fb.instr_seq(seq_id).instr(wir::AtomicWait {
+        memory,
+        arg,
+        sixty_four,
+      });
+    }
+    "AtomicFence" => {
+      fb.instr_seq(seq_id).instr(wir::AtomicFence {});
+    }
+    // Unreachable: `emit_one` only routes the five atomic discriminants here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not an atomic instruction"
+      )))
+    }
+  }
+  Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1544,6 +1770,13 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
           .ok_or_else(|| missing("Store", "memArg"))?,
       )?;
     }
+    // Atomic (threads) instructions. Delegated to `validate_atomic` (a separate,
+    // non-inlined function) for the SAME frame-size reason as `emit_atomic` (see
+    // its call site): `validate_one` recurses per nesting level, so the atomic
+    // arms' locals are kept out of its frame to preserve the deep-nesting headroom.
+    "AtomicRmw" | "Cmpxchg" | "AtomicNotify" | "AtomicWait" | "AtomicFence" => {
+      validate_atomic(module, d)?;
+    }
     // Table instructions + call_indirect. The fallible steps mirror emit exactly:
     // required fields present and each table/element/type index resolves (the
     // abort guards). `TableCopy` resolves BOTH tables; `TableInit` the table AND
@@ -1649,9 +1882,88 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
-         C1a/C1b/C2/C3/C4 core, control-flow, numeric-operator, memory/load-store, \
-         table, and reference/tail-call subset)"
+         C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
+         atomic, table, and reference/tail-call subset)"
       )));
+    }
+  }
+  Ok(())
+}
+
+/// Preflight one atomic (threads) descriptor. Split out of [`validate_one`] and
+/// marked `#[inline(never)]` for the same frame-size reason as [`emit_atomic`]
+/// (keep the atomic locals out of the recursive walker's frame). Mirrors
+/// `emit_atomic` arm-for-arm: required fields present, each `memory` resolves (the
+/// abort guard), and the `MemArg` offset is a lossless `u64`. The `AtomicOp`/
+/// `AtomicWidth`/`sixtyFour` immediates are plain values (no resolution), but
+/// their PRESENCE is still required — emit reads them AFTER `FunctionBuilder::new`
+/// has mutated the arena, so a missing one must be rejected pre-mutation.
+/// `AtomicFence` is fieldless. The caller only routes the five atomic
+/// discriminants here, so the final arm is unreachable.
+#[inline(never)]
+fn validate_atomic(module: &Module, d: &InstrDesc) -> Result<()> {
+  match d.r#type.as_str() {
+    "AtomicRmw" => {
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("AtomicRmw", "memory"))?,
+      )?;
+      d.atomic_op
+        .as_ref()
+        .ok_or_else(|| missing("AtomicRmw", "atomicOp"))?;
+      d.atomic_width
+        .as_ref()
+        .ok_or_else(|| missing("AtomicRmw", "atomicWidth"))?;
+      mem_arg_to_walrus(
+        d.mem_arg
+          .as_ref()
+          .ok_or_else(|| missing("AtomicRmw", "memArg"))?,
+      )?;
+    }
+    "Cmpxchg" => {
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("Cmpxchg", "memory"))?,
+      )?;
+      d.atomic_width
+        .as_ref()
+        .ok_or_else(|| missing("Cmpxchg", "atomicWidth"))?;
+      mem_arg_to_walrus(
+        d.mem_arg
+          .as_ref()
+          .ok_or_else(|| missing("Cmpxchg", "memArg"))?,
+      )?;
+    }
+    "AtomicNotify" => {
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("AtomicNotify", "memory"))?,
+      )?;
+      mem_arg_to_walrus(
+        d.mem_arg
+          .as_ref()
+          .ok_or_else(|| missing("AtomicNotify", "memArg"))?,
+      )?;
+    }
+    "AtomicWait" => {
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("AtomicWait", "memory"))?,
+      )?;
+      mem_arg_to_walrus(
+        d.mem_arg
+          .as_ref()
+          .ok_or_else(|| missing("AtomicWait", "memArg"))?,
+      )?;
+      d.sixty_four
+        .ok_or_else(|| missing("AtomicWait", "sixtyFour"))?;
+    }
+    "AtomicFence" => {}
+    // Unreachable: `validate_one` only routes the five atomic discriminants here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not an atomic instruction"
+      )))
     }
   }
   Ok(())
@@ -1888,6 +2200,35 @@ fn read_one(
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
       d
     }
+    wir::Instr::AtomicRmw(e) => {
+      let mut d = InstrDesc::new("AtomicRmw");
+      d.memory = Some(e.memory.index() as u32);
+      d.atomic_op = Some(atomic_op_from_walrus(e.op));
+      d.atomic_width = Some(atomic_width_from_walrus(e.width));
+      d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
+      d
+    }
+    wir::Instr::Cmpxchg(e) => {
+      let mut d = InstrDesc::new("Cmpxchg");
+      d.memory = Some(e.memory.index() as u32);
+      d.atomic_width = Some(atomic_width_from_walrus(e.width));
+      d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
+      d
+    }
+    wir::Instr::AtomicNotify(e) => {
+      let mut d = InstrDesc::new("AtomicNotify");
+      d.memory = Some(e.memory.index() as u32);
+      d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
+      d
+    }
+    wir::Instr::AtomicWait(e) => {
+      let mut d = InstrDesc::new("AtomicWait");
+      d.memory = Some(e.memory.index() as u32);
+      d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
+      d.sixty_four = Some(e.sixty_four);
+      d
+    }
+    wir::Instr::AtomicFence(_) => InstrDesc::new("AtomicFence"),
     wir::Instr::TableGet(e) => {
       let mut d = InstrDesc::new("TableGet");
       d.table = Some(e.table.index() as u32);
@@ -1972,8 +2313,8 @@ fn read_one(
       let dbg = format!("{other:?}");
       let name = dbg.split(['(', ' ', '{']).next().unwrap_or("unknown");
       return Err(Error::from_reason(format!(
-        "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2/C3/C4 \
-         core, control-flow, numeric-operator, memory/load-store, table, and \
+        "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2/C3/C4/C5 \
+         core, control-flow, numeric-operator, memory/load-store, atomic, table, and \
          reference/tail-call subset is)"
       )));
     }

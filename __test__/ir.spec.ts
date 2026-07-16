@@ -8,6 +8,8 @@ import {
   ConstExpr,
   ModuleConfig,
   WasmModule,
+  type AtomicOp,
+  type AtomicWidth,
   type InstrDesc,
   type LoadKind,
   type MemArg,
@@ -1354,4 +1356,217 @@ test('C4 negative: a reference/tail-call descriptor missing a required field thr
   t.throws(() => m.buildFunction([], [], [], [{ type: 'ReturnCallIndirect', typeIndex: cty }]), {
     message: /`ReturnCallIndirect` instruction is missing its `table` field/,
   })
+})
+
+// ---------------------------------------------------------------------------
+// C5: atomic (threads) instructions — AtomicRmw/Cmpxchg/AtomicNotify/
+// AtomicWait/AtomicFence.
+//
+// Direct sibling of C2: the four memory-bearing atomics REUSE C2's memory
+// resolver and the MemArg (align + a u64 offset as a bigint) type. Two small
+// string enums are added: AtomicOp (the rmw op) and AtomicWidth (the access
+// width). Same walrus fact as C1b–C4: `strict_validate(false)` is a no-op in
+// 0.26.4, so an ill-typed body can never re-parse. The EXHAUSTIVE test therefore
+// uses the IN-MEMORY read path (buildFunction -> instructions() on the same
+// module); a separate WELL-TYPED body proves the ops survive the emit -> bytes
+// -> re-parse boundary (atomics validate only against a SHARED memory).
+//
+// MIRROR-WALRUS: buildFunction only guards process-aborting hazards (the memory
+// index resolves; a MemArg offset is a lossless u64) and required-field presence.
+// It does NOT type-check — an atomic on a non-shared memory, a mismatched
+// alignment, or an illegal op/width combination all build and emit as-is (which
+// is why the in-memory body below needs neither a shared memory nor natural
+// alignment).
+// ---------------------------------------------------------------------------
+
+const ALL_ATOMIC_OPS: AtomicOp[] = ['Add', 'Sub', 'And', 'Or', 'Xor', 'Xchg']
+const ALL_ATOMIC_WIDTHS: AtomicWidth[] = ['I32', 'I32_8', 'I32_16', 'I64', 'I64_8', 'I64_16', 'I64_32']
+
+// A body exercising all 5 atomics: AtomicRmw over EVERY op x width pair (6 x 7 =
+// 42), Cmpxchg over every width, AtomicNotify, AtomicWait with sixtyFour both
+// true and false, and AtomicFence. MemArgs vary per position (so the large and
+// u64::MAX offsets both appear), proving the reused MemArg bigint path is exact.
+function atomicComprehensiveBody(mem: number): InstrDesc[] {
+  const body: InstrDesc[] = []
+  let i = 0
+  for (const op of ALL_ATOMIC_OPS) {
+    for (const width of ALL_ATOMIC_WIDTHS) {
+      body.push({ type: 'AtomicRmw', memory: mem, atomicOp: op, atomicWidth: width, memArg: memArgAt(i++) })
+    }
+  }
+  for (const width of ALL_ATOMIC_WIDTHS) {
+    body.push({ type: 'Cmpxchg', memory: mem, atomicWidth: width, memArg: memArgAt(i++) })
+  }
+  body.push({ type: 'AtomicNotify', memory: mem, memArg: memArgAt(i++) })
+  body.push({ type: 'AtomicWait', memory: mem, memArg: memArgAt(i++), sixtyFour: false })
+  body.push({ type: 'AtomicWait', memory: mem, memArg: memArgAt(i++), sixtyFour: true })
+  body.push({ type: 'AtomicFence' })
+  return body
+}
+
+test('C5 EXHAUSTIVE: all 5 atomics + every AtomicOp/AtomicWidth round-trip in-memory', (t) => {
+  const m = empty()
+  // A plain (non-shared) memory: MIRROR-WALRUS builds the ill-typed body anyway.
+  const mem = m.memories.addLocal(false, false, 1n, null, null).index
+  const body = atomicComprehensiveBody(mem)
+
+  const idx = m.buildFunction([], [], [], body)
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+
+  // Sanity: all 5 atomic kinds are present.
+  const kinds = new Set(read.map((d) => d.type))
+  for (const k of ['AtomicRmw', 'Cmpxchg', 'AtomicNotify', 'AtomicWait', 'AtomicFence']) {
+    t.true(kinds.has(k), `body should contain a ${k}`)
+  }
+  // Every AtomicOp and every AtomicWidth survived at least once.
+  const ops = new Set(read.filter((d) => d.type === 'AtomicRmw').map((d) => d.atomicOp))
+  t.is(ops.size, ALL_ATOMIC_OPS.length)
+  const widths = new Set(read.filter((d) => d.atomicWidth != null).map((d) => d.atomicWidth))
+  t.is(widths.size, ALL_ATOMIC_WIDTHS.length)
+  // AtomicWait's sixtyFour round-trips for BOTH values.
+  const waits = read.filter((d) => d.type === 'AtomicWait')
+  t.deepEqual(
+    waits.map((d) => d.sixtyFour).sort(),
+    [false, true],
+  )
+  // A u64::MAX MemArg offset survived exactly (the reused bigint path is lossless
+  // at the full width).
+  t.true(
+    read.some((d) => d.memArg?.offset === U64_MAX),
+    'a u64::MAX MemArg offset must round-trip exactly',
+  )
+})
+
+test('C5: a well-typed atomic body emits valid wasm and round-trips through re-parse', (t) => {
+  const m = empty()
+  // Atomics validate only against a SHARED memory (strictValidate, default true,
+  // on the re-parse enforces this), so the well-typed body needs one. A shared
+  // memory requires a maximum. Natural alignment matches each access width
+  // (i32/notify/wait32 = 4, wait64 = 8).
+  const mem = m.memories.addLocal(true, false, 1n, 1n, null).index
+  const body: InstrDesc[] = [
+    // i32.atomic.rmw.add: [addr, value] -> [old]; drop.
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'I32', value: 1 } },
+    { type: 'AtomicRmw', memory: mem, atomicOp: 'Add', atomicWidth: 'I32', memArg: { align: 4, offset: 0n } },
+    { type: 'Drop' },
+    // i32.atomic.rmw.cmpxchg: [addr, expected, replacement] -> [old]; drop.
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'I32', value: 1 } },
+    { type: 'Cmpxchg', memory: mem, atomicWidth: 'I32', memArg: { align: 4, offset: 0n } },
+    { type: 'Drop' },
+    // memory.atomic.notify: [addr, count] -> [woken]; drop.
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'I32', value: 1 } },
+    { type: 'AtomicNotify', memory: mem, memArg: { align: 4, offset: 0n } },
+    { type: 'Drop' },
+    // memory.atomic.wait32: [addr, expected:i32, timeout:i64] -> [result]; drop.
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'I64', value: -1n } },
+    { type: 'AtomicWait', memory: mem, memArg: { align: 4, offset: 0n }, sixtyFour: false },
+    { type: 'Drop' },
+    // memory.atomic.wait64: [addr, expected:i64, timeout:i64] -> [result]; drop.
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'I64', value: 0n } },
+    { type: 'Const', value: { type: 'I64', value: -1n } },
+    { type: 'AtomicWait', memory: mem, memArg: { align: 8, offset: 0n }, sixtyFour: true },
+    { type: 'Drop' },
+    // atomic.fence.
+    { type: 'AtomicFence' },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'atomics'
+  const bytes = m.emitWasm(false)
+
+  // Independent proof the bytes are real, well-typed threads wasm.
+  t.true(WebAssembly.validate(bytes))
+
+  // Re-parse (default config: strictValidate true, threads enabled) and read back:
+  // every atomic decodes to the same descriptor (align exponents and offsets
+  // survive the binary round-trip).
+  const read = WasmModule.fromBuffer(bytes).functions.byName('atomics')!.instructions()
+  t.deepEqual(read, body)
+})
+
+test('C5 negative: an out-of-range/foreign memory index throws catchably (no abort)', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null) // memory index 0 exists; 5 does not
+
+  const rmw = { type: 'AtomicRmw', memory: 5, atomicOp: 'Add', atomicWidth: 'I32', memArg: { align: 4, offset: 0n } }
+  t.throws(() => m.buildFunction([], [], [], [rmw as InstrDesc]), { message: /no memory at index 5/ })
+  // The guard covers every memory-bearing atomic, not just AtomicRmw.
+  t.throws(
+    () => m.buildFunction([], [], [], [{ type: 'Cmpxchg', memory: 8, atomicWidth: 'I32', memArg: { align: 4, offset: 0n } }]),
+    { message: /no memory at index 8/ },
+  )
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'AtomicNotify', memory: 6, memArg: { align: 4, offset: 0n } }]), {
+    message: /no memory at index 6/,
+  })
+  t.throws(
+    () => m.buildFunction([], [], [], [{ type: 'AtomicWait', memory: 7, memArg: { align: 4, offset: 0n }, sixtyFour: false }]),
+    { message: /no memory at index 7/ },
+  )
+  // Process is still alive and the module was never mutated (a real abort would
+  // have taken the whole run down — the proof under WASI).
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C5 negative: an atomic descriptor missing a required field throws catchably', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null)
+  const arg = { align: 4, offset: 0n }
+
+  // AtomicRmw: atomicOp is checked before atomicWidth, which is checked before
+  // memArg (matching emit's order).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'AtomicRmw', memory: 0, atomicWidth: 'I32', memArg: arg }]), {
+    message: /`AtomicRmw` instruction is missing its `atomicOp` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'AtomicRmw', memory: 0, atomicOp: 'Add', memArg: arg }]), {
+    message: /`AtomicRmw` instruction is missing its `atomicWidth` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'AtomicRmw', memory: 0, atomicOp: 'Add', atomicWidth: 'I32' }]), {
+    message: /`AtomicRmw` instruction is missing its `memArg` field/,
+  })
+  // Cmpxchg requires atomicWidth (but no atomicOp).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Cmpxchg', memory: 0, memArg: arg }]), {
+    message: /`Cmpxchg` instruction is missing its `atomicWidth` field/,
+  })
+  // AtomicNotify requires memArg.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'AtomicNotify', memory: 0 }]), {
+    message: /`AtomicNotify` instruction is missing its `memArg` field/,
+  })
+  // AtomicWait requires sixtyFour (checked after memArg).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'AtomicWait', memory: 0, memArg: arg }]), {
+    message: /`AtomicWait` instruction is missing its `sixtyFour` field/,
+  })
+  // A missing memory is guarded for every atomic too.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'AtomicRmw', atomicOp: 'Add', atomicWidth: 'I32', memArg: arg }]), {
+    message: /`AtomicRmw` instruction is missing its `memory` field/,
+  })
+})
+
+test('C5 negative: a non-lossless MemArg offset on an atomic throws catchably', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null)
+  const rmw = (offset: bigint): InstrDesc => ({
+    type: 'AtomicRmw',
+    memory: 0,
+    atomicOp: 'Add',
+    atomicWidth: 'I32',
+    memArg: { align: 4, offset },
+  })
+
+  // 2^64 is one past u64::MAX — not lossless.
+  t.throws(() => m.buildFunction([], [], [], [rmw(1n << 64n)]), {
+    message: /MemArg offset must be a non-negative integer that fits in a u64/,
+  })
+  // A negative offset is rejected too (a u64 has no sign).
+  t.throws(() => m.buildFunction([], [], [], [rmw(-1n)]), {
+    message: /MemArg offset must be a non-negative integer that fits in a u64/,
+  })
+  t.is(1 + 1, 2)
 })

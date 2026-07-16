@@ -1648,6 +1648,61 @@ export declare const enum AbstractHeapType {
 }
 
 /**
+ * The read/modify/write operation of an `AtomicRmw`, mirroring
+ * `walrus::ir::AtomicOp` (`ir/mod.rs:1665`, fieldless).
+ *
+ * Generated as a string enum: `'Add' | 'Sub' | 'And' | 'Or' | 'Xor' | 'Xchg'`.
+ *
+ * These are the six atomic rmw ops (`i32.atomic.rmw.add`, `… .sub`, `… .and`,
+ * `… .or`, `… .xor`, `… .xchg`); the compare-exchange rmw is the separate
+ * [`InstrDesc`] `Cmpxchg` instruction, not an `AtomicOp`.
+ */
+export declare const enum AtomicOp {
+  /** Atomic add (`*.atomic.rmw.add`). */
+  Add = 'Add',
+  /** Atomic subtract (`*.atomic.rmw.sub`). */
+  Sub = 'Sub',
+  /** Atomic bitwise and (`*.atomic.rmw.and`). */
+  And = 'And',
+  /** Atomic bitwise or (`*.atomic.rmw.or`). */
+  Or = 'Or',
+  /** Atomic bitwise xor (`*.atomic.rmw.xor`). */
+  Xor = 'Xor',
+  /** Atomic exchange (`*.atomic.rmw.xchg`). */
+  Xchg = 'Xchg'
+}
+
+/**
+ * The access width of an atomic memory operation, mirroring
+ * `walrus::ir::AtomicWidth` (`ir/mod.rs:1677`, fieldless). Carried by
+ * `AtomicRmw` (with an [`AtomicOp`]) and `Cmpxchg`.
+ *
+ * Generated as a string enum:
+ * `'I32' | 'I32_8' | 'I32_16' | 'I64' | 'I64_8' | 'I64_16' | 'I64_32'`.
+ *
+ * The bare `I32`/`I64` are the full-width ops; the `_8`/`_16`/`_32` suffixes are
+ * the sub-word ops that operate on a narrow slice of the value (`I32_8` =
+ * `i32.atomic.rmw8`, `I64_32` = `i64.atomic.rmw32`, …). MIRROR-WALRUS: whether
+ * the width is legal for a given op is NOT checked here.
+ */
+export declare const enum AtomicWidth {
+  /** A full-width 32-bit atomic op. */
+  I32 = 'I32',
+  /** An 8-bit-wide atomic op on an `i32` value. */
+  I32_8 = 'I32_8',
+  /** A 16-bit-wide atomic op on an `i32` value. */
+  I32_16 = 'I32_16',
+  /** A full-width 64-bit atomic op. */
+  I64 = 'I64',
+  /** An 8-bit-wide atomic op on an `i64` value. */
+  I64_8 = 'I64_8',
+  /** A 16-bit-wide atomic op on an `i64` value. */
+  I64_16 = 'I64_16',
+  /** A 32-bit-wide atomic op on an `i64` value. */
+  I64_32 = 'I64_32'
+}
+
+/**
  * The type of a control-flow block (`block`/`loop`/`if`), mirroring
  * `walrus::ir::InstrSeqType`.
  *
@@ -1933,18 +1988,20 @@ export declare const enum ImportKindTag {
  * `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
  * `if`/`else`), making the interface self-referential.
  *
- * This is the C1a/C1b/C2/C3/C4 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
- * `Const`, local/global get/set/tee, `Call`, `Select`, the control constructs
- * (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), the
- * numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
+ * This is the C1a/C1b/C2/C3/C4/C5 subset: leaf ops (`Unreachable`/`Return`/
+ * `Drop`), `Const`, local/global get/set/tee, `Call`, `Select`, the control
+ * constructs (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`),
+ * the numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
  * `op`), the memory + general load/store instructions (`MemorySize`/
  * `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`),
- * the table instructions + `call_indirect` (`TableGet`/`TableSet`/
- * `TableGrow`/`TableSize`/`TableFill`/`TableInit`/`TableCopy`/`ElemDrop`/
- * `CallIndirect`), and the core reference + tail-call instructions
- * (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/`ReturnCallIndirect`). Any other
- * instruction is rejected catchably by both directions (later tasks add the GC
- * reference ops, atomics, the lane-carrying SIMD ops, and EH).
+ * the atomic (threads) instructions (`AtomicRmw`/`Cmpxchg`/`AtomicNotify`/
+ * `AtomicWait`/`AtomicFence`), the table instructions + `call_indirect`
+ * (`TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`/
+ * `TableCopy`/`ElemDrop`/`CallIndirect`), and the core reference + tail-call
+ * instructions (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/
+ * `ReturnCallIndirect`). Any other instruction is rejected catchably by both
+ * directions (later tasks add the GC reference ops, the lane-carrying SIMD ops,
+ * and EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -2030,6 +2087,15 @@ export interface InstrDesc {
   typeIndex?: number
   /** `RefNull`: the reference type of the null being produced (`(ref null $t)`). */
   refType?: RefType
+  /** `AtomicRmw`: the read/modify/write operation. */
+  atomicOp?: AtomicOp
+  /** `AtomicRmw`/`Cmpxchg`: the access width of the atomic operation. */
+  atomicWidth?: AtomicWidth
+  /**
+   * `AtomicWait`: whether this is a 64-bit (`memory.atomic.wait64`) wait; `false`
+   * is the 32-bit (`memory.atomic.wait32`) form.
+   */
+  sixtyFour?: boolean
 }
 
 /**
