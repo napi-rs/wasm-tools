@@ -754,6 +754,12 @@ export declare class WasmModule {
    * returned object reads and writes back to this module.
    */
   get elements(): WasmElements
+  /**
+   * The tags (exception-handling tags) of this module. Each handle
+   * materialized through the returned object reads and writes back to this
+   * module.
+   */
+  get tags(): WasmTags
 }
 
 /**
@@ -877,6 +883,85 @@ export declare class WasmTables {
    * the accessor handles), so it stays valid as long as it is held.
    */
   addLocal(table64: boolean, initial: bigint, maximum: bigint | undefined | null, elementTy: ValType): WasmTable
+}
+
+/**
+ * A single tag in a module, as a live handle: it holds the tag's id plus a
+ * strong reference to the owning [`WasmModule`], and every accessor reads or
+ * writes through to that module.
+ */
+export declare class WasmTag {
+  /**
+   * This tag's stable index — its identity for numeric lookup. Readable even
+   * after the tag is deleted (it never touches the arena).
+   */
+  get index(): number
+  /** This tag's name from the wasm "name" custom section, if any. */
+  get name(): string | null
+  /** Set this tag's name, stored in the wasm "name" custom section. */
+  set name(name: string | undefined | null)
+  /** Whether this tag is imported or locally defined (read only). */
+  get kind(): TagKindTag
+  /**
+   * This tag's type, as a live [`WasmType`] handle into the module's type
+   * arena.
+   *
+   * A method (not a getter) because it materializes a fresh `WasmType` wrapper
+   * on each call. For an exception tag this type's `params()` are the
+   * exception's payload value types.
+   */
+  ty(): WasmType
+}
+
+/**
+ * The tags (exception-handling tags) of a module. Each accessor materializes a
+ * fresh [`WasmTag`] handle that reads and writes straight through to the owning
+ * [`WasmModule`]; the collection itself caches nothing.
+ */
+export declare class WasmTags {
+  /** The number of tags in the module. */
+  get length(): number
+  /** Every tag in the module, as live item handles. */
+  items(): Array<WasmTag>
+  /** The tag whose stable `.index` equals `index`, or `null` if none exists. */
+  getByIndex(index: number): WasmTag | null
+  /**
+   * Delete a tag from the module. Takes the handle itself: a JS number can
+   * never be turned back into a walrus id, so the wrapper is the only way to
+   * name an item for removal.
+   *
+   * It is the caller's responsibility to ensure nothing still references the
+   * deleted tag (walrus does not check; a dangling export or `throw`
+   * instruction aborts at emit time). Unlike active data/element segments,
+   * tags carry NO parser-maintained back-link set on any owner item (the only
+   * `IdHashSet<Tag>` in walrus is the gc pass's own transient `Used` set, built
+   * fresh from exports and `throw` sites each run), so a plain guarded delete
+   * is sufficient — there is no back-link to clean.
+   *
+   * Same no-panic invariant as the item accessors: walrus' `ModuleTags::delete`
+   * tombstones the arena entry and a later access asserts liveness, and a panic
+   * across FFI aborts the process. Id equality includes the arena_id, so this
+   * liveness scan rejects BOTH already-deleted ids (`iter()` skips tombstoned
+   * entries) AND handles that belong to a different module (arena_id mismatch),
+   * surfacing a catchable JS error instead of aborting.
+   */
+  delete(tag: WasmTag): void
+  /**
+   * Add a new locally defined tag with the given type, returning a live handle
+   * to it. `ty` is the tag's (function) type signature — for an exception tag
+   * its params are the exception's payload value types.
+   *
+   * Fallible: `ty` must be a live type in THIS module. walrus stores the raw
+   * `TypeId` and resolves it to an index at emit time via a panicking
+   * `get_type_index`; a foreign-module or already-deleted type handle would
+   * abort the whole Node process there. We reject such an id with a catchable
+   * error BEFORE touching the arena, so a failed add never mutates the module.
+   * Same id-ref rule as `globals.addLocal` / `data.addActive`.
+   *
+   * The returned handle holds its own strong reference to the module (same as
+   * the accessor handles), so it stays valid as long as it is held.
+   */
+  add(ty: WasmType): WasmTag
 }
 
 /**
@@ -1163,6 +1248,20 @@ export interface ProducerValueInfo {
 export interface RawSectionInfo {
   name: string
   data?: Uint8Array
+}
+
+/**
+ * Whether a tag is imported or locally defined.
+ *
+ * Mirrors the discriminant of `walrus::TagKind` (`Import(ImportId)` /
+ * `Local`). The companion accessor that exposes the import handle for an
+ * imported tag is deferred to the imports task; only the tag is exposed here.
+ */
+export declare const enum TagKindTag {
+  /** An imported tag (defined by the host). */
+  Import = 'Import',
+  /** A locally defined tag. */
+  Local = 'Local'
 }
 
 /**

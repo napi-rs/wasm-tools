@@ -5,7 +5,7 @@ use walrus::{Module, RawCustomSection};
 
 use crate::{
   ModuleConfig, WasmCustomSections, WasmDataSegments, WasmElements, WasmFunctions, WasmGlobals,
-  WasmLocals, WasmMemories, WasmProducers, WasmTables, WasmTypes,
+  WasmLocals, WasmMemories, WasmProducers, WasmTables, WasmTags, WasmTypes,
 };
 
 #[napi]
@@ -179,6 +179,16 @@ impl WasmModule {
   /// returned object reads and writes back to this module.
   pub fn elements(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmElements> {
     Ok(WasmElements {
+      module: this.clone(env)?,
+    })
+  }
+
+  #[napi(getter)]
+  /// The tags (exception-handling tags) of this module. Each handle
+  /// materialized through the returned object reads and writes back to this
+  /// module.
+  pub fn tags(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmTags> {
+    Ok(WasmTags {
       module: this.clone(env)?,
     })
   }
