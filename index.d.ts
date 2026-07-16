@@ -1933,17 +1933,18 @@ export declare const enum ImportKindTag {
  * `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
  * `if`/`else`), making the interface self-referential.
  *
- * This is the C1a/C1b/C2/C3 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
+ * This is the C1a/C1b/C2/C3/C4 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
  * `Const`, local/global get/set/tee, `Call`, `Select`, the control constructs
  * (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), the
  * numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
  * `op`), the memory + general load/store instructions (`MemorySize`/
  * `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`),
- * and the table instructions + `call_indirect` (`TableGet`/`TableSet`/
+ * the table instructions + `call_indirect` (`TableGet`/`TableSet`/
  * `TableGrow`/`TableSize`/`TableFill`/`TableInit`/`TableCopy`/`ElemDrop`/
- * `CallIndirect`). Any other instruction is rejected catchably by both
- * directions (later tasks add refs, tail-calls, atomics, the lane-carrying SIMD
- * ops, GC, and EH).
+ * `CallIndirect`), and the core reference + tail-call instructions
+ * (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/`ReturnCallIndirect`). Any other
+ * instruction is rejected catchably by both directions (later tasks add the GC
+ * reference ops, atomics, the lane-carrying SIMD ops, and EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -1954,7 +1955,10 @@ export interface InstrDesc {
   local?: number
   /** `GlobalGet`/`GlobalSet`: the referenced global's stable index. */
   global?: number
-  /** `Call`: the callee function's stable index. */
+  /**
+   * The referenced function's stable index, for `Call`, `RefFunc` (`ref.func`),
+   * and `ReturnCall` (`return_call`).
+   */
   func?: number
   /**
    * `Select`: the optional result type of a typed `select` (absent => a plain,
@@ -2007,7 +2011,8 @@ export interface InstrDesc {
   /**
    * The referenced table's stable index, for
    * `TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`, the
-   * DESTINATION table of `TableCopy`, and the table of `CallIndirect`.
+   * DESTINATION table of `TableCopy`, and the table of `CallIndirect` /
+   * `ReturnCallIndirect`.
    */
   table?: number
   /**
@@ -2018,10 +2023,13 @@ export interface InstrDesc {
   /** `TableInit`/`ElemDrop`: the referenced element segment's stable index. */
   elem?: number
   /**
-   * `CallIndirect`: the stable index of the function type being called through
-   * the table (named `typeIndex`, matching `BlockType::MultiValue`).
+   * The stable index of the function type being called through the table, for
+   * `CallIndirect` and `ReturnCallIndirect` (named `typeIndex`, matching
+   * `BlockType::MultiValue`).
    */
   typeIndex?: number
+  /** `RefNull`: the reference type of the null being produced (`(ref null $t)`). */
+  refType?: RefType
 }
 
 /**
@@ -2111,6 +2119,29 @@ export interface ProducerValueInfo {
 export interface RawSectionInfo {
   name: string
   data?: Uint8Array
+}
+
+/**
+ * The reference type carried by a `RefNull` instruction, mirroring
+ * `walrus::RefType` (`ty.rs:874`): a `nullable` flag plus the [`HeapType`] the
+ * null belongs to (`(ref null $t)`).
+ *
+ * Generated as a `#[napi(object)]`: `{ nullable: boolean, heap: HeapType }`.
+ *
+ * This exists because `RefNull` is the one instruction whose payload is a whole
+ * `RefType` rather than a bare id. It REUSES the existing [`HeapType`] napi enum
+ * (no separate abstract/concrete plumbing): a concrete/exact `heap` carries a
+ * `type_index` that emit resolves against the live arena via the module-aware
+ * [`crate::convert::heap_type_to_walrus_in`] — a foreign/deleted/entry index is
+ * rejected catchably there rather than aborting the process at emit. `walrus`
+ * inlines `RefType` into `ValType::Ref` (see [`ValType`]); this is the same two
+ * fields, surfaced as a named object only for `InstrDesc.refType`.
+ */
+export interface RefType {
+  /** Whether the reference is nullable (mirrors `RefType::nullable`). */
+  nullable: boolean
+  /** The heap type the reference points to (mirrors `RefType::heap_type`). */
+  heap: HeapType
 }
 
 /**

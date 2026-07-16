@@ -30,12 +30,15 @@
 //! ## MIRROR-WALRUS
 //! Only process-aborting hazards are guarded: an out-of-range local/global/func/
 //! memory/data/table/element index, an out-of-range branch label, a bad
-//! multi-value or `call_indirect` type index, or a `MemArg` offset that is not a
-//! lossless `u64` are rejected with a catchable error BEFORE a panicking walrus
-//! lookup can be reached. Nothing here validates wasm well-formedness — an
-//! ill-typed body (a non-power-of-two alignment, an out-of-bounds access, an
-//! atomic op on a non-shared memory, a `call_indirect` whose type does not match
-//! the callee, …) is emitted as-is and left for `WebAssembly.validate` to reject.
+//! multi-value or `call_indirect`/`return_call_indirect` type index, a
+//! `ref.null` heap type naming a foreign/deleted/entry concrete type, or a
+//! `MemArg` offset that is not a lossless `u64` are rejected with a catchable
+//! error BEFORE a panicking walrus lookup can be reached. Nothing here validates
+//! wasm well-formedness — an ill-typed body (a non-power-of-two alignment, an
+//! out-of-bounds access, an atomic op on a non-shared memory, a `call_indirect`
+//! whose type does not match the callee, a `ref.func` to an undeclared function,
+//! a tail call whose signature does not match, …) is emitted as-is and left for
+//! `WebAssembly.validate` to reject.
 
 use napi::bindgen_prelude::{BigInt, Result};
 use napi::Error;
@@ -47,9 +50,9 @@ use walrus::{
   Module, TableId,
 };
 
-use crate::convert::{resolve_type_id, val_type_to_walrus_in};
+use crate::convert::{heap_type_to_walrus_in, resolve_type_id, val_type_to_walrus_in};
 use crate::handle::bigint_to_u64;
-use crate::valtype::ValType;
+use crate::valtype::{HeapType, ValType};
 
 /// The maximum control-flow nesting depth the three instruction walks
 /// (`validate_body`, `emit_desc`, `read_instr_seq`) will descend before
@@ -340,6 +343,28 @@ pub enum StoreKind {
   },
 }
 
+/// The reference type carried by a `RefNull` instruction, mirroring
+/// `walrus::RefType` (`ty.rs:874`): a `nullable` flag plus the [`HeapType`] the
+/// null belongs to (`(ref null $t)`).
+///
+/// Generated as a `#[napi(object)]`: `{ nullable: boolean, heap: HeapType }`.
+///
+/// This exists because `RefNull` is the one instruction whose payload is a whole
+/// `RefType` rather than a bare id. It REUSES the existing [`HeapType`] napi enum
+/// (no separate abstract/concrete plumbing): a concrete/exact `heap` carries a
+/// `type_index` that emit resolves against the live arena via the module-aware
+/// [`crate::convert::heap_type_to_walrus_in`] — a foreign/deleted/entry index is
+/// rejected catchably there rather than aborting the process at emit. `walrus`
+/// inlines `RefType` into `ValType::Ref` (see [`ValType`]); this is the same two
+/// fields, surfaced as a named object only for `InstrDesc.refType`.
+#[napi(object)]
+pub struct RefType {
+  /// Whether the reference is nullable (mirrors `RefType::nullable`).
+  pub nullable: bool,
+  /// The heap type the reference points to (mirrors `RefType::heap_type`).
+  pub heap: HeapType,
+}
+
 /// A single wasm instruction, as a wide tagged record shared by both the read
 /// (`WasmFunction::instructions`) and build (`WasmModule::buildFunction`)
 /// directions.
@@ -350,17 +375,18 @@ pub enum StoreKind {
 /// `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
 /// `if`/`else`), making the interface self-referential.
 ///
-/// This is the C1a/C1b/C2/C3 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
+/// This is the C1a/C1b/C2/C3/C4 subset: leaf ops (`Unreachable`/`Return`/`Drop`),
 /// `Const`, local/global get/set/tee, `Call`, `Select`, the control constructs
 /// (`Block`/`Loop`/`IfElse`), the branches (`Br`/`BrIf`/`BrTable`), the
 /// numeric/comparison/conversion operators (`Binop`/`Unop`/`TernOp`, keyed by
 /// `op`), the memory + general load/store instructions (`MemorySize`/
 /// `MemoryGrow`/`MemoryInit`/`DataDrop`/`MemoryCopy`/`MemoryFill`/`Load`/`Store`),
-/// and the table instructions + `call_indirect` (`TableGet`/`TableSet`/
+/// the table instructions + `call_indirect` (`TableGet`/`TableSet`/
 /// `TableGrow`/`TableSize`/`TableFill`/`TableInit`/`TableCopy`/`ElemDrop`/
-/// `CallIndirect`). Any other instruction is rejected catchably by both
-/// directions (later tasks add refs, tail-calls, atomics, the lane-carrying SIMD
-/// ops, GC, and EH).
+/// `CallIndirect`), and the core reference + tail-call instructions
+/// (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/`ReturnCallIndirect`). Any other
+/// instruction is rejected catchably by both directions (later tasks add the GC
+/// reference ops, atomics, the lane-carrying SIMD ops, and EH).
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.
@@ -371,7 +397,8 @@ pub struct InstrDesc {
   pub local: Option<u32>,
   /// `GlobalGet`/`GlobalSet`: the referenced global's stable index.
   pub global: Option<u32>,
-  /// `Call`: the callee function's stable index.
+  /// The referenced function's stable index, for `Call`, `RefFunc` (`ref.func`),
+  /// and `ReturnCall` (`return_call`).
   pub func: Option<u32>,
   /// `Select`: the optional result type of a typed `select` (absent => a plain,
   /// untyped `select`).
@@ -413,16 +440,20 @@ pub struct InstrDesc {
   pub store_kind: Option<StoreKind>,
   /// The referenced table's stable index, for
   /// `TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`, the
-  /// DESTINATION table of `TableCopy`, and the table of `CallIndirect`.
+  /// DESTINATION table of `TableCopy`, and the table of `CallIndirect` /
+  /// `ReturnCallIndirect`.
   pub table: Option<u32>,
   /// `TableCopy`: the SOURCE table's stable index (the destination uses
   /// `table`).
   pub src_table: Option<u32>,
   /// `TableInit`/`ElemDrop`: the referenced element segment's stable index.
   pub elem: Option<u32>,
-  /// `CallIndirect`: the stable index of the function type being called through
-  /// the table (named `typeIndex`, matching `BlockType::MultiValue`).
+  /// The stable index of the function type being called through the table, for
+  /// `CallIndirect` and `ReturnCallIndirect` (named `typeIndex`, matching
+  /// `BlockType::MultiValue`).
   pub type_index: Option<u32>,
+  /// `RefNull`: the reference type of the null being produced (`(ref null $t)`).
+  pub ref_type: Option<RefType>,
 }
 
 impl InstrDesc {
@@ -453,6 +484,7 @@ impl InstrDesc {
       src_table: None,
       elem: None,
       type_index: None,
+      ref_type: None,
     }
   }
 }
@@ -993,6 +1025,7 @@ fn emit_one(
     src_table,
     elem,
     type_index,
+    ref_type,
   } = d;
 
   match r#type.as_str() {
@@ -1242,11 +1275,57 @@ fn emit_one(
       )?;
       fb.instr_seq(seq_id).instr(wir::CallIndirect { ty, table });
     }
+    "RefNull" => {
+      // The one ref instruction whose payload is a whole `RefType`. Route the
+      // heap type through the MODULE-AWARE `heap_type_to_walrus_in`: a
+      // concrete/exact heap carries a `TypeId` that a non-module-aware conversion
+      // could not rebuild, and a foreign/deleted/entry index reaching emit panics
+      // walrus (`get_type_index`) into an uncatchable abort — resolving it here
+      // turns that into a catchable error. MIRROR-WALRUS: whether the null type is
+      // legal is NOT checked.
+      let rt = ref_type.ok_or_else(|| missing("RefNull", "refType"))?;
+      let heap_type = heap_type_to_walrus_in(module, rt.heap)?;
+      fb.instr_seq(seq_id).instr(wir::RefNull {
+        ty: walrus::RefType {
+          nullable: rt.nullable,
+          heap_type,
+        },
+      });
+    }
+    "RefIsNull" => {
+      fb.instr_seq(seq_id).instr(wir::RefIsNull {});
+    }
+    "RefFunc" => {
+      // Reuse `function_id_at` (the abort guard). MIRROR-WALRUS: whether the func
+      // is "declared" for `ref.func` is NOT our concern.
+      let func = function_id_at(module, func.ok_or_else(|| missing("RefFunc", "func"))?)?;
+      fb.instr_seq(seq_id).instr(wir::RefFunc { func });
+    }
+    "ReturnCall" => {
+      let func = function_id_at(module, func.ok_or_else(|| missing("ReturnCall", "func"))?)?;
+      fb.instr_seq(seq_id).instr(wir::ReturnCall { func });
+    }
+    "ReturnCallIndirect" => {
+      // Identical payload handling to `CallIndirect`: reuse `resolve_type_id` for
+      // the callee type (rejects a nonexistent AND an internal function-entry type
+      // index) plus `table_id_at`. MIRROR-WALRUS: the tail-call signature match is
+      // NOT checked.
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ReturnCallIndirect", "typeIndex"))?,
+      )?;
+      let table = table_id_at(
+        module,
+        table.ok_or_else(|| missing("ReturnCallIndirect", "table"))?,
+      )?;
+      fb.instr_seq(seq_id)
+        .instr(wir::ReturnCallIndirect { ty, table });
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
-         C1a/C1b/C2/C3 core, control-flow, numeric-operator, memory/load-store, and \
-         table subset)"
+         C1a/C1b/C2/C3/C4 core, control-flow, numeric-operator, memory/load-store, \
+         table, and reference/tail-call subset)"
       )));
     }
   }
@@ -1302,7 +1381,9 @@ pub(crate) fn validate_body(module: &Module, body: &[InstrDesc], label_len: usiz
 /// the input emit would.
 fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> {
   match d.r#type.as_str() {
-    "Unreachable" | "Return" | "Drop" => {}
+    // Fieldless leaf ops: nothing to resolve. `RefIsNull` joins them (its emit
+    // arm takes no payload).
+    "Unreachable" | "Return" | "Drop" | "RefIsNull" => {}
     "Const" => {
       // Mirror emit's only fallible Const check: an i64 that is not lossless.
       let value = d.value.as_ref().ok_or_else(|| missing("Const", "value"))?;
@@ -1529,11 +1610,47 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
         d.table.ok_or_else(|| missing("CallIndirect", "table"))?,
       )?;
     }
+    // Reference + tail-call instructions. The fallible steps mirror emit exactly
+    // (the abort guards): `RefNull`'s heap type resolves via the module-aware
+    // `heap_type_to_walrus_in` (a concrete/exact `TypeId` naming a
+    // foreign/deleted/entry type would otherwise abort at emit); `RefFunc` /
+    // `ReturnCall` resolve their `func`; `ReturnCallIndirect` resolves its type
+    // (via `resolve_type_id`) AND its table — a missing preflight resolution
+    // re-opens the emit-abort / partial-mutation defect. `RefIsNull` is fieldless
+    // (handled above). MIRROR-WALRUS: no ref.func-declared / null-legality /
+    // tail-call-signature checks.
+    "RefNull" => {
+      let rt = d
+        .ref_type
+        .as_ref()
+        .ok_or_else(|| missing("RefNull", "refType"))?;
+      heap_type_to_walrus_in(module, rt.heap.clone())?;
+    }
+    "RefFunc" => {
+      function_id_at(module, d.func.ok_or_else(|| missing("RefFunc", "func"))?)?;
+    }
+    "ReturnCall" => {
+      function_id_at(module, d.func.ok_or_else(|| missing("ReturnCall", "func"))?)?;
+    }
+    "ReturnCallIndirect" => {
+      // Same fields/ordering as emit: the callee type (via `resolve_type_id`)
+      // then the table.
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ReturnCallIndirect", "typeIndex"))?,
+      )?;
+      table_id_at(
+        module,
+        d.table
+          .ok_or_else(|| missing("ReturnCallIndirect", "table"))?,
+      )?;
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
-         C1a/C1b/C2/C3 core, control-flow, numeric-operator, memory/load-store, and \
-         table subset)"
+         C1a/C1b/C2/C3/C4 core, control-flow, numeric-operator, memory/load-store, \
+         table, and reference/tail-call subset)"
       )));
     }
   }
@@ -1820,6 +1937,34 @@ fn read_one(
       d.table = Some(e.table.index() as u32);
       d
     }
+    wir::Instr::RefNull(e) => {
+      // `e.ty` is a walrus `RefType` (Copy). The walrus -> napi `HeapType`
+      // conversion is fallible on a `#[non_exhaustive]` variant — propagate with
+      // `?`, never panic.
+      let mut d = InstrDesc::new("RefNull");
+      d.ref_type = Some(RefType {
+        nullable: e.ty.nullable,
+        heap: e.ty.heap_type.try_into()?,
+      });
+      d
+    }
+    wir::Instr::RefIsNull(_) => InstrDesc::new("RefIsNull"),
+    wir::Instr::RefFunc(e) => {
+      let mut d = InstrDesc::new("RefFunc");
+      d.func = Some(e.func.index() as u32);
+      d
+    }
+    wir::Instr::ReturnCall(e) => {
+      let mut d = InstrDesc::new("ReturnCall");
+      d.func = Some(e.func.index() as u32);
+      d
+    }
+    wir::Instr::ReturnCallIndirect(e) => {
+      let mut d = InstrDesc::new("ReturnCallIndirect");
+      d.type_index = Some(e.ty.index() as u32);
+      d.table = Some(e.table.index() as u32);
+      d
+    }
     other => {
       // MIRROR-WALRUS: never panic on an out-of-subset variant — surface a
       // catchable error naming it. Later C-tasks replace these arms with real
@@ -1827,8 +1972,9 @@ fn read_one(
       let dbg = format!("{other:?}");
       let name = dbg.split(['(', ' ', '{']).next().unwrap_or("unknown");
       return Err(Error::from_reason(format!(
-        "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2/C3 \
-         core, control-flow, numeric-operator, memory/load-store, and table subset is)"
+        "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2/C3/C4 \
+         core, control-flow, numeric-operator, memory/load-store, table, and \
+         reference/tail-call subset is)"
       )));
     }
   })

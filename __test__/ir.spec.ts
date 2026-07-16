@@ -1147,3 +1147,211 @@ test('C3 negative: a table/call_indirect descriptor missing a required field thr
     message: /`CallIndirect` instruction is missing its `table` field/,
   })
 })
+
+// ---------------------------------------------------------------------------
+// C4: core reference instructions (RefNull/RefIsNull/RefFunc) + tail calls
+// (ReturnCall/ReturnCallIndirect).
+//
+// RefNull is the one instruction whose payload is a whole `RefType`
+// (`{ nullable, heap }`). Its heap type goes through the MODULE-AWARE conversion,
+// so a CONCRETE `(ref null $t)` resolves against the live arena and a
+// foreign/deleted/entry index is rejected catchably (never a process abort — the
+// B2b lesson). RefFunc/ReturnCall reuse `function_id_at`; ReturnCallIndirect
+// reuses `resolve_type_id` + `table_id_at`, exactly like C3's CallIndirect.
+//
+// The EXHAUSTIVE test builds all 5 instrs (RefNull with an ABSTRACT heap AND a
+// CONCRETE `(ref null $struct)`) and round-trips them through the IN-MEMORY read
+// path (buildFunction -> instructions() on the same module; no emit/re-parse, so
+// the ill-typed-but-well-formed body builds directly). Separate WELL-TYPED bodies
+// prove ref.null/ref.is_null and the tail calls survive emit -> bytes -> re-parse.
+//
+// MIRROR-WALRUS: buildFunction only guards process-aborting hazards (each
+// func/type/heap index resolves). It does NOT type-check — a non-null `ref.null`,
+// a ref.func to an undeclared function, or a tail call whose signature does not
+// match still builds and emits as-is.
+// ---------------------------------------------------------------------------
+
+test('C4 EXHAUSTIVE: all 5 reference/tail-call instrs round-trip in-memory', (t) => {
+  const m = empty()
+  // A function to reference (ref.func / return_call). An IMPORT exists before
+  // buildFunction and keeps a stable index (a body cannot reference the function
+  // it is defining).
+  const sig = m.types.add([], [])
+  const fref = m.imports.addFunction('env', 'callee', sig).index
+  // A funcref table + a function type for return_call_indirect.
+  const tbl = m.tables.addLocal(false, 0n, null, FUNCREF).index
+  const cty = m.types.add([], []).index
+  // An existing composite (struct) type so a CONCRETE `(ref null $struct)`
+  // resolves.
+  const structTy = m.types.addStruct([{ storage: { type: 'Val', value: I32 }, mutable: false }]).index
+
+  const body: InstrDesc[] = [
+    // RefNull with an ABSTRACT (func) heap type.
+    { type: 'RefNull', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Func' } } },
+    { type: 'RefIsNull' },
+    { type: 'Drop' },
+    // RefNull with an ABSTRACT (extern) heap, NON-nullable — proving the flag is
+    // carried verbatim (MIRROR-WALRUS does not reject a non-null null type).
+    { type: 'RefNull', refType: { nullable: false, heap: { type: 'Abstract', kind: 'Extern' } } },
+    { type: 'Drop' },
+    // RefNull with a CONCRETE `(ref null $structTy)` — the abort-guarded path.
+    { type: 'RefNull', refType: { nullable: true, heap: { type: 'Concrete', typeIndex: structTy } } },
+    { type: 'Drop' },
+    { type: 'RefFunc', func: fref },
+    { type: 'Drop' },
+    { type: 'ReturnCall', func: fref },
+    { type: 'ReturnCallIndirect', typeIndex: cty, table: tbl },
+  ]
+
+  const idx = m.buildFunction([], [], [], body)
+  // Read back from the SAME in-memory module (no emit/re-parse; buildFunction is
+  // MIRROR-WALRUS, so this ill-typed-but-well-formed body builds directly).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+
+  // Sanity: all 5 C4 instruction kinds are present.
+  const kinds = new Set(read.map((d) => d.type))
+  for (const k of ['RefNull', 'RefIsNull', 'RefFunc', 'ReturnCall', 'ReturnCallIndirect']) {
+    t.true(kinds.has(k), `body should contain a ${k}`)
+  }
+  // The CONCRETE RefNull carried its heap type index unchanged (not swapped with
+  // an abstract heap or dropped).
+  const concrete = read.find((d) => d.type === 'RefNull' && d.refType!.heap.type === 'Concrete')!
+  const heap = concrete.refType!.heap
+  t.is(heap.type, 'Concrete')
+  if (heap.type === 'Concrete') t.is(heap.typeIndex, structTy)
+  // RefFunc and ReturnCall both carried the SAME func index.
+  t.is(read.find((d) => d.type === 'RefFunc')!.func, fref)
+  t.is(read.find((d) => d.type === 'ReturnCall')!.func, fref)
+  // ReturnCallIndirect carried BOTH its callee type and its table.
+  const rci = read.find((d) => d.type === 'ReturnCallIndirect')!
+  t.is(rci.typeIndex, cty)
+  t.is(rci.table, tbl)
+})
+
+test('C4: a well-typed ref.null/ref.is_null body emits valid wasm and round-trips through re-parse', (t) => {
+  const m = empty()
+  // (ref.null func)(ref.is_null)(drop) — a `() -> ()` body: ref.null pushes a
+  // nullable funcref, ref.is_null pops it and pushes an i32, drop pops the i32.
+  // Reference types are STABLE, so no feature flag is needed here.
+  const body: InstrDesc[] = [
+    { type: 'RefNull', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Func' } } },
+    { type: 'RefIsNull' },
+    { type: 'Drop' },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'refnull'
+  const bytes = m.emitWasm(false)
+
+  // Independent proof the bytes are real, well-typed wasm.
+  t.true(WebAssembly.validate(bytes))
+
+  // Re-parse and read back: the ops decode to the same descriptors.
+  const read = WasmModule.fromBuffer(bytes).functions.byName('refnull')!.instructions()
+  t.deepEqual(read, body)
+})
+
+test('C4: well-typed return_call / return_call_indirect emit and re-parse (tail-call feature)', (t) => {
+  const m = empty()
+  // return_call to an imported `() -> ()` callee — a `() -> ()` tail call.
+  const sig = m.types.add([], [])
+  const callee = m.imports.addFunction('env', 'callee', sig).index
+  const rcIdx = m.buildFunction([], [], [], [{ type: 'ReturnCall', func: callee }])
+  m.functions.getByIndex(rcIdx)!.name = 'rc'
+  // (i32.const 0)(return_call_indirect (type $v) table 0) through a funcref table.
+  const tbl = m.tables.addLocal(false, 0n, null, FUNCREF).index
+  const cty = m.types.add([], []).index
+  const rciIdx = m.buildFunction(
+    [],
+    [],
+    [],
+    [
+      { type: 'Const', value: { type: 'I32', value: 0 } },
+      { type: 'ReturnCallIndirect', typeIndex: cty, table: tbl },
+    ],
+  )
+  m.functions.getByIndex(rciIdx)!.name = 'rci'
+
+  const bytes = m.emitWasm(false)
+
+  // Tail calls are an UNSTABLE feature — re-parse with onlyStableFeatures(false)
+  // so walrus accepts them; the ops decode back to the same instruction kinds.
+  // emit rewrites the type section, so return_call_indirect's typeIndex is
+  // renumbered — only the structural round-trip (kind + table) is asserted.
+  const config = new ModuleConfig().onlyStableFeatures(false)
+  const rm = WasmModule.fromBufferWithConfig(bytes, config)
+
+  const rc = rm.functions.byName('rc')!.instructions()
+  t.is(rc.length, 1)
+  t.is(rc[0].type, 'ReturnCall')
+  t.is(typeof rc[0].func, 'number')
+
+  const rci = rm.functions.byName('rci')!.instructions()
+  t.is(rci.length, 2)
+  t.is(rci[0].type, 'Const')
+  t.is(rci[1].type, 'ReturnCallIndirect')
+  t.is(rci[1].table, tbl)
+  t.is(typeof rci[1].typeIndex, 'number')
+})
+
+test('C4 negative: a bad concrete ref.null heap or func/type index throws catchably (no abort)', (t) => {
+  const m = empty()
+  const sig = m.types.add([], [])
+  m.imports.addFunction('env', 'callee', sig) // func 0 exists
+  const tbl = m.tables.addLocal(false, 0n, null, FUNCREF).index
+
+  // A CONCRETE ref.null naming a nonexistent type index throws (resolved through
+  // the module-aware heap conversion) rather than aborting at emit.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [{ type: 'RefNull', refType: { nullable: true, heap: { type: 'Concrete', typeIndex: 999 } } }],
+      ),
+    { message: /no type at index 999/ },
+  )
+  // ref.func / return_call with an out-of-range func index throws.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'RefFunc', func: 99 }]), {
+    message: /no function at index 99/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ReturnCall', func: 77 }]), {
+    message: /no function at index 77/,
+  })
+  // return_call_indirect resolves the callee TYPE first (via resolve_type_id): a
+  // bad type index throws even alongside a valid table.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ReturnCallIndirect', typeIndex: 42, table: tbl }]), {
+    message: /no type at index 42/,
+  })
+  // Process is still alive and the module was never mutated (a real abort would
+  // have taken the whole run down — the proof under WASI).
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C4 negative: a reference/tail-call descriptor missing a required field throws catchably', (t) => {
+  const m = empty()
+  const sig = m.types.add([], [])
+  m.imports.addFunction('env', 'callee', sig)
+  const tbl = m.tables.addLocal(false, 0n, null, FUNCREF).index
+  const cty = m.types.add([], []).index
+
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'RefNull' }]), {
+    message: /`RefNull` instruction is missing its `refType` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'RefFunc' }]), {
+    message: /`RefFunc` instruction is missing its `func` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ReturnCall' }]), {
+    message: /`ReturnCall` instruction is missing its `func` field/,
+  })
+  // ReturnCallIndirect: typeIndex is checked before table (matching emit's order).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ReturnCallIndirect', table: tbl }]), {
+    message: /`ReturnCallIndirect` instruction is missing its `typeIndex` field/,
+  })
+  // A resolvable typeIndex isolates the missing-table error.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ReturnCallIndirect', typeIndex: cty }]), {
+    message: /`ReturnCallIndirect` instruction is missing its `table` field/,
+  })
+})
