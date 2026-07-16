@@ -158,6 +158,85 @@ export declare class WasmCustomSections {
 }
 
 /**
+ * A single function in a module, as a live handle: it holds the function's id
+ * plus a strong reference to the owning [`WasmModule`], and every accessor
+ * reads or writes through to that module.
+ *
+ * Only metadata is exposed here — the function's kind, name, and type. The
+ * function body (instructions) and the import handle for imported functions are
+ * deferred to later tasks.
+ */
+export declare class WasmFunction {
+  /**
+   * This function's stable index — its identity for numeric lookup. Readable
+   * even after the function is deleted (it never touches the arena).
+   */
+  get index(): number
+  /** This function's name from the wasm "name" custom section, if any. */
+  get name(): string | null
+  /** Set this function's name, stored in the wasm "name" custom section. */
+  set name(name: string | undefined | null)
+  /**
+   * Whether this function is imported, locally defined, or an uninitialized
+   * placeholder (read only).
+   */
+  get kind(): FunctionKindTag
+  /**
+   * This function's type, as a live [`WasmType`] handle into the module's type
+   * arena.
+   *
+   * A method (not a getter) because it materializes a fresh `WasmType` wrapper
+   * on each call. walrus' `Function::ty()` is a unified, panic-free accessor
+   * across all three kinds (import/local/uninitialized), so the only failure
+   * mode is the delete guard.
+   */
+  ty(): WasmType
+}
+
+/**
+ * The functions of a module. Each accessor materializes a fresh [`WasmFunction`]
+ * handle that reads and writes straight through to the owning [`WasmModule`];
+ * the collection itself caches nothing.
+ */
+export declare class WasmFunctions {
+  /** The number of functions in the module (imported and locally defined). */
+  get length(): number
+  /** Every function in the module, as live item handles. */
+  items(): Array<WasmFunction>
+  /**
+   * The function whose stable `.index` equals `index`, or `null` if none
+   * exists.
+   */
+  getByIndex(index: number): WasmFunction | null
+  /**
+   * The first function with the given name, or `null` if none is named that.
+   *
+   * The name matched is the wasm "name" custom section name, not the export
+   * name. walrus preserves function names through parsing, so a name from the
+   * source module is findable here.
+   */
+  byName(name: string): WasmFunction | null
+  /**
+   * Delete a function from the module. Takes the handle itself: a JS number can
+   * never be turned back into a walrus id, so the wrapper is the only way to
+   * name an item for removal.
+   *
+   * It is the caller's responsibility to ensure nothing still references the
+   * deleted function (walrus does not check, and a dangling `call`/export/table
+   * element aborts at emit time).
+   *
+   * Same no-panic invariant as the item accessors: walrus'
+   * `ModuleFunctions::delete` tombstones the arena entry and a later access
+   * asserts liveness, and a panic across FFI aborts the process. Id equality
+   * includes the arena_id, so this liveness scan rejects BOTH already-deleted
+   * ids (`iter()` skips tombstoned entries) AND handles that belong to a
+   * different module (arena_id mismatch), surfacing a catchable JS error
+   * instead of aborting.
+   */
+  delete(func: WasmFunction): void
+}
+
+/**
  * A single global in a module, as a live handle: it holds the global's id plus
  * a strong reference to the owning [`WasmModule`], and every accessor reads or
  * writes through to that module.
@@ -236,6 +315,59 @@ export declare class WasmGlobals {
    * the accessor handles), so it stays valid as long as it is held.
    */
   addLocal(ty: ValType, mutable: boolean, shared: boolean, init: ConstExpr): WasmGlobal
+}
+
+/**
+ * A single local in a module, as a live handle: it holds the local's id plus a
+ * strong reference to the owning [`WasmModule`], and every accessor reads or
+ * writes through to that module.
+ */
+export declare class WasmLocal {
+  /**
+   * This local's stable index — its identity for numeric lookup. Readable even
+   * if the local is not (or no longer) in this module's arena (it never touches
+   * the arena).
+   */
+  get index(): number
+  /** This local's value type (read only — walrus exposes no setter). */
+  get ty(): ValType
+  /** This local's name from the wasm "name" custom section, if any. */
+  get name(): string | null
+  /** Set this local's name, stored in the wasm "name" custom section. */
+  set name(name: string | undefined | null)
+}
+
+/**
+ * The locals of a module. Each accessor materializes a fresh [`WasmLocal`]
+ * handle that reads and writes straight through to the owning [`WasmModule`];
+ * the collection itself caches nothing.
+ *
+ * NOTE: `ModuleLocals` is the MODULE-WIDE local arena — it holds every local
+ * (and parameter) across all function bodies, not the locals of one function.
+ * A local added here but never referenced by any function body is simply not
+ * emitted (walrus drops unused locals), which is harmless.
+ */
+export declare class WasmLocals {
+  /** The number of locals in the module (across all function bodies). */
+  get length(): number
+  /** Every local in the module, as live item handles. */
+  items(): Array<WasmLocal>
+  /** The local whose stable `.index` equals `index`, or `null` if none exists. */
+  getByIndex(index: number): WasmLocal | null
+  /**
+   * Add a new local of the given value type, returning a live handle to it.
+   *
+   * `ty` is the local's value type (e.g. `{ type: 'I64' }` or a `Ref`).
+   * Fallible: an unsupported `ty` — currently a concrete/indexed ref type,
+   * which needs a type handle we do not yet thread through — is rejected with a
+   * catchable error rather than aborting.
+   *
+   * The local is added to the module-wide arena; it only reaches the emitted
+   * output if some function body references it. The returned handle holds its
+   * own strong reference to the module (same as the accessor handles), so it
+   * stays valid as long as it is held.
+   */
+  add(ty: ValType): WasmLocal
 }
 
 /**
@@ -384,6 +516,18 @@ export declare class WasmModule {
    * object reads and writes back to this module.
    */
   get types(): WasmTypes
+  /**
+   * The functions of this module (imported and locally defined). Each handle
+   * materialized through the returned object reads and writes back to this
+   * module.
+   */
+  get functions(): WasmFunctions
+  /**
+   * The locals of this module (across all function bodies). Each handle
+   * materialized through the returned object reads and writes back to this
+   * module.
+   */
+  get locals(): WasmLocals
 }
 
 /**
@@ -663,6 +807,28 @@ export declare const enum ConstExprKind {
   RefFunc = 'RefFunc',
   /** An extended constant expression (a sequence of const operations). */
   Extended = 'Extended'
+}
+
+/**
+ * Whether a function is imported, locally defined, or an uninitialized
+ * placeholder.
+ *
+ * Mirrors the discriminant of `walrus::FunctionKind`
+ * (`Import(ImportedFunction) | Local(LocalFunction) | Uninitialized(TypeId)`).
+ * The companion accessors that expose the import handle or the function body
+ * are deferred to later tasks; only the tag is exposed here.
+ */
+export declare const enum FunctionKindTag {
+  /** An externally defined, imported function. */
+  Import = 'Import',
+  /** A locally defined function (has an in-module body). */
+  Local = 'Local',
+  /**
+   * A locally defined function whose body has not been parsed yet. This is an
+   * internal walrus transient (it should not appear on a fully parsed module),
+   * exposed for completeness.
+   */
+  Uninitialized = 'Uninitialized'
 }
 
 /**
