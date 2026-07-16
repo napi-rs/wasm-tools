@@ -4,8 +4,8 @@ use napi_derive::napi;
 use walrus::{Module, RawCustomSection};
 
 use crate::{
-  ModuleConfig, WasmCustomSections, WasmFunctions, WasmGlobals, WasmLocals, WasmMemories,
-  WasmProducers, WasmTables, WasmTypes,
+  ModuleConfig, WasmCustomSections, WasmDataSegments, WasmFunctions, WasmGlobals, WasmLocals,
+  WasmMemories, WasmProducers, WasmTables, WasmTypes,
 };
 
 #[napi]
@@ -161,6 +161,15 @@ impl WasmModule {
   /// module.
   pub fn locals(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmLocals> {
     Ok(WasmLocals {
+      module: this.clone(env)?,
+    })
+  }
+
+  #[napi(getter)]
+  /// The data segments of this module. Each handle materialized through the
+  /// returned object reads and writes back to this module.
+  pub fn data(&self, this: Reference<WasmModule>, env: Env) -> Result<WasmDataSegments> {
+    Ok(WasmDataSegments {
       module: this.clone(env)?,
     })
   }

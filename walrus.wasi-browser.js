@@ -60,6 +60,8 @@ export default __napiModule.exports
 export const ConstExpr = __napiModule.exports.ConstExpr
 export const ModuleConfig = __napiModule.exports.ModuleConfig
 export const WasmCustomSections = __napiModule.exports.WasmCustomSections
+export const WasmData = __napiModule.exports.WasmData
+export const WasmDataSegments = __napiModule.exports.WasmDataSegments
 export const WasmFunction = __napiModule.exports.WasmFunction
 export const WasmFunctions = __napiModule.exports.WasmFunctions
 export const WasmGlobal = __napiModule.exports.WasmGlobal
@@ -76,6 +78,7 @@ export const WasmType = __napiModule.exports.WasmType
 export const WasmTypes = __napiModule.exports.WasmTypes
 export const AbstractHeapType = __napiModule.exports.AbstractHeapType
 export const ConstExprKind = __napiModule.exports.ConstExprKind
+export const DataKindTag = __napiModule.exports.DataKindTag
 export const FunctionKindTag = __napiModule.exports.FunctionKindTag
 export const GlobalKind = __napiModule.exports.GlobalKind
 export const TypeKind = __napiModule.exports.TypeKind

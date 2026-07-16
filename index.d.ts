@@ -158,6 +158,118 @@ export declare class WasmCustomSections {
 }
 
 /**
+ * A single data segment in a module, as a live handle: it holds the segment's
+ * id plus a strong reference to the owning [`WasmModule`], and every accessor
+ * reads or writes through to that module.
+ */
+export declare class WasmData {
+  /**
+   * This segment's stable index — its identity for numeric lookup. Readable
+   * even after the segment is deleted (it never touches the arena).
+   */
+  get index(): number
+  /** This segment's name from the wasm "name" custom section, if any. */
+  get name(): string | null
+  /** Set this segment's name, stored in the wasm "name" custom section. */
+  set name(name: string | undefined | null)
+  /** Whether this segment is active or passive (read only). */
+  get kind(): DataKindTag
+  /** This segment's payload bytes. */
+  get value(): Uint8Array
+  /**
+   * Set this segment's payload bytes. Bytes are freely mutable (no validation —
+   * mirror-walrus policy).
+   */
+  set value(bytes: Uint8Array)
+  /**
+   * The memory this active segment initializes, or `null` if it is passive.
+   *
+   * A method (not a getter) because it materializes a fresh [`WasmMemory`]
+   * wrapper on each call.
+   */
+  memory(): WasmMemory | null
+  /**
+   * This active segment's initialization offset as a [`ConstExpr`], or `null`
+   * if it is passive.
+   *
+   * A method (not a getter) because it materializes a fresh `ConstExpr` wrapper
+   * on each call.
+   */
+  offset(): ConstExpr | null
+}
+
+/**
+ * The data segments of a module. Each accessor materializes a fresh
+ * [`WasmData`] handle that reads and writes straight through to the owning
+ * [`WasmModule`]; the collection itself caches nothing.
+ */
+export declare class WasmDataSegments {
+  /** The number of data segments in the module. */
+  get length(): number
+  /** Every data segment in the module, as live item handles. */
+  items(): Array<WasmData>
+  /**
+   * The data segment whose stable `.index` equals `index`, or `null` if none
+   * exists.
+   */
+  getByIndex(index: number): WasmData | null
+  /**
+   * Delete a data segment from the module. Takes the handle itself: a JS number
+   * can never be turned back into a walrus id, so the wrapper is the only way to
+   * name an item for removal.
+   *
+   * It is the caller's responsibility to ensure nothing still references the
+   * deleted segment (walrus does not check; a dangling `memory.init` /
+   * `data.drop` would abort emit).
+   *
+   * Same no-panic invariant as the item accessors: walrus' `ModuleData::delete`
+   * asserts the id is live, and a panic across FFI aborts the process. Id
+   * equality includes the arena_id, so this liveness scan rejects BOTH
+   * already-deleted ids (`iter()` skips tombstoned entries) AND handles that
+   * belong to a different module (arena_id mismatch), surfacing a catchable JS
+   * error instead of aborting.
+   */
+  delete(data: WasmData): void
+  /**
+   * Add a new passive data segment, returning a live handle to it.
+   *
+   * A passive segment carries only its payload bytes; it is copied into a
+   * memory on demand via `memory.init`. `value` is freely chosen (bytes are not
+   * validated — mirror-walrus policy).
+   *
+   * The returned handle holds its own strong reference to the module (same as
+   * the accessor handles), so it stays valid as long as it is held.
+   */
+  addPassive(value: Uint8Array): WasmData
+  /**
+   * Add a new active data segment, returning a live handle to it.
+   *
+   * An active segment is copied into `memory` at `offset` (a constant
+   * expression) at instantiation time. `value` is freely chosen (bytes are not
+   * validated — mirror-walrus policy).
+   *
+   * `add_active` is a CONSUME site for arena ids: both the `memory` handle and
+   * any ids embedded in `offset` are resolved by walrus at emit via panicking
+   * index lookups, and a panic across FFI ABORTS the whole Node process. So we
+   * validate both BEFORE touching the arena:
+   *   1. the `memory` handle must be live in THIS module (a foreign/deleted
+   *      MemoryId would abort `get_memory_index`), and
+   *   2. every id in `offset` must be live in THIS module
+   *      (`validate_const_expr` — a foreign/deleted Global/RefFunc/typed-RefNull
+   *      id would abort `get_global_index`/`get_func_index`/`get_type_index`).
+   * Either check failing yields a catchable JS error and leaves the module
+   * untouched.
+   *
+   * Per mirror-walrus policy this adds NO wasm semantic-validity checks: the
+   * offset is not range-checked against the memory's size, nor is its value
+   * type matched to the memory's index type. A semantically-invalid-but-stored
+   * module is the caller's responsibility, catchable via `WebAssembly.validate`
+   * / re-parse.
+   */
+  addActive(memory: WasmMemory, offset: ConstExpr, value: Uint8Array): WasmData
+}
+
+/**
  * A single function in a module, as a live handle: it holds the function's id
  * plus a strong reference to the owning [`WasmModule`], and every accessor
  * reads or writes through to that module.
@@ -528,6 +640,11 @@ export declare class WasmModule {
    * module.
    */
   get locals(): WasmLocals
+  /**
+   * The data segments of this module. Each handle materialized through the
+   * returned object reads and writes back to this module.
+   */
+  get data(): WasmDataSegments
 }
 
 /**
@@ -807,6 +924,22 @@ export declare const enum ConstExprKind {
   RefFunc = 'RefFunc',
   /** An extended constant expression (a sequence of const operations). */
   Extended = 'Extended'
+}
+
+/**
+ * Whether a data segment is active (auto-initialized into a memory at
+ * instantiation) or passive (copied on demand via `memory.init`).
+ *
+ * Mirrors the discriminant of `walrus::DataKind` (`Active { memory, offset }` /
+ * `Passive`). The active variant's memory and offset are read through the
+ * [`WasmData::memory`] / [`WasmData::offset`] accessors, which return `null`
+ * for a passive segment.
+ */
+export declare const enum DataKindTag {
+  /** An active data segment (initialized into a memory at a fixed offset). */
+  Active = 'Active',
+  /** A passive data segment (copied on demand via `memory.init`). */
+  Passive = 'Passive'
 }
 
 /**
