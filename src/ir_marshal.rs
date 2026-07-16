@@ -18,12 +18,15 @@
 //! anything deeper than the cap is materialized, on every target and harness.
 //!
 //! ## How each element still uses the DERIVED (auto-lockstep) field code
-//! * Decode ([`InstrBody`]): per element, a fresh empty JS object receives a
-//!   shallow copy of every enumerable property of the element EXCEPT the three
-//!   self-referential edges, and the DERIVED `InstrDesc::from_napi_value` runs
-//!   on that copy — it cannot recurse (the copy has no edges) and every plain
-//!   field keeps its derived decoding and error behavior, automatically
-//!   tracking future field additions. The edges are then walked by the driver.
+//! * Decode ([`InstrBody`]): per element, a fresh empty JS object receives an
+//!   own-`undefined` shadow of the three self-referential edges plus an OWN-only
+//!   shallow copy of every other enumerable property of the element, and the
+//!   DERIVED `InstrDesc::from_napi_value` runs on that copy — it cannot recurse
+//!   (the edges read as own `undefined`, so the derived read never re-enters via
+//!   a polluted `Object.prototype.seq`), and every plain field keeps its derived
+//!   decoding and error behavior, automatically tracking future field additions.
+//!   The real edges are then walked by the driver, reading OWN edges only so an
+//!   inherited edge is ignored in lockstep with the derived read's shadow.
 //! * Encode ([`InstrList`]): per (owned) element, the three edge `Option`s are
 //!   `Option::take`n out, the now-edge-free descriptor is encoded with the
 //!   DERIVED `InstrDesc::to_napi_value` (cannot recurse), and each taken
@@ -53,8 +56,7 @@
 use std::ffi::CStr;
 
 use napi::bindgen_prelude::{
-  get_named_property_raw, set_named_property_raw, FromNapiValue, ToNapiValue, TypeName,
-  ValidateNapiValue,
+  set_named_property_raw, FromNapiValue, ToNapiValue, TypeName, ValidateNapiValue,
 };
 use napi::{check_status, sys, Error, Result, Status, ValueType};
 
@@ -138,6 +140,94 @@ unsafe fn create_array(env: sys::napi_env, len: usize) -> Result<sys::napi_value
   Ok(ptr)
 }
 
+/// A data-property descriptor named by a static C string (used for the edge
+/// `undefined` shadows). `method`/`getter`/`setter` are `None`, so *defining* it
+/// runs NO user JS — unlike a `napi_set_property`, which for an accessor or a
+/// `__proto__` key would invoke a setter.
+fn data_descriptor_cstr(name: &CStr, value: sys::napi_value) -> sys::napi_property_descriptor {
+  sys::napi_property_descriptor {
+    utf8name: name.as_ptr(),
+    name: std::ptr::null_mut(),
+    method: None,
+    getter: None,
+    setter: None,
+    value,
+    attributes: sys::PropertyAttributes::enumerable
+      | sys::PropertyAttributes::writable
+      | sys::PropertyAttributes::configurable,
+    data: std::ptr::null_mut(),
+  }
+}
+
+/// A data-property descriptor named by a JS string value (used to copy each of
+/// the original's own non-edge properties onto the fresh object). Same
+/// no-user-JS guarantee on *define* as [`data_descriptor_cstr`].
+fn data_descriptor_named(
+  name: sys::napi_value,
+  value: sys::napi_value,
+) -> sys::napi_property_descriptor {
+  sys::napi_property_descriptor {
+    utf8name: std::ptr::null(),
+    name,
+    method: None,
+    getter: None,
+    setter: None,
+    value,
+    attributes: sys::PropertyAttributes::enumerable
+      | sys::PropertyAttributes::writable
+      | sys::PropertyAttributes::configurable,
+    data: std::ptr::null_mut(),
+  }
+}
+
+/// Read an edge property that is an OWN property of `obj`. Unlike the derived
+/// per-field read (`get_named_property_raw` → `napi_get_named_property`, a
+/// prototype-traversing `[[Get]]`), this does NOT walk the prototype chain: an
+/// inherited edge (e.g. `Object.prototype.seq` prototype pollution) is invisible
+/// and treated as absent (`None`), so the driver never walks — and so never
+/// re-drives the derived recursion through — an inherited edge. An own edge whose
+/// value is `undefined` also yields `None`, matching the `Option` semantics the
+/// prototype-traversing `get_named_property_raw` gave here before.
+unsafe fn get_own_named_property(
+  env: sys::napi_env,
+  obj: sys::napi_value,
+  name: &CStr,
+) -> Result<Option<sys::napi_value>> {
+  let bytes = name.to_bytes();
+  let mut key = std::ptr::null_mut();
+  check_status!(
+    unsafe {
+      sys::napi_create_string_utf8(env, bytes.as_ptr().cast(), bytes.len() as isize, &mut key)
+    },
+    "Failed to create property name"
+  )?;
+  let mut has_own = false;
+  check_status!(
+    unsafe { sys::napi_has_own_property(env, obj, key, &mut has_own) },
+    "Failed to check own property"
+  )?;
+  if !has_own {
+    return Ok(None);
+  }
+  // Own property present: read its value. Because it is OWN, the `[[Get]]` cannot
+  // resolve to a prototype-chain value for this name.
+  let mut ret = std::ptr::null_mut();
+  check_status!(
+    unsafe { sys::napi_get_named_property(env, obj, name.as_ptr(), &mut ret) },
+    "Failed to get property"
+  )?;
+  let mut ty = 0;
+  check_status!(
+    unsafe { sys::napi_typeof(env, ret, &mut ty) },
+    "Failed to get type of property"
+  )?;
+  Ok(if ty == sys::ValueType::napi_undefined {
+    None
+  } else {
+    Some(ret)
+  })
+}
+
 /// Decorate `err` with the ` on InstrDesc.<field>` location suffix — the same
 /// format `napi::decorate_field_error` gives derived per-field failures, so a
 /// nested bad field reports the identical breadcrumb trail (e.g.
@@ -171,14 +261,26 @@ struct DecodeFrame {
   depth: usize,
 }
 
-/// Decode ONE array element via the shallow-copy-except-edges trick: copy every
-/// enumerable property (own + prototype chain — the same set the derived
-/// per-field `napi_get_named_property` reads see) of `elem` EXCEPT the three
-/// edge names onto a fresh empty object, then run the DERIVED
-/// `InstrDesc::from_napi_value` on the copy. The copy has no edges, so the
-/// derived impl cannot recurse; every plain field keeps its derived decode +
-/// error behavior and automatically tracks future field additions. The user's
-/// `elem` is never mutated.
+/// Decode ONE array element via the shallow-copy-except-edges trick: onto a
+/// fresh empty object, shadow the three edge names as own `undefined` and copy
+/// every OWN enumerable non-edge property of `elem`, then run the DERIVED
+/// `InstrDesc::from_napi_value` on that copy. The derived impl reads every field
+/// via a prototype-traversing `[[Get]]`, so both steps are hardened against an
+/// adversarial prototype chain:
+///
+/// * The edge shadows make the derived read of `seq`/`consequent`/`alternative`
+///   find an own `undefined` FIRST — so a polluted `Object.prototype.seq` (etc.)
+///   can never be read and recursed into (`Vec<InstrDesc>::from_napi_value`) on
+///   the native call stack. That inherited-edge recursion is an UNCATCHABLE stack
+///   overflow, exactly the abort class this module exists to remove; the shadow
+///   closes it on ANY prototype chain, and the driver still walks the real edges.
+/// * Copying is OWN-only and via `napi_define_property` (a data descriptor), so
+///   no inherited property is smuggled onto the copy, no accessor/setter runs,
+///   and an own `"__proto__"` key can never retarget the copy's prototype.
+///
+/// The copy carries no edges of its own, so the derived impl cannot recurse;
+/// every plain field keeps its derived decode + error behavior and automatically
+/// tracks future field additions. The user's `elem` is never mutated.
 unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> Result<InstrDesc> {
   let mut copy = std::ptr::null_mut();
   check_status!(
@@ -186,20 +288,44 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
     "Failed to create napi Object"
   )?;
 
-  // Enumerate the ORIGINAL's property names (a JS array of strings). On a
-  // `null`/`undefined` element this raises the same pending TypeError the
-  // derived decode's first property read raised ("Cannot convert undefined or
-  // null to object").
+  // Shadow each edge as an OWN `undefined` data property (built first so the
+  // derived prototype-traversing read of that edge resolves to the own
+  // `undefined` regardless of the input's prototype chain). All properties are
+  // installed in ONE `napi_define_properties` call at the end.
+  let mut undefined = std::ptr::null_mut();
+  check_status!(
+    unsafe { sys::napi_get_undefined(env, &mut undefined) },
+    "Failed to get undefined"
+  )?;
+  let mut descriptors: Vec<sys::napi_property_descriptor> = Vec::new();
+  for cname in EDGE_CSTRS {
+    descriptors.push(data_descriptor_cstr(cname, undefined));
+  }
+
+  // Enumerate the ORIGINAL's OWN enumerable string property names only (never the
+  // prototype chain, never symbols). On a `null`/`undefined` element this raises
+  // the same pending TypeError the derived decode's first read raised ("Cannot
+  // convert undefined or null to object").
   let mut names = std::ptr::null_mut();
   check_status!(
-    unsafe { sys::napi_get_property_names(env, elem, &mut names) },
+    unsafe {
+      sys::napi_get_all_property_names(
+        env,
+        elem,
+        sys::KeyCollectionMode::own_only,
+        sys::KeyFilter::enumerable | sys::KeyFilter::skip_symbols,
+        sys::KeyConversion::numbers_to_strings,
+        &mut names,
+      )
+    },
     "Failed to get property names of given object"
   )?;
   let names_len = unsafe { array_length(env, names)? };
 
   // A property name only needs enough buffer to distinguish it from the edge
-  // names (max 11 bytes, "alternative"): a name that fills the buffer is
-  // longer than any edge name and therefore copied without further inspection.
+  // names (max 11 bytes, "alternative") and "__proto__" (9 bytes): a name that
+  // fills the buffer is longer than any of those and is copied without further
+  // inspection.
   let mut buf = [0u8; 16];
   for i in 0..names_len {
     let name = unsafe { get_element(env, names, i)? };
@@ -210,19 +336,29 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
       },
       "Failed to read property name"
     )?;
-    if written < buf.len() - 1 && EDGE_NAMES.iter().any(|e| e.as_bytes() == &buf[..written]) {
-      continue; // an edge: the driver walks it — never the derived impl
+    if written < buf.len() - 1 {
+      let nm = &buf[..written];
+      // Edges keep their own-`undefined` shadow (the driver walks the real ones);
+      // `"__proto__"` is dropped so it can never retarget the copy's prototype.
+      if EDGE_NAMES.iter().any(|e| e.as_bytes() == nm) || nm == b"__proto__" {
+        continue;
+      }
     }
+    // Read the OWN value (own property => this `[[Get]]` cannot resolve to a
+    // prototype-chain value for this name) and DEFINE it onto the copy as an own
+    // data property.
     let mut val = std::ptr::null_mut();
     check_status!(
       unsafe { sys::napi_get_property(env, elem, name, &mut val) },
       "Failed to get property"
     )?;
-    check_status!(
-      unsafe { sys::napi_set_property(env, copy, name, val) },
-      "Failed to set property"
-    )?;
+    descriptors.push(data_descriptor_named(name, val));
   }
+
+  check_status!(
+    unsafe { sys::napi_define_properties(env, copy, descriptors.len(), descriptors.as_ptr()) },
+    "Failed to define properties"
+  )?;
 
   unsafe { InstrDesc::from_napi_value(env, copy) }
 }
@@ -245,11 +381,17 @@ impl FromNapiValue for InstrBody {
     };
 
     let root_len = unsafe { array_length(env, napi_val)? };
+    // `out` is NOT pre-sized from `root_len`: the JS `Array.length` is untrusted,
+    // and a sparse array can report a length near `2**32` with few/no real
+    // elements. `Vec::with_capacity(root_len)` on such a length aborts the process
+    // (capacity-overflow panic / `handle_alloc_error`) — uncatchable, especially
+    // under WASI `panic=abort`. The push-loop below grows `out` to the ACTUAL
+    // element count; a sparse hole fails catchably in `decode_element_shallow`.
     let mut frames = vec![DecodeFrame {
       js_array: napi_val,
       len: root_len,
       next: 0,
-      out: Vec::with_capacity(root_len as usize),
+      out: Vec::new(),
       parent: None,
       depth: 1,
     }];
@@ -283,12 +425,16 @@ impl FromNapiValue for InstrBody {
       frames[f].out.push(desc);
       let elem_idx = frames[f].out.len() - 1;
 
-      // Walk the edges on the ORIGINAL element, in declaration order.
-      for (edge, cname) in EDGE_CSTRS.iter().enumerate() {
-        let raw = unsafe { get_named_property_raw(env, elem, cname.as_ptr()) }
+      // Walk the OWN edges on the ORIGINAL element, in declaration order. The
+      // read is OWN-only (`get_own_named_property`): an INHERITED edge (prototype
+      // pollution) is treated as absent, so an inherited `seq`/`consequent`/
+      // `alternative` is ignored exactly like the derived read's own-`undefined`
+      // shadow ignores it — the two stay in lockstep.
+      for (edge, &cname) in EDGE_CSTRS.iter().enumerate() {
+        let raw = unsafe { get_own_named_property(env, elem, cname) }
           .map_err(|e| decorate_ancestors(e, &frames, f))?;
         let Some(raw) = raw else {
-          continue; // absent/undefined edge stays `None`
+          continue; // absent/inherited/undefined edge stays `None`
         };
         // Depth-guard BEFORE materializing the child — descending counts even
         // for an empty (or non-array) child, so ANY body nested past the cap
@@ -300,11 +446,14 @@ impl FromNapiValue for InstrBody {
         // decorated error the derived decode produced for it.
         let child_len = unsafe { array_length(env, raw) }
           .map_err(|e| decorate_ancestors(decorate(e, EDGE_NAMES[edge]), &frames, f))?;
+        // `out` is NOT pre-sized from `child_len` — same untrusted-`Array.length`
+        // abort hazard as the root frame; the push-loop grows it to the actual
+        // element count, and a sparse-wide edge fails catchably on its first hole.
         frames.push(DecodeFrame {
           js_array: raw,
           len: child_len,
           next: 0,
-          out: Vec::with_capacity(child_len as usize),
+          out: Vec::new(),
           parent: Some((f, elem_idx, edge)),
           depth: depth + 1,
         });

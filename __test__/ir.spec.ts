@@ -651,6 +651,118 @@ test('CH (edge fidelity): `seq: []` and absent seq stay distinct through the rou
 })
 
 // ---------------------------------------------------------------------------
+// CH-fix: two adversarial `buildFunction(body)` inputs that, before the fix,
+// STILL reached an UNCATCHABLE process abort inside the JS→Rust decode —
+// defeating CH's whole purpose. Both must now fail catchably (or ignore the
+// hostile input) with the process intact, on native AND wasm32-wasi (a genuine
+// abort under WASI `panic=abort` tears down the whole test run).
+//
+//   1. A prototype-chain edge (`Object.prototype.seq` etc.) fed the DERIVED
+//      per-field read — a prototype-traversing `[[Get]]` — an inherited array it
+//      recursed into (`Vec<InstrDesc>::from_napi_value`) UNBOUNDED on the native
+//      call stack, BEFORE the driver's depth guard. Fix: the decode shadows the
+//      three edges as own `undefined` and the driver walks OWN edges only, so an
+//      inherited edge is ignored on any prototype chain.
+//   2. An untrusted `Array.length` (a sparse array with `length ≈ 2**32`) sized
+//      `Vec::with_capacity`, which aborts on capacity overflow / alloc failure.
+//      Fix: the vecs grow from the ACTUAL element count, so a sparse array fails
+//      catchably on its first hole instead.
+// ---------------------------------------------------------------------------
+
+test('CH-fix (inherited-edge): a polluted `Object.prototype` edge is ignored (treated as None) — builds, round-trips, no abort', (t) => {
+  // Run each edge in its own save/restore so a thrown assertion can never leak
+  // the pollution into the rest of the suite (a leaked `Object.prototype.seq`
+  // would read as unrelated failures everywhere).
+  for (const edge of ['seq', 'consequent', 'alternative'] as const) {
+    const saved = Object.getOwnPropertyDescriptor(Object.prototype, edge)
+    t.is(saved, undefined) // sanity: nothing owned this key before us
+    try {
+      // Self-referential poison: the element is a valid leaf that ALSO inherits
+      // this same edge, so the PRE-fix prototype-traversing derived read would
+      // recurse into `Vec<InstrDesc>::from_napi_value` UNBOUNDED (uncatchable
+      // native stack overflow). `enumerable: false` keeps it invisible to
+      // `Object.keys`/for-in (so it cannot perturb deepEqual) while a `[[Get]]`
+      // still sees it — exactly the vulnerable path.
+      const poison = [{ type: 'Drop' }]
+      Object.defineProperty(Object.prototype, edge, {
+        value: poison,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      })
+
+      const m = empty()
+      const body: InstrDesc[] = [{ type: 'Const', value: { type: 'I32', value: 7 } }, { type: 'Drop' }]
+      const idx = m.buildFunction([], [], [], body)
+      const read = m.functions.getByIndex(idx)!.instructions()
+      // The inherited edge was ignored (treated as None): plain round-trip, and
+      // no leaf gained an own `seq`/`consequent`/`alternative` from the pollution.
+      t.deepEqual(read, body)
+      for (const leaf of read) {
+        t.false(Object.hasOwn(leaf, edge))
+      }
+      // The process survived and the module still emits valid wasm.
+      t.true(WebAssembly.validate(m.emitWasm(false)))
+    } finally {
+      // saved is always undefined here, so this deletes the injected key.
+      if (saved) Object.defineProperty(Object.prototype, edge, saved)
+      else delete (Object.prototype as Record<string, unknown>)[edge]
+    }
+    // The pollution is fully gone — no later test can observe it.
+    t.false(edge in Object.prototype)
+  }
+})
+
+test('CH-fix (__proto__ injection): an own `__proto__` data property carrying an edge cannot retarget the copy or recurse', (t) => {
+  // An OWN data property literally named "__proto__" (defineProperty does NOT
+  // invoke the prototype setter) whose value carries an edge. Before the fix the
+  // copy loop's `napi_set_property(copy, "__proto__", …)` would run the accessor
+  // and retarget the copy's prototype to this edge-bearing object; the fix
+  // enumerates OWN props, skips "__proto__", and writes via a data descriptor.
+  const evil = { type: 'Drop' } as Record<string, unknown>
+  Object.defineProperty(evil, '__proto__', {
+    value: { seq: [{ type: 'Drop' }] },
+    writable: true,
+    configurable: true,
+    enumerable: true,
+  })
+  // Sanity: it is an OWN property and evil's REAL prototype is untouched.
+  t.true(Object.hasOwn(evil, '__proto__'))
+  t.is(Object.getPrototypeOf(evil), Object.prototype)
+
+  const m = empty()
+  const body = [{ type: 'Const', value: { type: 'I32', value: 1 } }, evil] as unknown as InstrDesc[]
+  const idx = m.buildFunction([], [], [], body)
+  const read = m.functions.getByIndex(idx)!.instructions()
+  // Neutralized: the leaf is a plain Drop with no smuggled edge, and the module
+  // still emits — the process did not recurse or abort.
+  t.deepEqual(read, [{ type: 'Const', value: { type: 'I32', value: 1 } }, { type: 'Drop' }])
+  t.false(Object.hasOwn(read[1], 'seq'))
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+test('CH-fix (sparse-wide body): a 2**32-1-length sparse body throws catchably (no huge alloc/abort), module survives', (t) => {
+  const m = empty()
+  // A sparse array reports a near-`2**32` length with NO real elements. Before
+  // the fix `Vec::with_capacity(len)` requested billions of `InstrDesc` slots →
+  // capacity-overflow panic / `handle_alloc_error` → uncatchable abort.
+  const body: unknown[] = []
+  body.length = 2 ** 32 - 1
+  t.throws(() => m.buildFunction([], [], [], body as InstrDesc[]))
+  // The process survived: the (untouched) module still emits valid wasm.
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+test('CH-fix (sparse-wide edge): a 2**32-1-length sparse `seq` throws catchably, module survives', (t) => {
+  const m = empty()
+  const sparse: unknown[] = []
+  sparse.length = 2 ** 32 - 1
+  const body = [{ type: 'Block', blockType: { type: 'Empty' }, seq: sparse }] as unknown as InstrDesc[]
+  t.throws(() => m.buildFunction([], [], [], body))
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+// ---------------------------------------------------------------------------
 // C1b: numeric/comparison/conversion operators (Binop / Unop / TernOp).
 //
 // The three walrus operator enums have 352 FIELDLESS variants in scope
