@@ -353,6 +353,97 @@ pub enum StoreKind {
   },
 }
 
+/// The kind of a `LoadSimd` instruction, mirroring `walrus::ir::LoadSimdKind`
+/// (`ir/mod.rs:1534`). This is the SIMD vector load/store-lane family — the
+/// counterpart of [`LoadKind`]/[`StoreKind`] for the `v128.load*`/`v128.store*`
+/// memory ops that a plain `Load`/`Store`'s `V128` does NOT cover.
+///
+/// Generated as a TypeScript discriminated union keyed on `type`: 12 FIELDLESS
+/// variants (`{ type: 'Splat8' }` … `{ type: 'V128Load64Zero' }`) and 8
+/// LANE-CARRYING variants each with a `lane: number`
+/// (`{ type: 'V128Load8Lane', lane }` … `{ type: 'V128Store64Lane', lane }`).
+///
+/// The fieldless variants are the whole-vector loads: the four `*.splat`
+/// broadcasts (`Splat8`/`Splat16`/`Splat32`/`Splat64` = `v128.load8_splat` …
+/// `v128.load64_splat`), the six sign/zero-extending widening loads
+/// (`V128Load8x8S`/`U`, `V128Load16x4S`/`U`, `V128Load32x2S`/`U`), and the two
+/// zero-filling loads (`V128Load32Zero`/`V128Load64Zero`). The lane-carrying
+/// variants are the eight load-lane / store-lane ops (`v128.load8_lane` …
+/// `v128.store64_lane`), each carrying the vector `lane` it reads into / writes
+/// from — walrus stores this immediate as a tuple `(u8)`; here it is surfaced as
+/// a named `lane` field.
+///
+/// MIRROR-WALRUS: the `lane` index is stored verbatim — it is NOT range-checked
+/// against the vector's lane count (that is a wasm semantic check, not a
+/// representation constraint).
+#[napi]
+pub enum LoadSimdKind {
+  /// Broadcast one 8-bit element to all 16 lanes (`v128.load8_splat`).
+  Splat8,
+  /// Broadcast one 16-bit element to all 8 lanes (`v128.load16_splat`).
+  Splat16,
+  /// Broadcast one 32-bit element to all 4 lanes (`v128.load32_splat`).
+  Splat32,
+  /// Broadcast one 64-bit element to both lanes (`v128.load64_splat`).
+  Splat64,
+  /// Load eight 8-bit ints, sign-extending each to 16 bits (`v128.load8x8_s`).
+  V128Load8x8S,
+  /// Load eight 8-bit ints, zero-extending each to 16 bits (`v128.load8x8_u`).
+  V128Load8x8U,
+  /// Load four 16-bit ints, sign-extending each to 32 bits (`v128.load16x4_s`).
+  V128Load16x4S,
+  /// Load four 16-bit ints, zero-extending each to 32 bits (`v128.load16x4_u`).
+  V128Load16x4U,
+  /// Load two 32-bit ints, sign-extending each to 64 bits (`v128.load32x2_s`).
+  V128Load32x2S,
+  /// Load two 32-bit ints, zero-extending each to 64 bits (`v128.load32x2_u`).
+  V128Load32x2U,
+  /// Load a 32-bit value into the low lane, zeroing the rest (`v128.load32_zero`).
+  V128Load32Zero,
+  /// Load a 64-bit value into the low lane, zeroing the rest (`v128.load64_zero`).
+  V128Load64Zero,
+  /// Load an 8-bit value into a single lane (`v128.load8_lane`).
+  V128Load8Lane {
+    /// The lane index the value is loaded into.
+    lane: u8,
+  },
+  /// Load a 16-bit value into a single lane (`v128.load16_lane`).
+  V128Load16Lane {
+    /// The lane index the value is loaded into.
+    lane: u8,
+  },
+  /// Load a 32-bit value into a single lane (`v128.load32_lane`).
+  V128Load32Lane {
+    /// The lane index the value is loaded into.
+    lane: u8,
+  },
+  /// Load a 64-bit value into a single lane (`v128.load64_lane`).
+  V128Load64Lane {
+    /// The lane index the value is loaded into.
+    lane: u8,
+  },
+  /// Store the 8-bit value of a single lane (`v128.store8_lane`).
+  V128Store8Lane {
+    /// The lane index whose value is stored.
+    lane: u8,
+  },
+  /// Store the 16-bit value of a single lane (`v128.store16_lane`).
+  V128Store16Lane {
+    /// The lane index whose value is stored.
+    lane: u8,
+  },
+  /// Store the 32-bit value of a single lane (`v128.store32_lane`).
+  V128Store32Lane {
+    /// The lane index whose value is stored.
+    lane: u8,
+  },
+  /// Store the 64-bit value of a single lane (`v128.store64_lane`).
+  V128Store64Lane {
+    /// The lane index whose value is stored.
+    lane: u8,
+  },
+}
+
 /// The read/modify/write operation of an `AtomicRmw`, mirroring
 /// `walrus::ir::AtomicOp` (`ir/mod.rs:1665`, fieldless).
 ///
@@ -451,9 +542,10 @@ pub struct RefType {
 /// instructions (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/
 /// `ReturnCallIndirect`), and the C6a SIMD subset: the lane-carrying
 /// `Binop`/`Unop` ops (`op` + `lane`), the v128 `Const`, and the fixed-shape
-/// `V128Bitselect`/`I8x16Swizzle`/`I8x16Shuffle` instructions. Any other
-/// instruction is rejected catchably by both directions (later tasks add the GC
-/// reference ops, the SIMD memory ops (`LoadSimd`), and EH).
+/// `V128Bitselect`/`I8x16Swizzle`/`I8x16Shuffle` instructions, and the C6b SIMD
+/// memory op (`LoadSimd`, the vector load / load-lane / store-lane family). Any
+/// other instruction is rejected catchably by both directions (later tasks add
+/// the GC reference ops and EH).
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.
@@ -497,20 +589,23 @@ pub struct InstrDesc {
   /// is part of its representation, not a wasm semantic check).
   pub lane: Option<u8>,
   /// The referenced memory's stable index, for
-  /// `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`, and the
-  /// DESTINATION memory of `MemoryCopy`.
+  /// `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`/
+  /// `LoadSimd`, and the DESTINATION memory of `MemoryCopy`.
   pub memory: Option<u32>,
   /// `MemoryCopy`: the SOURCE memory's stable index (the destination uses
   /// `memory`).
   pub src_memory: Option<u32>,
   /// `MemoryInit`/`DataDrop`: the referenced data segment's stable index.
   pub data: Option<u32>,
-  /// `Load`/`Store`: the alignment and offset immediate.
+  /// `Load`/`Store`/`LoadSimd`: the alignment and offset immediate.
   pub mem_arg: Option<MemArg>,
   /// `Load`: the kind of load (width, atomicity, extension).
   pub load_kind: Option<LoadKind>,
   /// `Store`: the kind of store (width, atomicity).
   pub store_kind: Option<StoreKind>,
+  /// `LoadSimd`: the kind of SIMD memory op (vector load / load-lane /
+  /// store-lane; the lane variants carry a `lane` index).
+  pub load_simd_kind: Option<LoadSimdKind>,
   /// The referenced table's stable index, for
   /// `TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`, the
   /// DESTINATION table of `TableCopy`, and the table of `CallIndirect` /
@@ -567,6 +662,7 @@ impl InstrDesc {
       mem_arg: None,
       load_kind: None,
       store_kind: None,
+      load_simd_kind: None,
       table: None,
       src_table: None,
       elem: None,
@@ -845,6 +941,72 @@ fn store_kind_from_walrus(kind: wir::StoreKind) -> StoreKind {
     wir::StoreKind::I64_8 { atomic } => StoreKind::I64_8 { atomic },
     wir::StoreKind::I64_16 { atomic } => StoreKind::I64_16 { atomic },
     wir::StoreKind::I64_32 { atomic } => StoreKind::I64_32 { atomic },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LoadSimdKind <-> walrus. Pure value conversions (the enum carries no arena
+// ids, so no resolution and no fallibility); the 8 lane variants map walrus'
+// tuple `(u8)` immediate to/from our named `lane` field. Both matches are
+// EXHAUSTIVE (no `_`) so a future walrus variant is a COMPILE error rather than
+// a silent mismap. Each is `#[inline(never)]` (like the operator `*_to_str`/
+// `*_from_str` tables) so its 20-arm match lives in its OWN frame instead of
+// inflating the recursive walkers (`emit_one`/`read_one`) — the stack-frame
+// discipline the deep-nesting abort guard depends on (see `MAX_NESTING_DEPTH`).
+// ---------------------------------------------------------------------------
+
+/// `LoadSimdKind` -> walrus. Total 1:1 mapping (the 8 lane variants surface our
+/// named `lane` field as walrus' tuple `(u8)` immediate).
+#[inline(never)]
+fn load_simd_kind_to_walrus(kind: &LoadSimdKind) -> wir::LoadSimdKind {
+  match kind {
+    LoadSimdKind::Splat8 => wir::LoadSimdKind::Splat8,
+    LoadSimdKind::Splat16 => wir::LoadSimdKind::Splat16,
+    LoadSimdKind::Splat32 => wir::LoadSimdKind::Splat32,
+    LoadSimdKind::Splat64 => wir::LoadSimdKind::Splat64,
+    LoadSimdKind::V128Load8x8S => wir::LoadSimdKind::V128Load8x8S,
+    LoadSimdKind::V128Load8x8U => wir::LoadSimdKind::V128Load8x8U,
+    LoadSimdKind::V128Load16x4S => wir::LoadSimdKind::V128Load16x4S,
+    LoadSimdKind::V128Load16x4U => wir::LoadSimdKind::V128Load16x4U,
+    LoadSimdKind::V128Load32x2S => wir::LoadSimdKind::V128Load32x2S,
+    LoadSimdKind::V128Load32x2U => wir::LoadSimdKind::V128Load32x2U,
+    LoadSimdKind::V128Load32Zero => wir::LoadSimdKind::V128Load32Zero,
+    LoadSimdKind::V128Load64Zero => wir::LoadSimdKind::V128Load64Zero,
+    LoadSimdKind::V128Load8Lane { lane } => wir::LoadSimdKind::V128Load8Lane(*lane),
+    LoadSimdKind::V128Load16Lane { lane } => wir::LoadSimdKind::V128Load16Lane(*lane),
+    LoadSimdKind::V128Load32Lane { lane } => wir::LoadSimdKind::V128Load32Lane(*lane),
+    LoadSimdKind::V128Load64Lane { lane } => wir::LoadSimdKind::V128Load64Lane(*lane),
+    LoadSimdKind::V128Store8Lane { lane } => wir::LoadSimdKind::V128Store8Lane(*lane),
+    LoadSimdKind::V128Store16Lane { lane } => wir::LoadSimdKind::V128Store16Lane(*lane),
+    LoadSimdKind::V128Store32Lane { lane } => wir::LoadSimdKind::V128Store32Lane(*lane),
+    LoadSimdKind::V128Store64Lane { lane } => wir::LoadSimdKind::V128Store64Lane(*lane),
+  }
+}
+
+/// walrus `LoadSimdKind` -> our enum. Total 1:1 mapping.
+#[inline(never)]
+fn load_simd_kind_from_walrus(kind: wir::LoadSimdKind) -> LoadSimdKind {
+  match kind {
+    wir::LoadSimdKind::Splat8 => LoadSimdKind::Splat8,
+    wir::LoadSimdKind::Splat16 => LoadSimdKind::Splat16,
+    wir::LoadSimdKind::Splat32 => LoadSimdKind::Splat32,
+    wir::LoadSimdKind::Splat64 => LoadSimdKind::Splat64,
+    wir::LoadSimdKind::V128Load8x8S => LoadSimdKind::V128Load8x8S,
+    wir::LoadSimdKind::V128Load8x8U => LoadSimdKind::V128Load8x8U,
+    wir::LoadSimdKind::V128Load16x4S => LoadSimdKind::V128Load16x4S,
+    wir::LoadSimdKind::V128Load16x4U => LoadSimdKind::V128Load16x4U,
+    wir::LoadSimdKind::V128Load32x2S => LoadSimdKind::V128Load32x2S,
+    wir::LoadSimdKind::V128Load32x2U => LoadSimdKind::V128Load32x2U,
+    wir::LoadSimdKind::V128Load32Zero => LoadSimdKind::V128Load32Zero,
+    wir::LoadSimdKind::V128Load64Zero => LoadSimdKind::V128Load64Zero,
+    wir::LoadSimdKind::V128Load8Lane(lane) => LoadSimdKind::V128Load8Lane { lane },
+    wir::LoadSimdKind::V128Load16Lane(lane) => LoadSimdKind::V128Load16Lane { lane },
+    wir::LoadSimdKind::V128Load32Lane(lane) => LoadSimdKind::V128Load32Lane { lane },
+    wir::LoadSimdKind::V128Load64Lane(lane) => LoadSimdKind::V128Load64Lane { lane },
+    wir::LoadSimdKind::V128Store8Lane(lane) => LoadSimdKind::V128Store8Lane { lane },
+    wir::LoadSimdKind::V128Store16Lane(lane) => LoadSimdKind::V128Store16Lane { lane },
+    wir::LoadSimdKind::V128Store32Lane(lane) => LoadSimdKind::V128Store32Lane { lane },
+    wir::LoadSimdKind::V128Store64Lane(lane) => LoadSimdKind::V128Store64Lane { lane },
   }
 }
 
@@ -1249,6 +1411,7 @@ fn emit_one(
     mem_arg,
     load_kind,
     store_kind,
+    load_simd_kind,
     table,
     src_table,
     elem,
@@ -1476,6 +1639,14 @@ fn emit_one(
       let kind = store_kind_to_walrus(&store_kind.ok_or_else(|| missing("Store", "storeKind"))?);
       let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("Store", "memArg"))?)?;
       fb.instr_seq(seq_id).instr(wir::Store { memory, kind, arg });
+    }
+    // SIMD vector load / load-lane / store-lane. Delegated to `emit_load_simd`
+    // (an `#[inline(never)]` helper) SO THAT the arm's locals (the `MemoryId`,
+    // the `wir::LoadSimdKind`, the `wir::MemArg`) and its 20-arm kind conversion
+    // do NOT inflate this recursive walker's frame — the same stack-frame
+    // discipline as `emit_atomic`/`emit_shuffle` (see `MAX_NESTING_DEPTH`).
+    "LoadSimd" => {
+      emit_load_simd(fb, module, seq_id, memory, load_simd_kind, mem_arg)?;
     }
     // Atomic (threads) instructions. Delegated to `emit_atomic` (a separate,
     // non-inlined function) SO THAT the atomic arms' locals do NOT inflate this
@@ -1710,6 +1881,31 @@ fn emit_shuffle(
   Ok(())
 }
 
+/// Emit one `LoadSimd`. Split out of [`emit_one`] and marked `#[inline(never)]`
+/// for the same frame-size reason as [`emit_atomic`]: the resolved `MemoryId`,
+/// the converted `wir::LoadSimdKind`, and the `wir::MemArg` live in this
+/// function's OWN frame, not the recursive `emit_one` frame. Resolves `memory`
+/// (the abort guard), converts the `MemArg` (offset losslessness) and the
+/// `LoadSimdKind` (a plain value — no id to resolve). MIRROR-WALRUS: the lane
+/// index and alignment are emitted verbatim, unchecked.
+#[inline(never)]
+fn emit_load_simd(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  seq_id: wir::InstrSeqId,
+  memory: Option<u32>,
+  load_simd_kind: Option<LoadSimdKind>,
+  mem_arg: Option<MemArg>,
+) -> Result<()> {
+  let memory = memory_id_at(module, memory.ok_or_else(|| missing("LoadSimd", "memory"))?)?;
+  let kind =
+    load_simd_kind_to_walrus(&load_simd_kind.ok_or_else(|| missing("LoadSimd", "loadSimdKind"))?);
+  let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("LoadSimd", "memArg"))?)?;
+  fb.instr_seq(seq_id)
+    .instr(wir::LoadSimd { memory, kind, arg });
+  Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Preflight: a read-only mirror of the emit walk, run BEFORE any arena mutation.
 // ---------------------------------------------------------------------------
@@ -1939,6 +2135,26 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
         d.mem_arg
           .as_ref()
           .ok_or_else(|| missing("Store", "memArg"))?,
+      )?;
+    }
+    // SIMD vector load / load-lane / store-lane. Mirrors emit exactly (the abort
+    // guard + the missing-field + offset-losslessness checks): `memory` resolves,
+    // `loadSimdKind` is present, and the `MemArg` offset is a lossless `u64`. The
+    // kind is a value (its lane index needs no resolution), so nothing else is
+    // checked — this arm's shape matches `Store`, so it does not grow the walker's
+    // frame; the 20-arm kind conversion stays behind `emit_load_simd`.
+    "LoadSimd" => {
+      memory_id_at(
+        module,
+        d.memory.ok_or_else(|| missing("LoadSimd", "memory"))?,
+      )?;
+      d.load_simd_kind
+        .as_ref()
+        .ok_or_else(|| missing("LoadSimd", "loadSimdKind"))?;
+      mem_arg_to_walrus(
+        d.mem_arg
+          .as_ref()
+          .ok_or_else(|| missing("LoadSimd", "memArg"))?,
       )?;
     }
     // Atomic (threads) instructions. Delegated to `validate_atomic` (a separate,
@@ -2405,6 +2621,16 @@ fn read_one(
       let mut d = InstrDesc::new("Store");
       d.memory = Some(e.memory.index() as u32);
       d.store_kind = Some(store_kind_from_walrus(e.kind));
+      d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
+      d
+    }
+    wir::Instr::LoadSimd(e) => {
+      // The 20-arm `LoadSimdKind` decode lives in `load_simd_kind_from_walrus`
+      // (an `#[inline(never)]` helper) so its match stays out of this recursive
+      // walker's frame — mirrors the `Binop`/`Unop` `*_to_str` split.
+      let mut d = InstrDesc::new("LoadSimd");
+      d.memory = Some(e.memory.index() as u32);
+      d.load_simd_kind = Some(load_simd_kind_from_walrus(e.kind));
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
       d
     }

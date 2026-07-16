@@ -2008,9 +2008,10 @@ export declare const enum ImportKindTag {
  * instructions (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/
  * `ReturnCallIndirect`), and the C6a SIMD subset: the lane-carrying
  * `Binop`/`Unop` ops (`op` + `lane`), the v128 `Const`, and the fixed-shape
- * `V128Bitselect`/`I8x16Swizzle`/`I8x16Shuffle` instructions. Any other
- * instruction is rejected catchably by both directions (later tasks add the GC
- * reference ops, the SIMD memory ops (`LoadSimd`), and EH).
+ * `V128Bitselect`/`I8x16Swizzle`/`I8x16Shuffle` instructions, and the C6b SIMD
+ * memory op (`LoadSimd`, the vector load / load-lane / store-lane family). Any
+ * other instruction is rejected catchably by both directions (later tasks add
+ * the GC reference ops and EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -2065,8 +2066,8 @@ export interface InstrDesc {
   lane?: number
   /**
    * The referenced memory's stable index, for
-   * `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`, and the
-   * DESTINATION memory of `MemoryCopy`.
+   * `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`/
+   * `LoadSimd`, and the DESTINATION memory of `MemoryCopy`.
    */
   memory?: number
   /**
@@ -2076,12 +2077,17 @@ export interface InstrDesc {
   srcMemory?: number
   /** `MemoryInit`/`DataDrop`: the referenced data segment's stable index. */
   data?: number
-  /** `Load`/`Store`: the alignment and offset immediate. */
+  /** `Load`/`Store`/`LoadSimd`: the alignment and offset immediate. */
   memArg?: MemArg
   /** `Load`: the kind of load (width, atomicity, extension). */
   loadKind?: LoadKind
   /** `Store`: the kind of store (width, atomicity). */
   storeKind?: StoreKind
+  /**
+   * `LoadSimd`: the kind of SIMD memory op (vector load / load-lane /
+   * store-lane; the lane variants carry a `lane` index).
+   */
+  loadSimdKind?: LoadSimdKind
   /**
    * The referenced table's stable index, for
    * `TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`, the
@@ -2159,6 +2165,61 @@ kind: ExtendedLoad }
 kind: ExtendedLoad }
 | { type: 'I64_32', /** The extension behavior. */
 kind: ExtendedLoad }
+
+/**
+ * The kind of a `LoadSimd` instruction, mirroring `walrus::ir::LoadSimdKind`
+ * (`ir/mod.rs:1534`). This is the SIMD vector load/store-lane family — the
+ * counterpart of [`LoadKind`]/[`StoreKind`] for the `v128.load*`/`v128.store*`
+ * memory ops that a plain `Load`/`Store`'s `V128` does NOT cover.
+ *
+ * Generated as a TypeScript discriminated union keyed on `type`: 12 FIELDLESS
+ * variants (`{ type: 'Splat8' }` … `{ type: 'V128Load64Zero' }`) and 8
+ * LANE-CARRYING variants each with a `lane: number`
+ * (`{ type: 'V128Load8Lane', lane }` … `{ type: 'V128Store64Lane', lane }`).
+ *
+ * The fieldless variants are the whole-vector loads: the four `*.splat`
+ * broadcasts (`Splat8`/`Splat16`/`Splat32`/`Splat64` = `v128.load8_splat` …
+ * `v128.load64_splat`), the six sign/zero-extending widening loads
+ * (`V128Load8x8S`/`U`, `V128Load16x4S`/`U`, `V128Load32x2S`/`U`), and the two
+ * zero-filling loads (`V128Load32Zero`/`V128Load64Zero`). The lane-carrying
+ * variants are the eight load-lane / store-lane ops (`v128.load8_lane` …
+ * `v128.store64_lane`), each carrying the vector `lane` it reads into / writes
+ * from — walrus stores this immediate as a tuple `(u8)`; here it is surfaced as
+ * a named `lane` field.
+ *
+ * MIRROR-WALRUS: the `lane` index is stored verbatim — it is NOT range-checked
+ * against the vector's lane count (that is a wasm semantic check, not a
+ * representation constraint).
+ */
+export type LoadSimdKind =
+  | { type: 'Splat8' }
+  | { type: 'Splat16' }
+  | { type: 'Splat32' }
+  | { type: 'Splat64' }
+  | { type: 'V128Load8x8S' }
+  | { type: 'V128Load8x8U' }
+  | { type: 'V128Load16x4S' }
+  | { type: 'V128Load16x4U' }
+  | { type: 'V128Load32x2S' }
+  | { type: 'V128Load32x2U' }
+  | { type: 'V128Load32Zero' }
+  | { type: 'V128Load64Zero' }
+  | { type: 'V128Load8Lane', /** The lane index the value is loaded into. */
+lane: number }
+| { type: 'V128Load16Lane', /** The lane index the value is loaded into. */
+lane: number }
+| { type: 'V128Load32Lane', /** The lane index the value is loaded into. */
+lane: number }
+| { type: 'V128Load64Lane', /** The lane index the value is loaded into. */
+lane: number }
+| { type: 'V128Store8Lane', /** The lane index whose value is stored. */
+lane: number }
+| { type: 'V128Store16Lane', /** The lane index whose value is stored. */
+lane: number }
+| { type: 'V128Store32Lane', /** The lane index whose value is stored. */
+lane: number }
+| { type: 'V128Store64Lane', /** The lane index whose value is stored. */
+lane: number }
 
 /**
  * The alignment and offset immediate of a `Load`/`Store`, mirroring

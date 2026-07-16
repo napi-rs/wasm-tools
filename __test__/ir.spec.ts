@@ -12,6 +12,7 @@ import {
   type AtomicWidth,
   type InstrDesc,
   type LoadKind,
+  type LoadSimdKind,
   type MemArg,
   type StoreKind,
   type ValType,
@@ -1728,4 +1729,190 @@ test('C6a negative: an unknown SIMD op string still throws (C1b behavior intact)
   t.throws(() => empty().buildFunction([], [], [], [{ type: 'Binop', op: 'I8x16NotARealLaneOp', lane: 0 }]), {
     message: /unknown binary operator `I8x16NotARealLaneOp`/,
   })
+})
+
+// ---------------------------------------------------------------------------
+// C6b: SIMD part 2 — the `LoadSimd` instruction (the vector load / load-lane /
+// store-lane family). A near-twin of C2's Load/Store: same `memory` (MemoryId)
+// and `memArg` (MemArg) fields, but its own `loadSimdKind` (LoadSimdKind: 12
+// fieldless whole-vector loads + 8 lane-carrying load/store-lane ops). Same
+// walrus fact as the earlier tasks: `strict_validate(false)` is a no-op in
+// 0.26.4, so an ill-typed body can never re-parse. The EXHAUSTIVE test therefore
+// uses the IN-MEMORY read path (`buildFunction` -> `instructions()` on the same
+// module, never touching the parser/validator); a separate WELL-TYPED body
+// proves the ops survive the emit -> bytes -> re-parse boundary.
+//
+// MIRROR-WALRUS: `buildFunction` only guards process-aborting hazards (the
+// `memory` index resolves; the MemArg offset is a lossless u64). It does NOT
+// type-check — a lane index past the vector width, an alignment that is not the
+// natural access size, or an ill-typed body all build and emit as-is.
+// ---------------------------------------------------------------------------
+
+// Every LoadSimdKind: all 12 fieldless whole-vector loads plus every one of the
+// 8 lane-carrying ops. The load-lane and store-lane variants use DISTINCT lane
+// values (15/7/3/1 for loads, 14/6/2/0 for stores) so any kind/lane mixup — e.g.
+// a Load8Lane read back as a Store8Lane, or a lane dropped/swapped — is visible.
+const ALL_LOAD_SIMD_KINDS: LoadSimdKind[] = [
+  { type: 'Splat8' },
+  { type: 'Splat16' },
+  { type: 'Splat32' },
+  { type: 'Splat64' },
+  { type: 'V128Load8x8S' },
+  { type: 'V128Load8x8U' },
+  { type: 'V128Load16x4S' },
+  { type: 'V128Load16x4U' },
+  { type: 'V128Load32x2S' },
+  { type: 'V128Load32x2U' },
+  { type: 'V128Load32Zero' },
+  { type: 'V128Load64Zero' },
+  { type: 'V128Load8Lane', lane: 15 },
+  { type: 'V128Load16Lane', lane: 7 },
+  { type: 'V128Load32Lane', lane: 3 },
+  { type: 'V128Load64Lane', lane: 1 },
+  { type: 'V128Store8Lane', lane: 14 },
+  { type: 'V128Store16Lane', lane: 6 },
+  { type: 'V128Store32Lane', lane: 2 },
+  { type: 'V128Store64Lane', lane: 0 },
+]
+
+test('C6b EXHAUSTIVE: LoadSimd across every LoadSimdKind (+ a max-u64 MemArg offset) round-trips in-memory', (t) => {
+  const m = empty()
+  const mem = m.memories.addLocal(false, false, 1n, null, null).index
+  // A varied MemArg per position (reusing the C2 `memArgAt` cycle, whose OFFSETS
+  // include BIG_OFFSET and U64_MAX) so the bigint offset path is exercised at the
+  // full width across the body.
+  const body: InstrDesc[] = ALL_LOAD_SIMD_KINDS.map((k, i) => ({
+    type: 'LoadSimd',
+    memory: mem,
+    loadSimdKind: k,
+    memArg: memArgAt(i),
+  }))
+
+  const idx = m.buildFunction([], [], [], body)
+  // Read back from the SAME in-memory module (no emit/re-parse; buildFunction is
+  // MIRROR-WALRUS, so this ill-typed-but-well-formed body builds directly).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+
+  // Sanity: all 20 kinds are present, and a u64::MAX offset survived exactly
+  // (proving the MemArg bigint path is lossless at the full width for LoadSimd).
+  const kinds = new Set(read.map((d) => d.loadSimdKind?.type))
+  t.is(kinds.size, ALL_LOAD_SIMD_KINDS.length)
+  t.true(
+    read.some((d) => d.memArg?.offset === U64_MAX),
+    'a u64::MAX MemArg offset must round-trip exactly',
+  )
+  // A lane variant carries its exact lane (not swapped with another kind's).
+  const store8 = read.find((d) => d.loadSimdKind?.type === 'V128Store8Lane')!
+  t.deepEqual(store8.loadSimdKind, { type: 'V128Store8Lane', lane: 14 })
+})
+
+test('C6b: a well-typed LoadSimd body (splat/load-lane/store-lane) emits valid wasm and round-trips through re-parse', (t) => {
+  const m = empty()
+  const mem = m.memories.addLocal(false, false, 1n, null, null).index
+  // All 8-bit ops so align 1 (the natural access size) keeps the body valid wasm.
+  const body: InstrDesc[] = [
+    // i32.const 0 ; v128.load8_splat ; drop
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'LoadSimd', memory: mem, loadSimdKind: { type: 'Splat8' }, memArg: { align: 1, offset: 0n } },
+    { type: 'Drop' },
+    // i32.const 0 ; v128.const A ; v128.load8_lane 0 ; drop
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'V128', value: V128_A } },
+    { type: 'LoadSimd', memory: mem, loadSimdKind: { type: 'V128Load8Lane', lane: 0 }, memArg: { align: 1, offset: 0n } },
+    { type: 'Drop' },
+    // i32.const 0 ; v128.const A ; v128.store8_lane 3  (pops address + vector)
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Const', value: { type: 'V128', value: V128_A } },
+    { type: 'LoadSimd', memory: mem, loadSimdKind: { type: 'V128Store8Lane', lane: 3 }, memArg: { align: 1, offset: 0n } },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'simd6b'
+  const bytes = m.emitWasm(false)
+
+  // Independent proof the bytes are real, well-typed (stable) SIMD wasm.
+  t.true(WebAssembly.validate(bytes))
+
+  // Re-parse (all proposals on so every SIMD opcode decodes) and read back: the
+  // ops, lanes, and MemArgs all decode to the same body.
+  const reparsed = new ModuleConfig().onlyStableFeatures(false).parse(bytes)
+  const read = reparsed.functions.byName('simd6b')!.instructions()
+  t.deepEqual(read, body)
+})
+
+test('C6b: a large MemArg offset on a LoadSimd survives the emit -> bytes -> re-parse boundary (memory64)', (t) => {
+  // A 64-bit offset needs a memory64 memory to stay well-typed on re-parse.
+  const m = empty()
+  const mem = m.memories.addLocal(false, true, 1n, null, null).index
+  const body: InstrDesc[] = [
+    { type: 'Const', value: { type: 'I64', value: 0n } },
+    { type: 'LoadSimd', memory: mem, loadSimdKind: { type: 'Splat8' }, memArg: { align: 1, offset: BIG_OFFSET } },
+    { type: 'Drop' },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'bigsimd'
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+  const reparsed = new ModuleConfig().onlyStableFeatures(false).parse(bytes)
+  const read = reparsed.functions.byName('bigsimd')!.instructions()
+  t.deepEqual(read, body)
+  t.is(read[1].memArg!.offset, BIG_OFFSET)
+})
+
+test('C6b negative: an out-of-range/foreign memory index on a LoadSimd throws catchably (no abort)', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null) // memory 0 exists; 5 does not
+  t.throws(
+    () =>
+      m.buildFunction([], [], [], [
+        { type: 'LoadSimd', memory: 5, loadSimdKind: { type: 'Splat8' }, memArg: { align: 1, offset: 0n } },
+      ]),
+    { message: /no memory at index 5/ },
+  )
+  // Process is still alive and the module was never mutated (the proof under WASI
+  // that the bad index was caught pre-emit, not aborted).
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C6b negative: a LoadSimd descriptor missing a required field throws catchably', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null)
+  // memory is resolved first.
+  t.throws(
+    () =>
+      m.buildFunction([], [], [], [
+        { type: 'LoadSimd', loadSimdKind: { type: 'Splat8' }, memArg: { align: 1, offset: 0n } },
+      ]),
+    { message: /`LoadSimd` instruction is missing its `memory` field/ },
+  )
+  // loadSimdKind is checked before memArg (matching emit's order).
+  t.throws(
+    () => m.buildFunction([], [], [], [{ type: 'LoadSimd', memory: 0, memArg: { align: 1, offset: 0n } }]),
+    { message: /`LoadSimd` instruction is missing its `loadSimdKind` field/ },
+  )
+  t.throws(
+    () => m.buildFunction([], [], [], [{ type: 'LoadSimd', memory: 0, loadSimdKind: { type: 'Splat8' } }]),
+    { message: /`LoadSimd` instruction is missing its `memArg` field/ },
+  )
+})
+
+test('C6b negative: a non-lossless MemArg offset on a LoadSimd throws catchably', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null)
+  const ls = (offset: bigint): InstrDesc => ({
+    type: 'LoadSimd',
+    memory: 0,
+    loadSimdKind: { type: 'Splat8' },
+    memArg: { align: 1, offset },
+  })
+  // 2^64 is one past u64::MAX — not lossless.
+  t.throws(() => m.buildFunction([], [], [], [ls(1n << 64n)]), {
+    message: /MemArg offset must be a non-negative integer that fits in a u64/,
+  })
+  // A negative offset is rejected too (a u64 has no sign).
+  t.throws(() => m.buildFunction([], [], [], [ls(-1n)]), {
+    message: /MemArg offset must be a non-negative integer that fits in a u64/,
+  })
+  t.is(1 + 1, 2)
 })
