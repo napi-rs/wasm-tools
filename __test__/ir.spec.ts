@@ -458,7 +458,7 @@ test('guard: a body that fails late leaves the type arena unchanged, and a later
 // ---------------------------------------------------------------------------
 
 // Must match src/ir.rs::MAX_NESTING_DEPTH.
-const MAX_NESTING_DEPTH = 256
+const MAX_NESTING_DEPTH = 250
 
 // `n` nested empty Blocks: [Block{ seq: [Block{ seq: [ … [] ] }] }]. The read
 // walk produces the identical shape, so this doubles as the deep-equal oracle.
@@ -502,9 +502,9 @@ function deepBlockModule(b: number): Uint8Array {
 
 test('C1a-fix2 (build): an over-cap body throws catchably, the process survives, and the module still emits', (t) => {
   const m = empty()
-  const over = nestedBlocks(MAX_NESTING_DEPTH + 5) // 261 nested Blocks — past the cap
+  const over = nestedBlocks(MAX_NESTING_DEPTH + 5) // 255 nested Blocks — past the cap
   t.throws(() => m.buildFunction([], [], [], over), {
-    message: /instruction nesting too deep \(max 256\)/,
+    message: /instruction nesting too deep \(max 250\)/,
   })
   // No abort: control returned to the test. The all-or-nothing preflight left the
   // module untouched, so it still emits a valid (empty) module.
@@ -519,7 +519,7 @@ test('C1a-fix2 (read): a parsed module nested past the cap is read-bounded — i
   const m = WasmModule.fromBuffer(deepBlockModule(MAX_NESTING_DEPTH + 5))
   const f = m.functions.getByIndex(0)!
   t.throws(() => f.instructions(), {
-    message: /instruction nesting too deep \(max 256\)/,
+    message: /instruction nesting too deep \(max 250\)/,
   })
   // Process survived the guarded read.
   t.is(1 + 1, 2)
@@ -1915,4 +1915,280 @@ test('C6b negative: a non-lossless MemArg offset on a LoadSimd throws catchably'
     message: /MemArg offset must be a non-negative integer that fits in a u64/,
   })
   t.is(1 + 1, 2)
+})
+
+// ---------------------------------------------------------------------------
+// C7a: wasm-GC struct + array instructions (20 variants: 6 struct + 14 array).
+//
+// The type-bearing ops REUSE `resolve_type_id` (rejects a nonexistent AND an
+// internal function-entry-type index), exactly like C3's call_indirect; the
+// data/elem array ops reuse `data_id_at` / `element_id_at`. `ArrayCopy` carries
+// BOTH a destination (`typeIndex`) and a source (`srcTypeIndex`) array type.
+//
+// Same walrus fact as C1b/C2: `strict_validate(false)` is a no-op in 0.26.4, so
+// an ill-typed body can never re-parse. The EXHAUSTIVE test therefore uses the
+// IN-MEMORY read path (buildFunction -> instructions() on the same module, never
+// touching the parser/validator), building the struct type via `types.addStruct`
+// and the array types via `types.addArray` (B5a), a passive data segment via
+// `data.addPassive`, and reusing the committed elements.wasm fixture's element
+// segment (the binding has no `elements.add`). A separate WELL-TYPED body proves
+// the ops survive the emit -> bytes -> re-parse boundary (GC needs
+// onlyStableFeatures(false) on parse).
+//
+// MIRROR-WALRUS: buildFunction only guards process-aborting hazards (each
+// type/data/element index resolves; required fields present). It does NOT
+// type-check — a struct.get on an out-of-range field, an array.copy between
+// mismatched element types, or a struct.new for an array type all build and emit
+// as-is.
+// ---------------------------------------------------------------------------
+
+// A GC struct field list with an unpacked (i32) and a packed (i8) field, so the
+// struct.get / struct.get_s / struct.get_u ops each have a plausible field.
+const STRUCT_FIELDS = [
+  { storage: { type: 'Val', value: I32 }, mutable: true },
+  { storage: { type: 'I8' }, mutable: false },
+] as const
+const ARRAY_ELEMENT = { storage: { type: 'Val', value: I32 }, mutable: true } as const
+const ARRAY_ELEMENT_2 = { storage: { type: 'Val', value: F32 }, mutable: false } as const
+
+test('C7a EXHAUSTIVE: all 20 GC struct/array instrs round-trip in-memory', (t) => {
+  // Start from the committed elements fixture (table 0 funcref + element[0]
+  // ACTIVE / element[1] PASSIVE) so a genuine ElementId exists for the elem ops,
+  // then add the GC types and a passive data segment programmatically.
+  const m = WasmModule.fromBuffer(ELEMENTS_FIXTURE)
+  const s = m.types.addStruct([...STRUCT_FIELDS]).index
+  // TWO distinct array types so ArrayCopy's dst (`typeIndex`) and src
+  // (`srcTypeIndex`) are provably not swapped on the round-trip.
+  const a1 = m.types.addArray({ ...ARRAY_ELEMENT }).index
+  const a2 = m.types.addArray({ ...ARRAY_ELEMENT_2 }).index
+  const d = m.data.addPassive(new Uint8Array([1, 2, 3, 4])).index
+  const e = 0 // element[0] from the fixture
+
+  const body: InstrDesc[] = [
+    // 6 struct ops.
+    { type: 'StructNew', typeIndex: s },
+    { type: 'StructNewDefault', typeIndex: s },
+    { type: 'StructGet', typeIndex: s, field: 0 },
+    { type: 'StructGetS', typeIndex: s, field: 1 },
+    { type: 'StructGetU', typeIndex: s, field: 1 },
+    { type: 'StructSet', typeIndex: s, field: 0 },
+    // 14 array ops.
+    { type: 'ArrayNew', typeIndex: a1 },
+    { type: 'ArrayNewDefault', typeIndex: a1 },
+    { type: 'ArrayNewFixed', typeIndex: a1, len: 3 },
+    { type: 'ArrayNewData', typeIndex: a1, data: d },
+    { type: 'ArrayNewElem', typeIndex: a1, elem: e },
+    { type: 'ArrayGet', typeIndex: a1 },
+    { type: 'ArrayGetS', typeIndex: a1 },
+    { type: 'ArrayGetU', typeIndex: a1 },
+    { type: 'ArraySet', typeIndex: a1 },
+    { type: 'ArrayLen' },
+    { type: 'ArrayFill', typeIndex: a1 },
+    { type: 'ArrayCopy', typeIndex: a1, srcTypeIndex: a2 },
+    { type: 'ArrayInitData', typeIndex: a1, data: d },
+    { type: 'ArrayInitElem', typeIndex: a1, elem: e },
+  ]
+
+  const idx = m.buildFunction([], [], [], body)
+  // Read back from the SAME in-memory module (no emit/re-parse; buildFunction is
+  // MIRROR-WALRUS, so this ill-typed-but-well-formed body builds directly).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+
+  // Sanity: all 20 instruction kinds are present.
+  const kinds = new Set(read.map((dd) => dd.type))
+  for (const k of [
+    'StructNew',
+    'StructNewDefault',
+    'StructGet',
+    'StructGetS',
+    'StructGetU',
+    'StructSet',
+    'ArrayNew',
+    'ArrayNewDefault',
+    'ArrayNewFixed',
+    'ArrayNewData',
+    'ArrayNewElem',
+    'ArrayGet',
+    'ArrayGetS',
+    'ArrayGetU',
+    'ArraySet',
+    'ArrayLen',
+    'ArrayFill',
+    'ArrayCopy',
+    'ArrayInitData',
+    'ArrayInitElem',
+  ]) {
+    t.true(kinds.has(k), `body should contain a ${k}`)
+  }
+  // ArrayCopy's dst (typeIndex) and src (srcTypeIndex) are distinct and not swapped.
+  const copy = read.find((dd) => dd.type === 'ArrayCopy')!
+  t.is(copy.typeIndex, a1)
+  t.is(copy.srcTypeIndex, a2)
+  // StructGet carries BOTH its struct type and its field index.
+  const sget = read.find((dd) => dd.type === 'StructGet')!
+  t.is(sget.typeIndex, s)
+  t.is(sget.field, 0)
+  // ArrayNewFixed carries its len; the data/elem ops carry their segment indices.
+  t.is(read.find((dd) => dd.type === 'ArrayNewFixed')!.len, 3)
+  t.is(read.find((dd) => dd.type === 'ArrayNewData')!.data, d)
+  t.is(read.find((dd) => dd.type === 'ArrayNewElem')!.elem, e)
+})
+
+test('C7a: a well-typed struct/array body emits valid GC wasm and round-trips through re-parse', (t) => {
+  const m = empty()
+  const s = m.types.addStruct([...STRUCT_FIELDS]).index
+  const a = m.types.addArray({ ...ARRAY_ELEMENT }).index
+
+  // WELL-TYPED: struct.new_default pushes (ref $s), drop it; i32.const feeds
+  // array.new_default's length, drop the resulting (ref $a).
+  const body: InstrDesc[] = [
+    { type: 'StructNewDefault', typeIndex: s },
+    { type: 'Drop' },
+    { type: 'Const', value: { type: 'I32', value: 3 } },
+    { type: 'ArrayNewDefault', typeIndex: a },
+    { type: 'Drop' },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'gcwelltyped'
+  const bytes = m.emitWasm(false)
+
+  // Re-parse with GC enabled (onlyStableFeatures(false)); read the ops back. Look
+  // up the struct/array type indices in the re-parsed module so the assertion is
+  // robust to any type re-indexing across the emit -> parse boundary.
+  const reparsed = new ModuleConfig().onlyStableFeatures(false).strictValidate(false).parse(bytes)
+  const sIdx = reparsed.types.items().find((x) => x.kind === 'Struct')!.index
+  const aIdx = reparsed.types.items().find((x) => x.kind === 'Array')!.index
+  const read = reparsed.functions.byName('gcwelltyped')!.instructions()
+  t.deepEqual(read, [
+    { type: 'StructNewDefault', typeIndex: sIdx },
+    { type: 'Drop' },
+    { type: 'Const', value: { type: 'I32', value: 3 } },
+    { type: 'ArrayNewDefault', typeIndex: aIdx },
+    { type: 'Drop' },
+  ])
+})
+
+test('C7a negative: a nonexistent struct/array type index (or dst_ty/src_ty) throws catchably (no abort)', (t) => {
+  const m = WasmModule.fromBuffer(ELEMENTS_FIXTURE)
+  const a = m.types.addArray({ ...ARRAY_ELEMENT }).index
+
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'StructNew', typeIndex: 9999 }]), {
+    message: /no type at index 9999/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNew', typeIndex: 9999 }]), {
+    message: /no type at index 9999/,
+  })
+  // ArrayCopy resolves the DESTINATION (typeIndex) first: a bad dst throws.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayCopy', typeIndex: 9999, srcTypeIndex: a }]), {
+    message: /no type at index 9999/,
+  })
+  // ...and the SOURCE (srcTypeIndex) is guarded too, alongside a valid dst.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayCopy', typeIndex: a, srcTypeIndex: 9999 }]), {
+    message: /no type at index 9999/,
+  })
+  // Process is still alive and the module was never mutated (a real abort would
+  // have taken the whole run down — the proof under WASI).
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C7a negative: a type index naming an internal entry type is rejected (resolve_type_id filter)', (t) => {
+  const m = empty()
+  // A local function with a MULTI-VALUE result signature has a MultiValue entry
+  // block, so walrus records an internal ENTRY type in the raw type arena. That
+  // entry type is never a real user struct/array type, so resolve_type_id must
+  // reject a GC instr that names it (it would otherwise abort at emit via
+  // get_type_index) — exactly the guard C3's call_indirect relies on.
+  m.buildFunction(
+    [],
+    [I32, I32],
+    [],
+    [
+      { type: 'Const', value: { type: 'I32', value: 0 } },
+      { type: 'Const', value: { type: 'I32', value: 0 } },
+    ],
+  )
+  // Add a struct AFTER, so it sits at a raw index ABOVE the entry type. The entry
+  // type is then the "hole": a raw index the visible-type accessor skips (it
+  // filters entry types out, exactly as resolve_type_id does).
+  const s = m.types.addStruct([...STRUCT_FIELDS]).index
+  let entryIndex = -1
+  for (let i = 0; i < s; i++) {
+    if (m.types.getByIndex(i) === null) {
+      entryIndex = i
+      break
+    }
+  }
+  t.true(entryIndex >= 0, 'expected an internal entry type below the struct index')
+
+  // Naming the entry type is rejected catchably for a struct ty AND for ArrayCopy's src_ty.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'StructNew', typeIndex: entryIndex }]), {
+    message: new RegExp(`no type at index ${entryIndex}`),
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayCopy', typeIndex: s, srcTypeIndex: entryIndex }]), {
+    message: new RegExp(`no type at index ${entryIndex}`),
+  })
+  t.is(1 + 1, 2)
+})
+
+test('C7a negative: an out-of-range data or element segment index throws catchably (no abort)', (t) => {
+  const m = WasmModule.fromBuffer(ELEMENTS_FIXTURE)
+  const a = m.types.addArray({ ...ARRAY_ELEMENT }).index
+  // The fixture has element segments 0/1 but NO data segments.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNewData', typeIndex: a, data: 0 }]), {
+    message: /no data segment at index 0/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayInitData', typeIndex: a, data: 5 }]), {
+    message: /no data segment at index 5/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNewElem', typeIndex: a, elem: 7 }]), {
+    message: /no element segment at index 7/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayInitElem', typeIndex: a, elem: 7 }]), {
+    message: /no element segment at index 7/,
+  })
+  // The array type resolves BEFORE the data/elem segment (matching emit's order):
+  // a bad type index throws even with a valid segment.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNewElem', typeIndex: 9999, elem: 0 }]), {
+    message: /no type at index 9999/,
+  })
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C7a negative: a struct/array descriptor missing a required field throws catchably', (t) => {
+  const m = WasmModule.fromBuffer(ELEMENTS_FIXTURE)
+  const s = m.types.addStruct([...STRUCT_FIELDS]).index
+  const a = m.types.addArray({ ...ARRAY_ELEMENT }).index
+
+  // Missing typeIndex on the type-bearing ops.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'StructNew' }]), {
+    message: /`StructNew` instruction is missing its `typeIndex` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNew' }]), {
+    message: /`ArrayNew` instruction is missing its `typeIndex` field/,
+  })
+  // struct.get needs its field index (resolved AFTER the type, matching emit).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'StructGet', typeIndex: s }]), {
+    message: /`StructGet` instruction is missing its `field` field/,
+  })
+  // array.new_fixed needs its len.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNewFixed', typeIndex: a }]), {
+    message: /`ArrayNewFixed` instruction is missing its `len` field/,
+  })
+  // array.new_data needs its data segment; array.new_elem its element segment.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNewData', typeIndex: a }]), {
+    message: /`ArrayNewData` instruction is missing its `data` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNewElem', typeIndex: a }]), {
+    message: /`ArrayNewElem` instruction is missing its `elem` field/,
+  })
+  // ArrayCopy needs BOTH type indices: typeIndex is checked before srcTypeIndex.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayCopy', srcTypeIndex: a }]), {
+    message: /`ArrayCopy` instruction is missing its `typeIndex` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayCopy', typeIndex: a }]), {
+    message: /`ArrayCopy` instruction is missing its `srcTypeIndex` field/,
+  })
 })

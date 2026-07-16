@@ -2009,9 +2009,14 @@ export declare const enum ImportKindTag {
  * `ReturnCallIndirect`), and the C6a SIMD subset: the lane-carrying
  * `Binop`/`Unop` ops (`op` + `lane`), the v128 `Const`, and the fixed-shape
  * `V128Bitselect`/`I8x16Swizzle`/`I8x16Shuffle` instructions, and the C6b SIMD
- * memory op (`LoadSimd`, the vector load / load-lane / store-lane family). Any
- * other instruction is rejected catchably by both directions (later tasks add
- * the GC reference ops and EH).
+ * memory op (`LoadSimd`, the vector load / load-lane / store-lane family), and
+ * the C7a wasm-GC struct/array subset (`StructNew`/`StructNewDefault`/
+ * `StructGet`/`StructGetS`/`StructGetU`/`StructSet` and `ArrayNew`/
+ * `ArrayNewDefault`/`ArrayNewFixed`/`ArrayNewData`/`ArrayNewElem`/`ArrayGet`/
+ * `ArrayGetS`/`ArrayGetU`/`ArraySet`/`ArrayLen`/`ArrayFill`/`ArrayCopy`/
+ * `ArrayInitData`/`ArrayInitElem`). Any other instruction is rejected catchably
+ * by both directions (later tasks add the remaining GC reference ops — ref
+ * cast/test/i31/convert/call_ref and br_on_cast/null — and EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -2127,6 +2132,22 @@ export interface InstrDesc {
    * 16 bytes as-is.
    */
   shuffleIndices?: Uint8Array
+  /**
+   * `StructGet`/`StructGetS`/`StructGetU`/`StructSet`: the field index within
+   * the GC struct. MIRROR-WALRUS: a plain immediate, stored verbatim and NOT
+   * range-checked against the struct's field count.
+   */
+  field?: number
+  /**
+   * `ArrayNewFixed`: the number of elements taken from the stack (a statically
+   * known immediate). MIRROR-WALRUS: stored verbatim, not validated.
+   */
+  len?: number
+  /**
+   * `ArrayCopy`: the SOURCE array type's stable index (the DESTINATION array
+   * type uses `type_index`), mirroring walrus' `ArrayCopy { dst_ty, src_ty }`.
+   */
+  srcTypeIndex?: number
 }
 
 /**

@@ -83,24 +83,35 @@ use crate::valtype::{HeapType, ValType};
 /// practice. All three walks share the SAME cap so build and read stay symmetric:
 /// a body you can build+emit is a body you can read back, and vice-versa.
 ///
-/// ### Empirically why 256
+/// ### Empirically why 250 (was 256 through C6b)
 /// Measured on this repo (debug builds, per-depth isolated processes):
 /// * `wasm32-wasi` never hard-aborts on over-deep nesting — the emnapi JS glue
 ///   raises a CATCHABLE `RangeError` ("Maximum call stack size exceeded") on both
-///   decode (build ≳ 550 deep) and encode (read ≳ 700 deep). So the wasi target
-///   is safe at any N; it only ever throws.
+///   decode and encode. So the wasi target is safe at any N; it only ever throws.
+///   The standalone ceiling is high (decode ≳ 550 deep), but UNDER THE AVA TEST
+///   HARNESS the available JS stack is smaller, so the effective marshalling
+///   ceiling that binds the `+ K` over-cap tests sits much lower — in the ~260s.
 /// * Native (Node 24) DOES hard-abort: the JS→Rust decode SIGSEGVs at ≈740 deep,
 ///   and — tighter — the Rust→JS ENCODE of a read-back tree hits V8's
 ///   `Check failed: isolate_->IsOnCentralStack()` fatal at ≈525 deep (a GC fired
 ///   while deep in the native encode recursion; GC-timing-dependent, so the
 ///   threshold is a fuzzy, non-monotonic window, not a hard line).
 ///
-/// 256 sits ~2x below that native encode fatal (read-back at depth 256/300/350
-/// was 25/25 clean across runs) and ~2.9x below the decode SIGSEGV, leaving
-/// comfortable margin for the `+ K` over-cap tests to reach the guard and throw
-/// catchably rather than trip an abort. Anything materially higher risks the
-/// timing-dependent native encode fatal under real heap pressure.
-pub(crate) const MAX_NESTING_DEPTH: usize = 256;
+/// The binding constraint is that the `+ K` over-cap tests must MARSHAL
+/// `MAX_NESTING_DEPTH + K` (K = 5) descriptors before the Rust guard can fire, so
+/// that depth must stay under the AVA-wasi marshalling ceiling. C7a widened
+/// `InstrDesc` (the GC `field`/`len`/`src_type_index` immediates), which grows the
+/// per-level `from_napi_value`/`to_napi_value` frame and lowered that ceiling
+/// below the old `256 + 5 = 261`: the over-cap build began hitting the catchable
+/// `RangeError` INSTEAD of the guard message. So the cap was retuned 256 → 250.
+/// At 250 the deepest workload any test drives is the over-cap decode of
+/// `250 + 5 = 255` — the SAME depth the at-cap round-trip already exercises
+/// (decode + build + emit + read + encode) cleanly — while the over-cap does
+/// strictly less (decode, then throw), so it sits comfortably inside the ceiling.
+/// 250 still sits ~2x below the native encode fatal. Real-world wasm nesting is
+/// tiny (~50 deep), so lowering the ceiling by 6 is invisible in practice; a
+/// materially higher value re-opens the over-cap `RangeError` on wasi.
+pub(crate) const MAX_NESTING_DEPTH: usize = 250;
 
 /// The catchable error returned when a walk would descend past
 /// [`MAX_NESTING_DEPTH`].
@@ -543,9 +554,14 @@ pub struct RefType {
 /// `ReturnCallIndirect`), and the C6a SIMD subset: the lane-carrying
 /// `Binop`/`Unop` ops (`op` + `lane`), the v128 `Const`, and the fixed-shape
 /// `V128Bitselect`/`I8x16Swizzle`/`I8x16Shuffle` instructions, and the C6b SIMD
-/// memory op (`LoadSimd`, the vector load / load-lane / store-lane family). Any
-/// other instruction is rejected catchably by both directions (later tasks add
-/// the GC reference ops and EH).
+/// memory op (`LoadSimd`, the vector load / load-lane / store-lane family), and
+/// the C7a wasm-GC struct/array subset (`StructNew`/`StructNewDefault`/
+/// `StructGet`/`StructGetS`/`StructGetU`/`StructSet` and `ArrayNew`/
+/// `ArrayNewDefault`/`ArrayNewFixed`/`ArrayNewData`/`ArrayNewElem`/`ArrayGet`/
+/// `ArrayGetS`/`ArrayGetU`/`ArraySet`/`ArrayLen`/`ArrayFill`/`ArrayCopy`/
+/// `ArrayInitData`/`ArrayInitElem`). Any other instruction is rejected catchably
+/// by both directions (later tasks add the remaining GC reference ops — ref
+/// cast/test/i31/convert/call_ref and br_on_cast/null — and EH).
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.
@@ -635,6 +651,16 @@ pub struct InstrDesc {
   /// semantic check — a lane index >= 32 is emitted verbatim); read produces the
   /// 16 bytes as-is.
   pub shuffle_indices: Option<Uint8Array>,
+  /// `StructGet`/`StructGetS`/`StructGetU`/`StructSet`: the field index within
+  /// the GC struct. MIRROR-WALRUS: a plain immediate, stored verbatim and NOT
+  /// range-checked against the struct's field count.
+  pub field: Option<u32>,
+  /// `ArrayNewFixed`: the number of elements taken from the stack (a statically
+  /// known immediate). MIRROR-WALRUS: stored verbatim, not validated.
+  pub len: Option<u32>,
+  /// `ArrayCopy`: the SOURCE array type's stable index (the DESTINATION array
+  /// type uses `type_index`), mirroring walrus' `ArrayCopy { dst_ty, src_ty }`.
+  pub src_type_index: Option<u32>,
 }
 
 impl InstrDesc {
@@ -672,6 +698,9 @@ impl InstrDesc {
       atomic_width: None,
       sixty_four: None,
       shuffle_indices: None,
+      field: None,
+      len: None,
+      src_type_index: None,
     }
   }
 }
@@ -1421,6 +1450,9 @@ fn emit_one(
     atomic_width,
     sixty_four,
     shuffle_indices,
+    field,
+    len,
+    src_type_index,
   } = d;
 
   match r#type.as_str() {
@@ -1767,11 +1799,38 @@ fn emit_one(
       fb.instr_seq(seq_id)
         .instr(wir::ReturnCallIndirect { ty, table });
     }
+    // GC struct instructions (C7a). Delegated to `emit_struct` (an
+    // `#[inline(never)]` helper) SO THAT the six arms' locals do NOT inflate this
+    // recursive walker's frame — the same stack-frame discipline as `emit_atomic`
+    // (see `MAX_NESTING_DEPTH`). Each resolves its `TypeId` via `resolve_type_id`
+    // (the abort guard) exactly like `CallIndirect`.
+    "StructNew" | "StructNewDefault" | "StructGet" | "StructGetS" | "StructGetU" | "StructSet" => {
+      emit_struct(fb, module, seq_id, r#type.as_str(), type_index, field)?;
+    }
+    // GC array instructions (C7a). Delegated to `emit_array` (an
+    // `#[inline(never)]` helper) for the SAME frame-size reason. Each resolves its
+    // `TypeId`(s) via `resolve_type_id`; the data/elem ops also resolve a
+    // `DataId`/`ElementId` via `data_id_at`/`element_id_at` (all abort guards).
+    "ArrayNew" | "ArrayNewDefault" | "ArrayNewFixed" | "ArrayNewData" | "ArrayNewElem"
+    | "ArrayGet" | "ArrayGetS" | "ArrayGetU" | "ArraySet" | "ArrayLen" | "ArrayFill"
+    | "ArrayCopy" | "ArrayInitData" | "ArrayInitElem" => {
+      emit_array(
+        fb,
+        module,
+        seq_id,
+        r#type.as_str(),
+        type_index,
+        src_type_index,
+        len,
+        data,
+        elem,
+      )?;
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
          C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
-         atomic, table, and reference/tail-call subset)"
+         atomic, table, reference/tail-call, and GC struct/array subset)"
       )));
     }
   }
@@ -1903,6 +1962,227 @@ fn emit_load_simd(
   let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("LoadSimd", "memArg"))?)?;
   fb.instr_seq(seq_id)
     .instr(wir::LoadSimd { memory, kind, arg });
+  Ok(())
+}
+
+/// Emit one GC struct instruction (C7a). Split out of [`emit_one`] and marked
+/// `#[inline(never)]` for the same frame-size reason as [`emit_atomic`]: the six
+/// arms' locals live in this function's OWN frame, not the recursive `emit_one`
+/// frame. Every arm resolves its `TypeId` through [`resolve_type_id`] (which
+/// rejects a nonexistent AND an internal function-entry-type index — a
+/// foreign/deleted/entry `TypeId` reaching emit panics walrus' `get_type_index`
+/// into an uncatchable abort). The `field` immediate of the get/set ops is a
+/// plain value (MIRROR-WALRUS: not range-checked). The caller only routes the six
+/// struct discriminants here, so the final arm is unreachable.
+#[inline(never)]
+fn emit_struct(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  seq_id: wir::InstrSeqId,
+  ty_str: &str,
+  type_index: Option<u32>,
+  field: Option<u32>,
+) -> Result<()> {
+  match ty_str {
+    "StructNew" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("StructNew", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::StructNew { ty });
+    }
+    "StructNewDefault" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("StructNewDefault", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::StructNewDefault { ty });
+    }
+    "StructGet" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("StructGet", "typeIndex"))?,
+      )?;
+      let field = field.ok_or_else(|| missing("StructGet", "field"))?;
+      fb.instr_seq(seq_id).instr(wir::StructGet { ty, field });
+    }
+    "StructGetS" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("StructGetS", "typeIndex"))?,
+      )?;
+      let field = field.ok_or_else(|| missing("StructGetS", "field"))?;
+      fb.instr_seq(seq_id).instr(wir::StructGetS { ty, field });
+    }
+    "StructGetU" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("StructGetU", "typeIndex"))?,
+      )?;
+      let field = field.ok_or_else(|| missing("StructGetU", "field"))?;
+      fb.instr_seq(seq_id).instr(wir::StructGetU { ty, field });
+    }
+    "StructSet" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("StructSet", "typeIndex"))?,
+      )?;
+      let field = field.ok_or_else(|| missing("StructSet", "field"))?;
+      fb.instr_seq(seq_id).instr(wir::StructSet { ty, field });
+    }
+    // Unreachable: `emit_one` only routes the six struct discriminants here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not a struct instruction"
+      )))
+    }
+  }
+  Ok(())
+}
+
+/// Emit one GC array instruction (C7a). Split out of [`emit_one`] and marked
+/// `#[inline(never)]` for the same frame-size reason as [`emit_atomic`]. Every
+/// type-bearing arm resolves its `TypeId` through [`resolve_type_id`] (the abort
+/// guard); `ArrayCopy` resolves BOTH `dst_ty` (`type_index`) and `src_ty`
+/// (`src_type_index`); the data/elem ops additionally resolve a `DataId`/
+/// `ElementId` via [`data_id_at`]/[`element_id_at`]. `ArrayNewFixed`'s `len` is a
+/// plain immediate (MIRROR-WALRUS: verbatim) and `ArrayLen` is fieldless. The
+/// caller only routes the fourteen array discriminants here, so the final arm is
+/// unreachable.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn emit_array(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  seq_id: wir::InstrSeqId,
+  ty_str: &str,
+  type_index: Option<u32>,
+  src_type_index: Option<u32>,
+  len: Option<u32>,
+  data: Option<u32>,
+  elem: Option<u32>,
+) -> Result<()> {
+  match ty_str {
+    "ArrayNew" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayNew", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ArrayNew { ty });
+    }
+    "ArrayNewDefault" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayNewDefault", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ArrayNewDefault { ty });
+    }
+    "ArrayNewFixed" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayNewFixed", "typeIndex"))?,
+      )?;
+      let len = len.ok_or_else(|| missing("ArrayNewFixed", "len"))?;
+      fb.instr_seq(seq_id).instr(wir::ArrayNewFixed { ty, len });
+    }
+    "ArrayNewData" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayNewData", "typeIndex"))?,
+      )?;
+      let data = data_id_at(module, data.ok_or_else(|| missing("ArrayNewData", "data"))?)?;
+      fb.instr_seq(seq_id).instr(wir::ArrayNewData { ty, data });
+    }
+    "ArrayNewElem" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayNewElem", "typeIndex"))?,
+      )?;
+      let elem = element_id_at(module, elem.ok_or_else(|| missing("ArrayNewElem", "elem"))?)?;
+      fb.instr_seq(seq_id).instr(wir::ArrayNewElem { ty, elem });
+    }
+    "ArrayGet" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayGet", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ArrayGet { ty });
+    }
+    "ArrayGetS" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayGetS", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ArrayGetS { ty });
+    }
+    "ArrayGetU" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayGetU", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ArrayGetU { ty });
+    }
+    "ArraySet" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArraySet", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ArraySet { ty });
+    }
+    "ArrayLen" => {
+      fb.instr_seq(seq_id).instr(wir::ArrayLen {});
+    }
+    "ArrayFill" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayFill", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ArrayFill { ty });
+    }
+    "ArrayCopy" => {
+      // `type_index` is the DESTINATION array type, `src_type_index` the SOURCE
+      // (see `InstrDesc`). Resolve dst first, then src, so a preflight error names
+      // the same field emit would fail on.
+      let dst_ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayCopy", "typeIndex"))?,
+      )?;
+      let src_ty = resolve_type_id(
+        module,
+        src_type_index.ok_or_else(|| missing("ArrayCopy", "srcTypeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id)
+        .instr(wir::ArrayCopy { dst_ty, src_ty });
+    }
+    "ArrayInitData" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayInitData", "typeIndex"))?,
+      )?;
+      let data = data_id_at(
+        module,
+        data.ok_or_else(|| missing("ArrayInitData", "data"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ArrayInitData { ty, data });
+    }
+    "ArrayInitElem" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ArrayInitElem", "typeIndex"))?,
+      )?;
+      let elem = element_id_at(
+        module,
+        elem.ok_or_else(|| missing("ArrayInitElem", "elem"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ArrayInitElem { ty, elem });
+    }
+    // Unreachable: `emit_one` only routes the fourteen array discriminants here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not an array instruction"
+      )))
+    }
+  }
   Ok(())
 }
 
@@ -2266,11 +2546,26 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
           .ok_or_else(|| missing("ReturnCallIndirect", "table"))?,
       )?;
     }
+    // GC struct/array instructions (C7a). Delegated to `validate_struct`/
+    // `validate_array` (`#[inline(never)]`) for the SAME frame-size reason as
+    // `validate_atomic` (keep their locals out of this recursive walker's frame).
+    // Each mirrors its emit helper arm-for-arm: it resolves the SAME `TypeId`(s)/
+    // `DataId`/`ElementId` (ArrayCopy resolves BOTH dst AND src; the data/elem ops
+    // resolve `ty` AND `data`/`elem`) and requires the SAME fields — a missing
+    // preflight resolution re-opens the emit-abort / partial-mutation defect.
+    "StructNew" | "StructNewDefault" | "StructGet" | "StructGetS" | "StructGetU" | "StructSet" => {
+      validate_struct(module, d)?;
+    }
+    "ArrayNew" | "ArrayNewDefault" | "ArrayNewFixed" | "ArrayNewData" | "ArrayNewElem"
+    | "ArrayGet" | "ArrayGetS" | "ArrayGetU" | "ArraySet" | "ArrayLen" | "ArrayFill"
+    | "ArrayCopy" | "ArrayInitData" | "ArrayInitElem" => {
+      validate_array(module, d)?;
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
          C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
-         atomic, table, and reference/tail-call subset)"
+         atomic, table, reference/tail-call, and GC struct/array subset)"
       )));
     }
   }
@@ -2356,6 +2651,211 @@ fn validate_atomic(module: &Module, d: &InstrDesc) -> Result<()> {
   Ok(())
 }
 
+/// Preflight one GC struct descriptor (C7a). Split out of [`validate_one`] and
+/// marked `#[inline(never)]` for the same frame-size reason as [`validate_atomic`]
+/// (keep its locals out of the recursive walker's frame). Mirrors [`emit_struct`]
+/// arm-for-arm: every arm resolves its `TypeId` via [`resolve_type_id`] (the abort
+/// guard), and the get/set ops additionally require `field` present — emit reads
+/// `field` AFTER `FunctionBuilder::new` has mutated the arena, so a missing one
+/// must be rejected pre-mutation. The caller only routes the six struct
+/// discriminants here, so the final arm is unreachable.
+#[inline(never)]
+fn validate_struct(module: &Module, d: &InstrDesc) -> Result<()> {
+  match d.r#type.as_str() {
+    "StructNew" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("StructNew", "typeIndex"))?,
+      )?;
+    }
+    "StructNewDefault" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("StructNewDefault", "typeIndex"))?,
+      )?;
+    }
+    "StructGet" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("StructGet", "typeIndex"))?,
+      )?;
+      d.field.ok_or_else(|| missing("StructGet", "field"))?;
+    }
+    "StructGetS" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("StructGetS", "typeIndex"))?,
+      )?;
+      d.field.ok_or_else(|| missing("StructGetS", "field"))?;
+    }
+    "StructGetU" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("StructGetU", "typeIndex"))?,
+      )?;
+      d.field.ok_or_else(|| missing("StructGetU", "field"))?;
+    }
+    "StructSet" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("StructSet", "typeIndex"))?,
+      )?;
+      d.field.ok_or_else(|| missing("StructSet", "field"))?;
+    }
+    // Unreachable: `validate_one` only routes the six struct discriminants here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not a struct instruction"
+      )))
+    }
+  }
+  Ok(())
+}
+
+/// Preflight one GC array descriptor (C7a). Split out of [`validate_one`] and
+/// marked `#[inline(never)]` for the same frame-size reason as [`validate_atomic`].
+/// Mirrors [`emit_array`] arm-for-arm and in the SAME order: every type-bearing
+/// arm resolves its `TypeId` via [`resolve_type_id`]; `ArrayCopy` resolves the
+/// destination (`type_index`) THEN the source (`src_type_index`); the data/elem
+/// ops resolve `ty` THEN the `DataId`/`ElementId` (via [`data_id_at`]/
+/// [`element_id_at`]) — a missing preflight resolution re-opens the emit-abort /
+/// partial-mutation defect. `ArrayNewFixed` requires `len` present; `ArrayLen` is
+/// fieldless. The caller only routes the fourteen array discriminants here, so the
+/// final arm is unreachable.
+#[inline(never)]
+fn validate_array(module: &Module, d: &InstrDesc) -> Result<()> {
+  match d.r#type.as_str() {
+    "ArrayNew" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayNew", "typeIndex"))?,
+      )?;
+    }
+    "ArrayNewDefault" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayNewDefault", "typeIndex"))?,
+      )?;
+    }
+    "ArrayNewFixed" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayNewFixed", "typeIndex"))?,
+      )?;
+      d.len.ok_or_else(|| missing("ArrayNewFixed", "len"))?;
+    }
+    "ArrayNewData" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayNewData", "typeIndex"))?,
+      )?;
+      data_id_at(
+        module,
+        d.data.ok_or_else(|| missing("ArrayNewData", "data"))?,
+      )?;
+    }
+    "ArrayNewElem" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayNewElem", "typeIndex"))?,
+      )?;
+      element_id_at(
+        module,
+        d.elem.ok_or_else(|| missing("ArrayNewElem", "elem"))?,
+      )?;
+    }
+    "ArrayGet" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayGet", "typeIndex"))?,
+      )?;
+    }
+    "ArrayGetS" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayGetS", "typeIndex"))?,
+      )?;
+    }
+    "ArrayGetU" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayGetU", "typeIndex"))?,
+      )?;
+    }
+    "ArraySet" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArraySet", "typeIndex"))?,
+      )?;
+    }
+    "ArrayLen" => {}
+    "ArrayFill" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayFill", "typeIndex"))?,
+      )?;
+    }
+    "ArrayCopy" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayCopy", "typeIndex"))?,
+      )?;
+      resolve_type_id(
+        module,
+        d.src_type_index
+          .ok_or_else(|| missing("ArrayCopy", "srcTypeIndex"))?,
+      )?;
+    }
+    "ArrayInitData" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayInitData", "typeIndex"))?,
+      )?;
+      data_id_at(
+        module,
+        d.data.ok_or_else(|| missing("ArrayInitData", "data"))?,
+      )?;
+    }
+    "ArrayInitElem" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ArrayInitElem", "typeIndex"))?,
+      )?;
+      element_id_at(
+        module,
+        d.elem.ok_or_else(|| missing("ArrayInitElem", "elem"))?,
+      )?;
+    }
+    // Unreachable: `validate_one` only routes the fourteen array discriminants
+    // here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not an array instruction"
+      )))
+    }
+  }
+  Ok(())
+}
+
 /// Preflight one `I8x16Shuffle` descriptor. Split out of [`validate_one`] and
 /// marked `#[inline(never)]` for the same frame-size reason as [`emit_shuffle`]:
 /// the `[u8; 16]` immediate stays out of the recursive walker's frame. Mirrors
@@ -2432,11 +2932,66 @@ pub(crate) fn read_instr_seq(
 }
 
 /// Read a single walrus instruction into a descriptor.
+///
+/// This is the recursion point of the read walk (`read_instr_seq` -> `read_one`
+/// -> `read_instr_seq`), so its frame is what stacks up to `MAX_NESTING_DEPTH`
+/// deep. It is kept DELIBERATELY THIN — only the three control constructs
+/// (`Block`/`Loop`/`IfElse`), the arms that actually recurse via `read_instr_seq`,
+/// live here; every non-recursive (leaf) instruction is delegated to
+/// [`read_leaf`]. This split is load-bearing for the deep-nesting abort guard: at
+/// the `-O0` (debug) opt level a match arm's `InstrDesc` temporary does NOT
+/// reliably coalesce with its siblings, so a `read_one` carrying all ~50 leaf arms
+/// grows a frame that — multiplied by 256 recursion levels — SIGSEGVs the at-cap
+/// round-trip. Housing the leaf arms in a SEPARATE, non-recursive `#[inline(never)]`
+/// function keeps their big frame off the recursion stack (it is live for one leaf
+/// at a time, never stacked), leaving `read_one`'s recursive frame at ~three
+/// control descriptors plus one `read_leaf` return slot. (C7a added 20 GC leaf arms;
+/// this split is what preserves the canary as the leaf set grows.)
 fn read_one(
   lf: &LocalFunction,
   instr: &wir::Instr,
   label_stack: &mut Vec<wir::InstrSeqId>,
 ) -> Result<InstrDesc> {
+  Ok(match instr {
+    // The three recursive control constructs stay here (they need `lf` +
+    // `label_stack` to walk their child sequences). Everything else is a leaf,
+    // delegated to `read_leaf` so its frame never joins the recursion stack.
+    wir::Instr::Block(b) => {
+      let inner = read_instr_seq(lf, b.seq, label_stack)?;
+      let mut d = InstrDesc::new("Block");
+      d.block_type = Some(from_instr_seq_type(lf.block(b.seq).ty)?);
+      d.seq = Some(inner);
+      d
+    }
+    wir::Instr::Loop(l) => {
+      let inner = read_instr_seq(lf, l.seq, label_stack)?;
+      let mut d = InstrDesc::new("Loop");
+      d.block_type = Some(from_instr_seq_type(lf.block(l.seq).ty)?);
+      d.seq = Some(inner);
+      d
+    }
+    wir::Instr::IfElse(ie) => {
+      let consequent = read_instr_seq(lf, ie.consequent, label_stack)?;
+      let alternative = read_instr_seq(lf, ie.alternative, label_stack)?;
+      let mut d = InstrDesc::new("IfElse");
+      d.block_type = Some(from_instr_seq_type(lf.block(ie.consequent).ty)?);
+      d.consequent = Some(consequent);
+      d.alternative = Some(alternative);
+      d
+    }
+    _ => read_leaf(instr, label_stack)?,
+  })
+}
+
+/// Read a single NON-CONTROL (leaf) walrus instruction into a descriptor. Split
+/// out of [`read_one`] and marked `#[inline(never)]` so this ~50-arm match keeps
+/// its large frame OFF the recursion stack (see [`read_one`] for why that matters
+/// to the deep-nesting abort guard). It is called once per leaf and never
+/// recurses, so its frame is live for a single instruction at a time. `Br`/`BrIf`/
+/// `BrTable` read `label_stack` (immutably) to invert their absolute target back
+/// to a relative depth; no leaf needs the mutable stack or `lf`.
+#[inline(never)]
+fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<InstrDesc> {
   Ok(match instr {
     wir::Instr::Unreachable(_) => InstrDesc::new("Unreachable"),
     wir::Instr::Return(_) => InstrDesc::new("Return"),
@@ -2495,29 +3050,6 @@ fn read_one(
         Some(vt) => Some(vt.try_into()?),
         None => None,
       };
-      d
-    }
-    wir::Instr::Block(b) => {
-      let inner = read_instr_seq(lf, b.seq, label_stack)?;
-      let mut d = InstrDesc::new("Block");
-      d.block_type = Some(from_instr_seq_type(lf.block(b.seq).ty)?);
-      d.seq = Some(inner);
-      d
-    }
-    wir::Instr::Loop(l) => {
-      let inner = read_instr_seq(lf, l.seq, label_stack)?;
-      let mut d = InstrDesc::new("Loop");
-      d.block_type = Some(from_instr_seq_type(lf.block(l.seq).ty)?);
-      d.seq = Some(inner);
-      d
-    }
-    wir::Instr::IfElse(ie) => {
-      let consequent = read_instr_seq(lf, ie.consequent, label_stack)?;
-      let alternative = read_instr_seq(lf, ie.alternative, label_stack)?;
-      let mut d = InstrDesc::new("IfElse");
-      d.block_type = Some(from_instr_seq_type(lf.block(ie.consequent).ty)?);
-      d.consequent = Some(consequent);
-      d.alternative = Some(alternative);
       d
     }
     wir::Instr::Br(br) => {
@@ -2740,6 +3272,130 @@ fn read_one(
       d.table = Some(e.table.index() as u32);
       d
     }
+    // GC struct/array instructions (C7a). These arms build the descriptor INLINE
+    // (each `let mut d = InstrDesc::new(..); ..; d` is the arm's tail expression),
+    // exactly like every arm above — deliberately NOT via a by-value-returning
+    // helper. At the `-O0` (debug) opt level the recursive `read_one`/
+    // `read_instr_seq` frames are the deep-nesting constraint (see
+    // `MAX_NESTING_DEPTH`), and a `fn read_gc(..) -> InstrDesc` forces the callee's
+    // `InstrDesc` result into a DISTINCT, non-coalescing `sret` slot in
+    // `read_one`'s frame at EACH call site — measured to erode the at-cap headroom
+    // until the canary round-trip SIGSEGVs (whether the helper is `#[inline(never)]`
+    // OR `#[inline(always)]`). Inline tail-expression arms, by contrast, all build
+    // into the shared match-result place and cost ~nothing extra. So the frame-slim
+    // choice for READ is to INLINE — the mirror image of why EMIT/VALIDATE DELEGATE:
+    // `emit_struct`/`emit_array`/`validate_struct`/`validate_array` return
+    // `Result<()>` and push into the builder, carrying no large value back, so a
+    // helper there costs nothing. The build is infallible (a `TypeId`/`DataId`/
+    // `ElementId` `.index()` and the `field`/`len` immediates are plain `u32`s).
+    // `ArrayCopy` surfaces `dst_ty` as `type_index` and `src_ty` as
+    // `src_type_index` (the inverse of `emit_array`).
+    wir::Instr::StructNew(e) => {
+      let mut d = InstrDesc::new("StructNew");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::StructNewDefault(e) => {
+      let mut d = InstrDesc::new("StructNewDefault");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::StructGet(e) => {
+      let mut d = InstrDesc::new("StructGet");
+      d.type_index = Some(e.ty.index() as u32);
+      d.field = Some(e.field);
+      d
+    }
+    wir::Instr::StructGetS(e) => {
+      let mut d = InstrDesc::new("StructGetS");
+      d.type_index = Some(e.ty.index() as u32);
+      d.field = Some(e.field);
+      d
+    }
+    wir::Instr::StructGetU(e) => {
+      let mut d = InstrDesc::new("StructGetU");
+      d.type_index = Some(e.ty.index() as u32);
+      d.field = Some(e.field);
+      d
+    }
+    wir::Instr::StructSet(e) => {
+      let mut d = InstrDesc::new("StructSet");
+      d.type_index = Some(e.ty.index() as u32);
+      d.field = Some(e.field);
+      d
+    }
+    wir::Instr::ArrayNew(e) => {
+      let mut d = InstrDesc::new("ArrayNew");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::ArrayNewDefault(e) => {
+      let mut d = InstrDesc::new("ArrayNewDefault");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::ArrayNewFixed(e) => {
+      let mut d = InstrDesc::new("ArrayNewFixed");
+      d.type_index = Some(e.ty.index() as u32);
+      d.len = Some(e.len);
+      d
+    }
+    wir::Instr::ArrayNewData(e) => {
+      let mut d = InstrDesc::new("ArrayNewData");
+      d.type_index = Some(e.ty.index() as u32);
+      d.data = Some(e.data.index() as u32);
+      d
+    }
+    wir::Instr::ArrayNewElem(e) => {
+      let mut d = InstrDesc::new("ArrayNewElem");
+      d.type_index = Some(e.ty.index() as u32);
+      d.elem = Some(e.elem.index() as u32);
+      d
+    }
+    wir::Instr::ArrayGet(e) => {
+      let mut d = InstrDesc::new("ArrayGet");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::ArrayGetS(e) => {
+      let mut d = InstrDesc::new("ArrayGetS");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::ArrayGetU(e) => {
+      let mut d = InstrDesc::new("ArrayGetU");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::ArraySet(e) => {
+      let mut d = InstrDesc::new("ArraySet");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::ArrayLen(_) => InstrDesc::new("ArrayLen"),
+    wir::Instr::ArrayFill(e) => {
+      let mut d = InstrDesc::new("ArrayFill");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::ArrayCopy(e) => {
+      let mut d = InstrDesc::new("ArrayCopy");
+      d.type_index = Some(e.dst_ty.index() as u32);
+      d.src_type_index = Some(e.src_ty.index() as u32);
+      d
+    }
+    wir::Instr::ArrayInitData(e) => {
+      let mut d = InstrDesc::new("ArrayInitData");
+      d.type_index = Some(e.ty.index() as u32);
+      d.data = Some(e.data.index() as u32);
+      d
+    }
+    wir::Instr::ArrayInitElem(e) => {
+      let mut d = InstrDesc::new("ArrayInitElem");
+      d.type_index = Some(e.ty.index() as u32);
+      d.elem = Some(e.elem.index() as u32);
+      d
+    }
     other => {
       // MIRROR-WALRUS: never panic on an out-of-subset variant — surface a
       // catchable error naming it. Later C-tasks replace these arms with real
@@ -2748,8 +3404,8 @@ fn read_one(
       let name = dbg.split(['(', ' ', '{']).next().unwrap_or("unknown");
       return Err(Error::from_reason(format!(
         "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2/C3/C4/C5 \
-         core, control-flow, numeric-operator, memory/load-store, atomic, table, and \
-         reference/tail-call subset is)"
+         core, control-flow, numeric-operator, memory/load-store, atomic, table, \
+         reference/tail-call, and GC struct/array subset is)"
       )));
     }
   })
