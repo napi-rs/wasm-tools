@@ -52,13 +52,13 @@ impl WasmModule {
   #[napi]
   /// Emit this module into an in-memory wasm buffer.
   pub fn emit_wasm(&mut self, demangle: bool) -> Result<Uint8Array> {
-    Ok(self.emit_bytes(demangle).into())
+    Ok(self.emit_bytes(demangle)?.into())
   }
 
   #[napi]
   /// Emit this module into a `.wasm` file at the given path.
   pub fn emit_wasm_file(&mut self, path: String, demangle: bool) -> Result<()> {
-    let bytes = self.emit_bytes(demangle);
+    let bytes = self.emit_bytes(demangle)?;
     std::fs::write(&path, bytes)
       .map_err(|e| Error::from_reason(format!("failed to write wasm to '{path}': {e}")))
   }
@@ -212,7 +212,20 @@ impl WasmModule {
   /// unknown sections as `RawCustomSection` too (the `name`/`producers`/`.debug`
   /// sections are parsed into dedicated fields, never `customs`). The downcast
   /// filter therefore captures the full set with nothing dropped.
-  fn emit_bytes(&mut self, demangle: bool) -> Vec<u8> {
+  ///
+  /// Emit itself is wrapped in [`std::panic::catch_unwind`] as a general safety
+  /// net: the module can hold references that only fail at encode time and are
+  /// undetectable from the binding — most notably walrus' internal
+  /// "function-entry" types, which emit skips when assigning type indices, so
+  /// referencing one (e.g. via `tags.add`) makes `get_type_index` panic. The
+  /// crate builds with the default `panic = unwind` (only the `wasm-fixture`
+  /// profile sets `panic = 'abort'`), so we can catch that panic and surface it
+  /// as a catchable `napi::Error` instead of letting it cross the FFI boundary
+  /// and abort the whole Node process. The saved custom sections are restored on
+  /// BOTH the ok and panic paths, so a caught emit leaves the module consistent
+  /// (emit's only `&mut` effect is draining `customs`, which the restore loop
+  /// puts back).
+  fn emit_bytes(&mut self, demangle: bool) -> Result<Vec<u8>> {
     self.prepare_for_emit(demangle);
     let saved: Vec<RawCustomSection> = self
       .inner
@@ -220,11 +233,24 @@ impl WasmModule {
       .iter()
       .filter_map(|(_, section)| section.as_any().downcast_ref::<RawCustomSection>().cloned())
       .collect();
-    let out = self.inner.emit_wasm();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.inner.emit_wasm()));
     for section in saved {
       self.inner.customs.add(section);
     }
-    out
+    match result {
+      Ok(out) => Ok(out),
+      Err(payload) => {
+        let msg = payload
+          .downcast_ref::<&str>()
+          .map(|s| (*s).to_string())
+          .or_else(|| payload.downcast_ref::<String>().cloned())
+          .unwrap_or_else(|| "unknown panic".to_string());
+        Err(Error::from_reason(format!(
+          "failed to emit wasm: the module references an item that cannot be emitted \
+           (e.g. an internal function-entry type, or an item deleted while still referenced): {msg}"
+        )))
+      }
+    }
   }
 
   /// Shared pre-emit preparation used by both `emit_wasm` and `emit_wasm_file`:
