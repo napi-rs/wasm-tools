@@ -431,3 +431,100 @@ test('guard: a body that fails late leaves the type arena unchanged, and a later
   const reparsed = WasmModule.fromBuffer(bytes)
   t.deepEqual(reparsed.functions.getByIndex(idx)!.instructions(), [{ type: 'LocalGet', local: 0 }])
 })
+
+// ---------------------------------------------------------------------------
+// C1a-fix2: the nesting-depth cap that prevents an uncatchable stack-overflow
+// abort. All three instruction walks (buildFunction preflight + emit, and the
+// instructions() read) recurse once per control-flow level; walrus itself is
+// fully ITERATIVE and imposes no nesting limit, so without a cap a deep body
+// (build) or a deep parsed module (read) would overflow the native stack — a
+// SIGABRT that catch_unwind cannot catch, tearing down the whole Node process
+// across FFI. MAX_NESTING_DEPTH converts that into a catchable error at the cap.
+// The wasm32-wasi run is the real proof: a genuine overflow there aborts the
+// whole run, so a passing wasi run is the evidence the abort is gone.
+// ---------------------------------------------------------------------------
+
+// Must match src/ir.rs::MAX_NESTING_DEPTH.
+const MAX_NESTING_DEPTH = 256
+
+// `n` nested empty Blocks: [Block{ seq: [Block{ seq: [ … [] ] }] }]. The read
+// walk produces the identical shape, so this doubles as the deep-equal oracle.
+// A body of `n` nested Blocks puts its innermost (empty) sequence at depth n + 1,
+// so it builds iff n + 1 <= cap, i.e. n <= cap - 1.
+function nestedBlocks(n: number): InstrDesc[] {
+  let seq: InstrDesc[] = []
+  for (let i = 0; i < n; i++) {
+    seq = [{ type: 'Block', blockType: { type: 'Empty' }, seq }]
+  }
+  return seq
+}
+
+// Hand-craft a minimal module with one () -> () function whose body is `b` nested
+// empty blocks (`block … block end … end`). walrus parses this iteratively at any
+// depth, so it lets us feed a deeper-than-cap function straight to the read walk
+// without going through the (guarded) builder. Fully hermetic — no wat2wasm.
+function deepBlockModule(b: number): Uint8Array {
+  const leb = (n: number): number[] => {
+    const out: number[] = []
+    do {
+      let byte = n & 0x7f
+      n >>>= 7
+      if (n !== 0) byte |= 0x80
+      out.push(byte)
+    } while (n !== 0)
+    return out
+  }
+  const section = (id: number, payload: number[]): number[] => [id, ...leb(payload.length), ...payload]
+
+  const body: number[] = [0x00] // zero local declarations
+  for (let i = 0; i < b; i++) body.push(0x02, 0x40) // `block` with empty block type
+  for (let i = 0; i < b + 1; i++) body.push(0x0b) // `b` block `end`s + the function `end`
+
+  const typeSec = section(0x01, [0x01, 0x60, 0x00, 0x00]) // one () -> ()
+  const funcSec = section(0x03, [0x01, 0x00]) // one function, type index 0
+  const codeSec = section(0x0a, [0x01, ...leb(body.length), ...body]) // one function body
+
+  return new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, ...typeSec, ...funcSec, ...codeSec])
+}
+
+test('C1a-fix2 (build): an over-cap body throws catchably, the process survives, and the module still emits', (t) => {
+  const m = empty()
+  const over = nestedBlocks(MAX_NESTING_DEPTH + 5) // 261 nested Blocks — past the cap
+  t.throws(() => m.buildFunction([], [], [], over), {
+    message: /instruction nesting too deep \(max 256\)/,
+  })
+  // No abort: control returned to the test. The all-or-nothing preflight left the
+  // module untouched, so it still emits a valid (empty) module.
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+})
+
+test('C1a-fix2 (read): a parsed module nested past the cap is read-bounded — instructions() throws catchably (no abort)', (t) => {
+  // walrus parses arbitrarily-deep nesting iteratively (no limit), so hand-craft a
+  // module whose one function nests past the cap. The read walk must refuse it with
+  // a catchable error instead of overflowing the stack.
+  const m = WasmModule.fromBuffer(deepBlockModule(MAX_NESTING_DEPTH + 5))
+  const f = m.functions.getByIndex(0)!
+  t.throws(() => f.instructions(), {
+    message: /instruction nesting too deep \(max 256\)/,
+  })
+  // Process survived the guarded read.
+  t.is(1 + 1, 2)
+})
+
+test('C1a-fix2 (round-trip): a body nested at exactly the cap builds → emits → re-parses → instructions deep-equals', (t) => {
+  const m = empty()
+  // cap - 1 nested Blocks => the innermost sequence sits at depth == cap, the
+  // deepest level the guard allows. This proves the chosen N is actually reachable
+  // for BOTH build and read — the whole napi round trip (JS→Rust marshalling,
+  // validate/emit, walrus emit, read, Rust→JS marshalling, Drop) survives at the
+  // cap on native and wasi alike.
+  const body = nestedBlocks(MAX_NESTING_DEPTH - 1)
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'deep'
+
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+  const read = WasmModule.fromBuffer(bytes).functions.byName('deep')!.instructions()
+  t.deepEqual(read, body)
+})

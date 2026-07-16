@@ -43,6 +43,63 @@ use walrus::{FunctionBuilder, FunctionId, GlobalId, LocalFunction, LocalId, Modu
 use crate::convert::{resolve_type_id, val_type_to_walrus_in};
 use crate::valtype::ValType;
 
+/// The maximum control-flow nesting depth the three instruction walks
+/// (`validate_body`, `emit_desc`, `read_instr_seq`) will descend before
+/// refusing with a catchable error.
+///
+/// ## Why a cap at all
+/// walrus is fully ITERATIVE over nesting — it parses with an explicit
+/// `ControlStack = Vec<ControlFrame>` and emits via `dfs_in_order`, an explicit
+/// `stack: Vec<(InstrSeqId, usize)>` — so it can parse/emit arbitrarily-deep
+/// `block block … end end` without a stack overflow. Our three walks, however,
+/// RECURSE once per nesting level. Under `panic = abort` a Rust stack overflow
+/// is a `SIGABRT` that `catch_unwind` does NOT catch, so it would tear down the
+/// whole Node process across the FFI boundary — an uncatchable abort reachable
+/// from either a JS-supplied deep `body` (build) or a legitimately deep parsed
+/// module (`.instructions()` read). Capping converts that abort into a catchable
+/// `napi::Error` BEFORE the unsafe frame is ever reached.
+///
+/// ## Why this exact value (and not higher)
+/// The nested `Vec<InstrDesc>` tree ALSO recurses in napi's generated Rust↔JS
+/// marshalling (JS→Rust arg decode, Rust→JS return encode) and in Rust `Drop` —
+/// recursions we do not own and cannot guard. Those impose their own ceiling on
+/// usable nesting, and on the smaller `wasm32-wasi` stack that ceiling is what
+/// binds. `MAX_NESTING_DEPTH` is chosen to sit comfortably below the empirically
+/// measured wasi marshalling ceiling (with margin for the `+ K` over-cap tests,
+/// which must marshal `MAX_NESTING_DEPTH + K` descriptors just to reach the
+/// guard), so the WHOLE round trip is safe end-to-end. Real-world wasm nesting is
+/// tiny (compilers rarely exceed ~50 deep), so this ceiling is invisible in
+/// practice. All three walks share the SAME cap so build and read stay symmetric:
+/// a body you can build+emit is a body you can read back, and vice-versa.
+///
+/// ### Empirically why 256
+/// Measured on this repo (debug builds, per-depth isolated processes):
+/// * `wasm32-wasi` never hard-aborts on over-deep nesting — the emnapi JS glue
+///   raises a CATCHABLE `RangeError` ("Maximum call stack size exceeded") on both
+///   decode (build ≳ 550 deep) and encode (read ≳ 700 deep). So the wasi target
+///   is safe at any N; it only ever throws.
+/// * Native (Node 24) DOES hard-abort: the JS→Rust decode SIGSEGVs at ≈740 deep,
+///   and — tighter — the Rust→JS ENCODE of a read-back tree hits V8's
+///   `Check failed: isolate_->IsOnCentralStack()` fatal at ≈525 deep (a GC fired
+///   while deep in the native encode recursion; GC-timing-dependent, so the
+///   threshold is a fuzzy, non-monotonic window, not a hard line).
+///
+/// 256 sits ~2x below that native encode fatal (read-back at depth 256/300/350
+/// was 25/25 clean across runs) and ~2.9x below the decode SIGSEGV, leaving
+/// comfortable margin for the `+ K` over-cap tests to reach the guard and throw
+/// catchably rather than trip an abort. Anything materially higher risks the
+/// timing-dependent native encode fatal under real heap pressure.
+pub(crate) const MAX_NESTING_DEPTH: usize = 256;
+
+/// The catchable error returned when a walk would descend past
+/// [`MAX_NESTING_DEPTH`].
+fn nesting_too_deep() -> Error {
+  Error::from_reason(format!(
+    "instruction nesting too deep (max {MAX_NESTING_DEPTH}); refusing to recurse to avoid a \
+     stack overflow"
+  ))
+}
+
 /// A constant value carried by a `*.const` instruction, mirroring
 /// `walrus::ir::Value` (V128 is intentionally excluded until the SIMD task).
 ///
@@ -299,6 +356,15 @@ pub(crate) fn emit_desc(
   body: Vec<InstrDesc>,
   label_stack: &mut Vec<wir::InstrSeqId>,
 ) -> Result<()> {
+  // Cap nesting BEFORE descending (see `MAX_NESTING_DEPTH`). On entry
+  // `label_stack.len()` is the parent depth (this level's frame is pushed just
+  // below), so `>= MAX_NESTING_DEPTH` means this level would be `cap + 1`. Guards
+  // `emit_desc` directly for defense in depth: `build_function` preflights with
+  // `validate_body` first, but `emit_desc` is `pub(crate)` and a future
+  // `replace_*_func` may reach it without that preflight.
+  if label_stack.len() >= MAX_NESTING_DEPTH {
+    return Err(nesting_too_deep());
+  }
   label_stack.push(seq_id);
   for d in body {
     emit_one(fb, module, seq_id, d, label_stack)?;
@@ -496,6 +562,14 @@ fn missing(ty: &str, field: &str) -> Error {
 /// `if`/`else` arm adds exactly one frame — identical to how emit grows the label
 /// stack — so a branch depth resolves in preflight exactly as it would in emit.
 pub(crate) fn validate_body(module: &Module, body: &[InstrDesc], label_len: usize) -> Result<()> {
+  // Cap nesting BEFORE descending (see `MAX_NESTING_DEPTH`). `label_len` IS this
+  // body's depth (top-level = 1, +1 per nested level), so it is the value emit
+  // will reach as `label_stack.len()`; rejecting `> MAX_NESTING_DEPTH` here keeps
+  // the preflight symmetric with `emit_desc`'s guard, so a body that passes
+  // preflight is guaranteed to emit within the cap.
+  if label_len > MAX_NESTING_DEPTH {
+    return Err(nesting_too_deep());
+  }
   for d in body {
     validate_one(module, d, label_len)?;
   }
@@ -641,6 +715,15 @@ pub(crate) fn read_instr_seq(
   seq_id: wir::InstrSeqId,
   label_stack: &mut Vec<wir::InstrSeqId>,
 ) -> Result<Vec<InstrDesc>> {
+  // Cap nesting BEFORE descending (see `MAX_NESTING_DEPTH`). walrus parsed this
+  // (arbitrarily deep) module iteratively, so `lf` may nest past the cap; the
+  // same ceiling emit/validate use keeps read symmetric — anything we can build
+  // we can read back, and a legitimately deeper module surfaces a catchable error
+  // here instead of overflowing the stack. On entry `label_stack.len()` is the
+  // parent depth, so `>= MAX_NESTING_DEPTH` means this level would be `cap + 1`.
+  if label_stack.len() >= MAX_NESTING_DEPTH {
+    return Err(nesting_too_deep());
+  }
   label_stack.push(seq_id);
   let mut out = Vec::with_capacity(lf.block(seq_id).instrs.len());
   for (instr, _loc) in &lf.block(seq_id).instrs {
