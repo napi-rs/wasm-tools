@@ -4,7 +4,8 @@ use napi_derive::napi;
 use walrus::FunctionId;
 
 use crate::imports::WasmImport;
-use crate::ir::{read_instr_seq, InstrDesc};
+use crate::ir::read_instr_seq;
+use crate::ir_marshal::InstrList;
 use crate::types::WasmType;
 use crate::WasmModule;
 
@@ -237,7 +238,9 @@ impl WasmFunction {
     })
   }
 
-  #[napi]
+  // `InstrList` encodes ITERATIVELY (see `src/ir_marshal.rs`); `ts_return_type`
+  // keeps the generated `.d.ts` reading `Array<InstrDesc>` exactly as before.
+  #[napi(ts_return_type = "Array<InstrDesc>")]
   /// This function's instruction body, as an array of [`InstrDesc`] descriptors.
   ///
   /// Only a LOCAL function has a body: this throws a catchable error for an
@@ -254,7 +257,7 @@ impl WasmFunction {
   /// `Call`, `Select`, `Block`/`Loop`/`IfElse`, `Br`/`BrIf`/`BrTable`). An
   /// instruction outside that subset throws a catchable error naming it, rather
   /// than aborting the process (later tasks add the remaining families).
-  pub fn instructions(&self) -> Result<Vec<InstrDesc>> {
+  pub fn instructions(&self) -> Result<InstrList> {
     self.ensure_exists()?;
     let lf = match &self.module.inner.funcs.get(self.id).kind {
       walrus::FunctionKind::Local(lf) => lf,
@@ -265,7 +268,11 @@ impl WasmFunction {
       }
     };
     let mut label_stack = Vec::new();
-    read_instr_seq(lf, lf.entry_block(), &mut label_stack)
+    Ok(InstrList(read_instr_seq(
+      lf,
+      lf.entry_block(),
+      &mut label_stack,
+    )?))
   }
 
   #[napi]

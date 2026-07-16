@@ -447,12 +447,16 @@ test('guard: a body that fails late leaves the type arena unchanged, and a later
 
 // ---------------------------------------------------------------------------
 // C1a-fix2: the nesting-depth cap that prevents an uncatchable stack-overflow
-// abort. All three instruction walks (buildFunction preflight + emit, and the
-// instructions() read) recurse once per control-flow level; walrus itself is
-// fully ITERATIVE and imposes no nesting limit, so without a cap a deep body
-// (build) or a deep parsed module (read) would overflow the native stack — a
-// SIGABRT that catch_unwind cannot catch, tearing down the whole Node process
-// across FFI. MAX_NESTING_DEPTH converts that into a catchable error at the cap.
+// abort. The three in-module instruction walks (buildFunction preflight + emit,
+// and the instructions() read) recurse once per control-flow level; walrus
+// itself is fully ITERATIVE and imposes no nesting limit, so without a cap a
+// deep body (build) or a deep parsed module (read) would overflow the native
+// stack — a SIGABRT that catch_unwind cannot catch, tearing down the whole Node
+// process across FFI. MAX_NESTING_DEPTH converts that into a catchable error at
+// the cap. Since CH, the FFI marshalling of the descriptor tree is ITERATIVE
+// too (src/ir_marshal.rs) with the guard enforced during the JS→Rust decode
+// itself, so the guard message is deterministic at ANY over-cap depth on every
+// target and harness (see the CH tests below for the far-over-cap proof).
 // The wasm32-wasi run is the real proof: a genuine overflow there aborts the
 // whole run, so a passing wasi run is the evidence the abort is gone.
 // ---------------------------------------------------------------------------
@@ -503,6 +507,10 @@ function deepBlockModule(b: number): Uint8Array {
 test('C1a-fix2 (build): an over-cap body throws catchably, the process survives, and the module still emits', (t) => {
   const m = empty()
   const over = nestedBlocks(MAX_NESTING_DEPTH + 5) // 255 nested Blocks — past the cap
+  // Since CH the guard fires DURING the iterative JS→Rust decode, so this exact
+  // message is guaranteed on every target/harness (before CH, the derived
+  // recursive marshalling could exhaust the stack first at harness-dependent
+  // depths, making the reachable message environment-dependent).
   t.throws(() => m.buildFunction([], [], [], over), {
     message: /instruction nesting too deep \(max 250\)/,
   })
@@ -540,6 +548,106 @@ test('C1a-fix2 (round-trip): a body nested at exactly the cap builds → emits �
   t.true(WebAssembly.validate(bytes))
   const read = WasmModule.fromBuffer(bytes).functions.byName('deep')!.instructions()
   t.deepEqual(read, body)
+})
+
+// ---------------------------------------------------------------------------
+// CH: iterative descriptor marshalling. The InstrDesc tree crosses the FFI via
+// explicit heap work-stacks (src/ir_marshal.rs) in BOTH directions, with the
+// nesting guard enforced DURING the JS→Rust decode. Before CH, napi's DERIVED
+// marshalling recursed once per level on the call stack, so a deep body could
+// exhaust the stack BEFORE the guard ran: native Node SIGSEGVed (uncatchable)
+// at ≈740 levels, and under the AVA-wasi harness the ceiling sat at EXACTLY the
+// at-cap canary's depth — the guard was unreachable from the over-cap side
+// there at ANY depth. These tests are the class-killer proof: any over-cap
+// depth — minimal (cap+1) or far past every old crash ceiling (2000) — now
+// yields the deterministic catchable guard error on native and wasi alike.
+// ---------------------------------------------------------------------------
+
+test('CH (far-over-cap): a 2000-deep body throws the exact guard error — not a stack-overflow RangeError — and the module still works', (t) => {
+  const m = empty()
+  // 2000 nested Blocks: far past the old native decode SIGSEGV (≈740), the old
+  // native encode V8 fatal (≈525), and the old AVA-wasi RangeError ceiling
+  // (≈250). Reaching the guard message here proves the decode never recurses.
+  const err = t.throws(() => m.buildFunction([], [], [], nestedBlocks(2000)))!
+  t.is(err.message, 'instruction nesting too deep (max 250); refusing to recurse to avoid a stack overflow')
+  // The process survived and the (untouched) module still emits.
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+})
+
+test('CH (minimal over-cap): a cap+1 body reaches the guard deterministically', (t) => {
+  const m = empty()
+  // 251 nested Blocks put the innermost sequence at depth 252 — one level past
+  // the deepest accepted body. The exact guard message (not a RangeError, not a
+  // harness-dependent crash) is what the decode-integrated guard guarantees.
+  const err = t.throws(() => m.buildFunction([], [], [], nestedBlocks(MAX_NESTING_DEPTH + 1)))!
+  t.is(err.message, 'instruction nesting too deep (max 250); refusing to recurse to avoid a stack overflow')
+})
+
+// `n` levels of IfElse nesting, alternating which arm carries the next level
+// (each arm is its own label frame, hence its own depth level — same as a
+// Block's seq). The other arm stays a present-but-empty array. This exercises
+// the consequent/alternative edges of the iterative driver, not just seq.
+function nestedIfArms(n: number): InstrDesc[] {
+  let inner: InstrDesc[] = []
+  for (let i = 0; i < n; i++) {
+    const body: InstrDesc = { type: 'IfElse', blockType: { type: 'Empty' } }
+    if (i % 2 === 0) {
+      body.consequent = inner
+      body.alternative = []
+    } else {
+      body.consequent = []
+      body.alternative = inner
+    }
+    inner = [{ type: 'Const', value: { type: 'I32', value: 0 } }, body]
+  }
+  return inner
+}
+
+test('CH (multi-edge depth): at-cap IfElse arm nesting round-trips; over-cap throws the guard', (t) => {
+  const m = empty()
+  // cap - 1 IfElse levels => the innermost (empty) arm sits at depth == cap,
+  // exactly like the at-cap Block canary — but the depth chain alternates
+  // through consequent and alternative, proving the driver counts EVERY edge
+  // kind. In-memory read-back (no re-parse: the body is emitted as-is and this
+  // shape is ill-typed at the wasm level, which MIRROR-WALRUS permits).
+  const body = nestedIfArms(MAX_NESTING_DEPTH - 1)
+  const idx = m.buildFunction([], [], [], body)
+  t.deepEqual(m.functions.getByIndex(idx)!.instructions(), body)
+
+  const err = t.throws(() => m.buildFunction([], [], [], nestedIfArms(MAX_NESTING_DEPTH + 1)))!
+  t.is(err.message, 'instruction nesting too deep (max 250); refusing to recurse to avoid a stack overflow')
+})
+
+test('CH (edge fidelity): `seq: []` and absent seq stay distinct through the round trip; a non-array seq throws catchably', (t) => {
+  const m = empty()
+  // One descriptor with a PRESENT-but-empty seq next to edge-free leaves: the
+  // read-back must keep `seq: []` on the Block (Some(vec![])) and NO seq/
+  // consequent/alternative keys on the leaves (None => absent property).
+  const body: InstrDesc[] = [
+    { type: 'Block', blockType: { type: 'Empty' }, seq: [] },
+    { type: 'Const', value: { type: 'I32', value: 7 } },
+    { type: 'Drop' },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+  t.true(Object.hasOwn(read[0], 'seq'))
+  t.deepEqual(read[0].seq, [])
+  for (const key of ['seq', 'consequent', 'alternative']) {
+    t.false(Object.hasOwn(read[1], key))
+    t.false(Object.hasOwn(read[2], key))
+  }
+
+  // A non-array edge is a catchable type error (same rejection point the
+  // derived decode had), not an abort.
+  t.throws(
+    () =>
+      m.buildFunction([], [], [], [
+        { type: 'Block', blockType: { type: 'Empty' }, seq: 42 as unknown as InstrDesc[] },
+      ]),
+    { message: /Failed to get Array length on InstrDesc\.seq/ },
+  )
 })
 
 // ---------------------------------------------------------------------------

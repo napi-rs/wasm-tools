@@ -12,6 +12,7 @@ mod globals;
 mod handle;
 mod imports;
 mod ir;
+mod ir_marshal;
 mod locals;
 mod memories;
 mod module;

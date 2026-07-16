@@ -54,68 +54,60 @@ use crate::convert::{heap_type_to_walrus_in, resolve_type_id, val_type_to_walrus
 use crate::handle::bigint_to_u64;
 use crate::valtype::{HeapType, ValType};
 
-/// The maximum control-flow nesting depth the three instruction walks
-/// (`validate_body`, `emit_desc`, `read_instr_seq`) will descend before
+/// The maximum control-flow nesting depth the instruction walks — the three
+/// in-module walks (`validate_body`, `emit_desc`, `read_instr_seq`) and the
+/// iterative FFI decode (`crate::ir_marshal::InstrBody`) — will descend before
 /// refusing with a catchable error.
 ///
 /// ## Why a cap at all
 /// walrus is fully ITERATIVE over nesting — it parses with an explicit
 /// `ControlStack = Vec<ControlFrame>` and emits via `dfs_in_order`, an explicit
 /// `stack: Vec<(InstrSeqId, usize)>` — so it can parse/emit arbitrarily-deep
-/// `block block … end end` without a stack overflow. Our three walks, however,
-/// RECURSE once per nesting level. Under `panic = abort` a Rust stack overflow
+/// `block block … end end` without a stack overflow. Our three in-module walks,
+/// however, RECURSE once per nesting level, and Rust `Drop` of a nested
+/// descriptor tree recurses too. Under `panic = abort` a Rust stack overflow
 /// is a `SIGABRT` that `catch_unwind` does NOT catch, so it would tear down the
 /// whole Node process across the FFI boundary — an uncatchable abort reachable
 /// from either a JS-supplied deep `body` (build) or a legitimately deep parsed
 /// module (`.instructions()` read). Capping converts that abort into a catchable
-/// `napi::Error` BEFORE the unsafe frame is ever reached.
+/// `napi::Error` BEFORE the unsafe frame is ever reached. The cap exists solely
+/// to bound OUR recursive walkers (and `Drop`); the FFI marshalling itself no
+/// longer recurses (see below). Real-world wasm nesting is tiny (compilers
+/// rarely exceed ~50 deep), so the ceiling is invisible in practice. All walks
+/// share the SAME cap so build and read stay symmetric: a body you can
+/// build+emit is a body you can read back, and vice-versa.
 ///
-/// ## Why this exact value (and not higher)
-/// The nested `Vec<InstrDesc>` tree ALSO recurses in napi's generated Rust↔JS
-/// marshalling (JS→Rust arg decode, Rust→JS return encode) and in Rust `Drop` —
-/// recursions we do not own and cannot guard. Those impose their own ceiling on
-/// usable nesting, and on the smaller `wasm32-wasi` stack that ceiling is what
-/// binds. `MAX_NESTING_DEPTH` is chosen to sit comfortably below the empirically
-/// measured wasi marshalling ceiling (with margin for the `+ K` over-cap tests,
-/// which must marshal `MAX_NESTING_DEPTH + K` descriptors just to reach the
-/// guard), so the WHOLE round trip is safe end-to-end. Real-world wasm nesting is
-/// tiny (compilers rarely exceed ~50 deep), so this ceiling is invisible in
-/// practice. All three walks share the SAME cap so build and read stay symmetric:
-/// a body you can build+emit is a body you can read back, and vice-versa.
+/// ## Where the guard fires
+/// * build: the `crate::ir_marshal::InstrBody` ITERATIVE decode enforces the
+///   cap WHILE decoding, so an over-deep JS body throws `nesting_too_deep()`
+///   deterministically before anything past the cap is even materialized — on
+///   every target and harness. `validate_body`/`emit_desc` re-check it as
+///   defense in depth (they are `pub(crate)` and reachable without the decode).
+/// * read: `read_instr_seq`'s guard is the primary for parsed-module reads
+///   (walrus parses arbitrarily-deep modules iteratively; our read walk
+///   refuses past the cap). The `crate::ir_marshal::InstrList` encode is
+///   iterative and needs no guard — it only ever sees read-capped trees.
 ///
-/// ### Empirically why 250 (was 256 through C6b)
-/// Measured on this repo (debug builds, per-depth isolated processes):
-/// * `wasm32-wasi` never hard-aborts on over-deep nesting — the emnapi JS glue
-///   raises a CATCHABLE `RangeError` ("Maximum call stack size exceeded") on both
-///   decode and encode. So the wasi target is safe at any N; it only ever throws.
-///   The standalone ceiling is high (decode ≳ 550 deep), but UNDER THE AVA TEST
-///   HARNESS the available JS stack is smaller, so the effective marshalling
-///   ceiling that binds the `+ K` over-cap tests sits much lower — in the ~260s.
-/// * Native (Node 24) DOES hard-abort: the JS→Rust decode SIGSEGVs at ≈740 deep,
-///   and — tighter — the Rust→JS ENCODE of a read-back tree hits V8's
-///   `Check failed: isolate_->IsOnCentralStack()` fatal at ≈525 deep (a GC fired
-///   while deep in the native encode recursion; GC-timing-dependent, so the
-///   threshold is a fuzzy, non-monotonic window, not a hard line).
-///
-/// The binding constraint is that the `+ K` over-cap tests must MARSHAL
-/// `MAX_NESTING_DEPTH + K` (K = 5) descriptors before the Rust guard can fire, so
-/// that depth must stay under the AVA-wasi marshalling ceiling. C7a widened
-/// `InstrDesc` (the GC `field`/`len`/`src_type_index` immediates), which grows the
-/// per-level `from_napi_value`/`to_napi_value` frame and lowered that ceiling
-/// below the old `256 + 5 = 261`: the over-cap build began hitting the catchable
-/// `RangeError` INSTEAD of the guard message. So the cap was retuned 256 → 250.
-/// At 250 the deepest workload any test drives is the over-cap decode of
-/// `250 + 5 = 255` — the SAME depth the at-cap round-trip already exercises
-/// (decode + build + emit + read + encode) cleanly — while the over-cap does
-/// strictly less (decode, then throw), so it sits comfortably inside the ceiling.
-/// 250 still sits ~2x below the native encode fatal. Real-world wasm nesting is
-/// tiny (~50 deep), so lowering the ceiling by 6 is invisible in practice; a
-/// materially higher value re-opens the over-cap `RangeError` on wasi.
+/// ## Historical note (why 250, was 256 through C6b)
+/// Through C7b the nested `Vec<InstrDesc>` tree ALSO recursed in napi's DERIVED
+/// Rust↔JS marshalling — a per-level call-stack recursion we did not own. Its
+/// empirically-measured ceilings (native decode SIGSEGV ≈740, native encode V8
+/// fatal ≈525, AVA-wasi harness RangeError just past ~255) are what forced the
+/// 256 → 250 retune when C7a widened `InstrDesc`, and left the guard
+/// unreachable from the over-cap side under the AVA-wasi harness (C7c measured
+/// that ceiling at EXACTLY the at-cap canary's depth — zero margin). The CH
+/// hardening replaced the derived marshalling with the iterative drivers in
+/// `crate::ir_marshal`, which use O(1) call stack at ANY depth, so those
+/// marshalling ceilings are GONE and no longer constrain this value. 250 is
+/// kept: it is amply beyond real-world nesting, the in-module walks and `Drop`
+/// still recurse (the cap is their bound), and the depth is pinned by the
+/// at-cap round-trip canary in `__test__/ir.spec.ts`.
 pub(crate) const MAX_NESTING_DEPTH: usize = 250;
 
 /// The catchable error returned when a walk would descend past
-/// [`MAX_NESTING_DEPTH`].
-fn nesting_too_deep() -> Error {
+/// [`MAX_NESTING_DEPTH`]. Shared with the iterative decode driver
+/// (`crate::ir_marshal`), so the guard message is identical wherever it fires.
+pub(crate) fn nesting_too_deep() -> Error {
   Error::from_reason(format!(
     "instruction nesting too deep (max {MAX_NESTING_DEPTH}); refusing to recurse to avoid a \
      stack overflow"
@@ -564,6 +556,16 @@ pub struct RefType {
 /// `I31GetU`/`RefTest`/`RefCast`/`AnyConvertExtern`/`ExternConvertAny`/`RefEq`).
 /// Any other instruction is rejected catchably by both directions (later tasks
 /// add the label-carrying `br_on_*` GC branches and EH).
+//
+// MAINTENANCE (plain comment so the generated .d.ts is unchanged): the three
+// self-referential edge fields (`seq`/`consequent`/`alternative`) do NOT cross
+// the FFI through this struct's DERIVED marshalling — `src/ir_marshal.rs`
+// drives them iteratively (decode: the copy-except-edges skip list + edge walk
+// in `InstrBody::from_napi_value`; encode: the take/attach list in
+// `InstrList::to_napi_value`). ANY future field that can contain `InstrDesc`s
+// (e.g. C8b's `catches[].seq`) MUST be added to BOTH edge lists there, or the
+// derived per-element call will recurse on the call stack again and reopen the
+// uncatchable stack-overflow abort this layering removed.
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.

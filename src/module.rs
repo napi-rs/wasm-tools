@@ -4,7 +4,8 @@ use napi_derive::napi;
 use walrus::{FunctionBuilder, Module, RawCustomSection};
 
 use crate::convert::val_type_to_walrus_in;
-use crate::ir::{emit_desc, local_id_at, validate_body, InstrDesc};
+use crate::ir::{emit_desc, local_id_at, validate_body};
+use crate::ir_marshal::InstrBody;
 use crate::valtype::ValType;
 use crate::{
   ModuleConfig, WasmCustomSections, WasmDataSegments, WasmElements, WasmExports, WasmFunction,
@@ -120,7 +121,10 @@ impl WasmModule {
     params: Vec<ValType>,
     results: Vec<ValType>,
     arg_local_indices: Vec<u32>,
-    body: Vec<InstrDesc>,
+    // `InstrBody` decodes ITERATIVELY with the nesting guard integrated (see
+    // `src/ir_marshal.rs`); `ts_arg_type` keeps the generated `.d.ts` reading
+    // `Array<InstrDesc>` exactly as before.
+    #[napi(ts_arg_type = "Array<InstrDesc>")] body: InstrBody,
   ) -> Result<u32> {
     // Convert the signature and resolve the argument locals BEFORE creating the
     // builder. `val_type_to_walrus_in` resolves concrete refs and rejects
@@ -137,6 +141,11 @@ impl WasmModule {
       .into_iter()
       .map(|i| local_id_at(&self.inner, i))
       .collect::<Result<Vec<_>>>()?;
+
+    // Unwrap the iteratively-decoded body (same `Vec<InstrDesc>` as before; the
+    // decode already enforced the nesting cap, so the preflight's own depth
+    // guard below is defense in depth).
+    let body = body.0;
 
     // Preflight the WHOLE body against the pre-call module BEFORE any mutation.
     // `FunctionBuilder::new` (below) inserts this function's signature and entry
