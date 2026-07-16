@@ -1764,15 +1764,20 @@ export declare const enum ConstExprKind {
 
 /**
  * A constant value carried by a `*.const` instruction, mirroring
- * `walrus::ir::Value` (V128 is intentionally excluded until the SIMD task).
+ * `walrus::ir::Value`.
  *
  * Generated as a TypeScript discriminated union keyed on `type`:
  * `{ type: 'I32', value: number } | { type: 'I64', value: bigint }`
- * `| { type: 'F32', value: number } | { type: 'F64', value: number }`.
+ * `| { type: 'F32', value: number } | { type: 'F64', value: number }`
+ * `| { type: 'V128', value: Uint8Array }`.
  *
  * `I64` crosses the boundary as a JS `bigint` for exactness; an `f32` has no
  * dedicated JS type, so `F32` uses a `number` (`f64`) that is narrowed to
- * `f32` on emit.
+ * `f32` on emit. `V128` crosses as the raw 16 bytes of the vector register in
+ * LITTLE-ENDIAN order (byte 0 is the least-significant, matching walrus'
+ * `u128` decoding): emit requires EXACTLY 16 bytes (any other length is a
+ * catchable representation error, NOT a wasm semantic check) and folds them via
+ * `u128::from_le_bytes`; read produces them via `u128::to_le_bytes`.
  *
  * Named `ConstValue`, not `Value`: napi-derive reserves the bare type name
  * `Value` and maps it to TS `any` (it assumes a `serde_json::Value`-style
@@ -1788,6 +1793,8 @@ value: bigint }
 value: number }
 | { type: 'F64', /** The constant value. */
 value: number }
+| { type: 'V128', /** The raw 16 bytes of the vector, least-significant first. */
+value: Uint8Array }
 
 /**
  * Whether a data segment is active (auto-initialized into a memory at
@@ -1997,11 +2004,13 @@ export declare const enum ImportKindTag {
  * the atomic (threads) instructions (`AtomicRmw`/`Cmpxchg`/`AtomicNotify`/
  * `AtomicWait`/`AtomicFence`), the table instructions + `call_indirect`
  * (`TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`/
- * `TableCopy`/`ElemDrop`/`CallIndirect`), and the core reference + tail-call
+ * `TableCopy`/`ElemDrop`/`CallIndirect`), the core reference + tail-call
  * instructions (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/
- * `ReturnCallIndirect`). Any other instruction is rejected catchably by both
- * directions (later tasks add the GC reference ops, the lane-carrying SIMD ops,
- * and EH).
+ * `ReturnCallIndirect`), and the C6a SIMD subset: the lane-carrying
+ * `Binop`/`Unop` ops (`op` + `lane`), the v128 `Const`, and the fixed-shape
+ * `V128Bitselect`/`I8x16Swizzle`/`I8x16Shuffle` instructions. Any other
+ * instruction is rejected catchably by both directions (later tasks add the GC
+ * reference ops, the SIMD memory ops (`LoadSimd`), and EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -2046,6 +2055,14 @@ export interface InstrDesc {
    * operator enums decodes it, so one shared field is unambiguous.
    */
   op?: string
+  /**
+   * `Binop`/`Unop`: the lane index of a lane-carrying SIMD operator (the walrus
+   * `idx: u8` immediate of a `*ReplaceLane` / `*ExtractLane*` variant). Present
+   * exactly for the 14 lane ops, paired with `op`; absent for every fieldless
+   * operator. A lane op missing this field is rejected catchably (a lane index
+   * is part of its representation, not a wasm semantic check).
+   */
+  lane?: number
   /**
    * The referenced memory's stable index, for
    * `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`, and the
@@ -2096,6 +2113,14 @@ export interface InstrDesc {
    * is the 32-bit (`memory.atomic.wait32`) form.
    */
   sixtyFour?: boolean
+  /**
+   * `I8x16Shuffle`: the 16 byte lane indices selecting the result vector (the
+   * walrus `[u8; 16]` immediate) as a `Uint8Array`. Emit requires EXACTLY 16
+   * bytes (any other length is a catchable representation error, NOT a wasm
+   * semantic check — a lane index >= 32 is emitted verbatim); read produces the
+   * 16 bytes as-is.
+   */
+  shuffleIndices?: Uint8Array
 }
 
 /**

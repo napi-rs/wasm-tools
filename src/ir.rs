@@ -40,7 +40,7 @@
 //! a tail call whose signature does not match, …) is emitted as-is and left for
 //! `WebAssembly.validate` to reject.
 
-use napi::bindgen_prelude::{BigInt, Result};
+use napi::bindgen_prelude::{BigInt, Result, Uint8Array};
 use napi::Error;
 use napi_derive::napi;
 use walrus::ir as wir;
@@ -112,15 +112,20 @@ fn nesting_too_deep() -> Error {
 }
 
 /// A constant value carried by a `*.const` instruction, mirroring
-/// `walrus::ir::Value` (V128 is intentionally excluded until the SIMD task).
+/// `walrus::ir::Value`.
 ///
 /// Generated as a TypeScript discriminated union keyed on `type`:
 /// `{ type: 'I32', value: number } | { type: 'I64', value: bigint }`
-/// `| { type: 'F32', value: number } | { type: 'F64', value: number }`.
+/// `| { type: 'F32', value: number } | { type: 'F64', value: number }`
+/// `| { type: 'V128', value: Uint8Array }`.
 ///
 /// `I64` crosses the boundary as a JS `bigint` for exactness; an `f32` has no
 /// dedicated JS type, so `F32` uses a `number` (`f64`) that is narrowed to
-/// `f32` on emit.
+/// `f32` on emit. `V128` crosses as the raw 16 bytes of the vector register in
+/// LITTLE-ENDIAN order (byte 0 is the least-significant, matching walrus'
+/// `u128` decoding): emit requires EXACTLY 16 bytes (any other length is a
+/// catchable representation error, NOT a wasm semantic check) and folds them via
+/// `u128::from_le_bytes`; read produces them via `u128::to_le_bytes`.
 ///
 /// Named `ConstValue`, not `Value`: napi-derive reserves the bare type name
 /// `Value` and maps it to TS `any` (it assumes a `serde_json::Value`-style
@@ -147,6 +152,11 @@ pub enum ConstValue {
   F64 {
     /// The constant value.
     value: f64,
+  },
+  /// A 128-bit vector constant: exactly 16 little-endian bytes.
+  V128 {
+    /// The raw 16 bytes of the vector, least-significant first.
+    value: Uint8Array,
   },
 }
 
@@ -437,11 +447,13 @@ pub struct RefType {
 /// the atomic (threads) instructions (`AtomicRmw`/`Cmpxchg`/`AtomicNotify`/
 /// `AtomicWait`/`AtomicFence`), the table instructions + `call_indirect`
 /// (`TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`/
-/// `TableCopy`/`ElemDrop`/`CallIndirect`), and the core reference + tail-call
+/// `TableCopy`/`ElemDrop`/`CallIndirect`), the core reference + tail-call
 /// instructions (`RefNull`/`RefIsNull`/`RefFunc`/`ReturnCall`/
-/// `ReturnCallIndirect`). Any other instruction is rejected catchably by both
-/// directions (later tasks add the GC reference ops, the lane-carrying SIMD ops,
-/// and EH).
+/// `ReturnCallIndirect`), and the C6a SIMD subset: the lane-carrying
+/// `Binop`/`Unop` ops (`op` + `lane`), the v128 `Const`, and the fixed-shape
+/// `V128Bitselect`/`I8x16Swizzle`/`I8x16Shuffle` instructions. Any other
+/// instruction is rejected catchably by both directions (later tasks add the GC
+/// reference ops, the SIMD memory ops (`LoadSimd`), and EH).
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.
@@ -478,6 +490,12 @@ pub struct InstrDesc {
   /// `"F32x4RelaxedMadd"`). The `type` discriminant selects which of the three
   /// operator enums decodes it, so one shared field is unambiguous.
   pub op: Option<String>,
+  /// `Binop`/`Unop`: the lane index of a lane-carrying SIMD operator (the walrus
+  /// `idx: u8` immediate of a `*ReplaceLane` / `*ExtractLane*` variant). Present
+  /// exactly for the 14 lane ops, paired with `op`; absent for every fieldless
+  /// operator. A lane op missing this field is rejected catchably (a lane index
+  /// is part of its representation, not a wasm semantic check).
+  pub lane: Option<u8>,
   /// The referenced memory's stable index, for
   /// `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`, and the
   /// DESTINATION memory of `MemoryCopy`.
@@ -516,6 +534,12 @@ pub struct InstrDesc {
   /// `AtomicWait`: whether this is a 64-bit (`memory.atomic.wait64`) wait; `false`
   /// is the 32-bit (`memory.atomic.wait32`) form.
   pub sixty_four: Option<bool>,
+  /// `I8x16Shuffle`: the 16 byte lane indices selecting the result vector (the
+  /// walrus `[u8; 16]` immediate) as a `Uint8Array`. Emit requires EXACTLY 16
+  /// bytes (any other length is a catchable representation error, NOT a wasm
+  /// semantic check — a lane index >= 32 is emitted verbatim); read produces the
+  /// 16 bytes as-is.
+  pub shuffle_indices: Option<Uint8Array>,
 }
 
 impl InstrDesc {
@@ -536,6 +560,7 @@ impl InstrDesc {
       labels: None,
       default_label: None,
       op: None,
+      lane: None,
       memory: None,
       src_memory: None,
       data: None,
@@ -550,6 +575,7 @@ impl InstrDesc {
       atomic_op: None,
       atomic_width: None,
       sixty_four: None,
+      shuffle_indices: None,
     }
   }
 }
@@ -923,43 +949,51 @@ fn label_depth(target: wir::InstrSeqId, label_stack: &[wir::InstrSeqId]) -> Resu
 // `from_str` can never drift apart. The JS operator name is exactly the walrus
 // variant name (e.g. `"I32Add"`).
 //
-// MIRROR-WALRUS: the only guarded hazards are string-decode failures (unknown op
-// name, or a deferred lane-carrier), each surfaced as a catchable error. Nothing
-// here type-checks operands.
+// MIRROR-WALRUS: the only guarded hazards are string-decode failures (an unknown
+// op name, or a lane op given without its `lane` index), each surfaced as a
+// catchable error. Nothing here type-checks operands.
 //
-// Scope is the 352 FIELDLESS variants (BinaryOp 214 + UnaryOp 129 + TernaryOp 9).
-// The 14 lane-carrying SIMD variants (6 `*ReplaceLane`, 8 `*ExtractLane*`, each
-// `{ idx: u8 }`) are DEFERRED to the SIMD task (C6): `to_str` returns a catchable
-// error for them (the match stays EXHAUSTIVE — no `_` arm — so a future walrus
-// variant is a COMPILE error, the safety net against a miscount), and `from_str`
-// rejects their names (they are not buildable without a lane index).
+// Scope is the 352 FIELDLESS variants (BinaryOp 214 + UnaryOp 129 + TernaryOp 9)
+// PLUS the 14 lane-carrying SIMD variants (6 `*ReplaceLane`, 8 `*ExtractLane*`,
+// each `{ idx: u8 }`), added in C6a. A lane op crosses as its `op` NAME paired
+// with a `lane` index (the `InstrDesc.lane` field), since one `op: String` cannot
+// carry the immediate. The name<->variant mapping for BOTH the fieldless and the
+// lane variants is generated from ONE list per enum (the `str_enum!` macro), the
+// single source of truth so `to_str` and `from_str` can never drift. `to_str`
+// yields `(name, None)` for a fieldless variant and `(name, Some(idx))` for a
+// lane variant (EXHAUSTIVE — no `_` arm — so a new walrus variant is a COMPILE
+// error, the safety net against a miscount). `from_str` maps a fieldless name to
+// its variant (ignoring any spurious lane), a lane name + a `lane` to the lane
+// variant, a lane name WITHOUT a lane to a catchable error, and any other name to
+// a catchable error.
 // ---------------------------------------------------------------------------
 
-/// The catchable error for an operator name that is not a fieldless variant of
-/// the given enum (an unknown op, or a deferred lane-carrier name).
+/// The catchable error for an operator name that names no variant of the given
+/// enum (neither fieldless nor lane).
 fn unknown_op(kind: &str, s: &str) -> Error {
   Error::from_reason(format!("unknown {kind} operator `{s}`"))
 }
 
-/// The catchable error for a deferred lane-carrying SIMD op encountered while
-/// reading (`to_str`); building such an op is instead rejected by `from_str` as
-/// an unknown operator.
-fn deferred_lane_op(name: &str) -> Error {
-  Error::from_reason(format!(
-    "SIMD lane op `{name}` is deferred to the SIMD task (C6)"
-  ))
+/// The catchable error for a lane-carrying SIMD op whose descriptor omits the
+/// `lane` index (a lane op is not buildable without one).
+fn missing_lane(name: &str) -> Error {
+  Error::from_reason(format!("SIMD lane op `{name}` requires a `lane` index"))
 }
 
-/// Generate the two string-conversion functions (and a test-only slice of all
-/// fieldless variants) for one walrus operator enum from a single variant list.
+/// Generate the two string-conversion functions (and test-only slices of the
+/// fieldless and lane variants) for one walrus operator enum from a single
+/// variant list — the single source of truth for both directions.
 ///
-/// * `<to_str>(op) -> Ok("<VariantName>")` for a fieldless variant; a deferred
-///   lane-carrier (`Variant { .. }`) returns a catchable error. The match is
-///   EXHAUSTIVE (no wildcard) so a new walrus variant fails to compile.
-/// * `<from_str>(s) -> Ok(Variant)` for a fieldless name; anything else
-///   (including a deferred lane-carrier name) is a catchable error.
-/// * `#[cfg(test)] const <ALL>: &[<Enum>]` — every fieldless variant, for the
-///   exhaustive round-trip test.
+/// * `<to_str>(op) -> ("<VariantName>", None)` for a fieldless variant, or
+///   `("<VariantName>", Some(idx))` for a lane-carrier (`Variant { idx }`). The
+///   match is EXHAUSTIVE (no wildcard) so a new walrus variant fails to compile.
+///   Infallible: every variant maps.
+/// * `<from_str>(s, lane) -> Ok(Variant)` — a fieldless name ignores `lane`; a
+///   lane name requires it (missing => catchable error); any other name is a
+///   catchable error.
+/// * `#[cfg(test)] const <ALL>: &[<Enum>]` — every fieldless variant, and
+///   `#[cfg(test)] const <ALL_LANE>: &[<Enum>]` — every lane variant (with a
+///   representative `idx`), for the exhaustive round-trip tests.
 macro_rules! str_enum {
   (
     kind: $kind:literal,
@@ -967,25 +1001,33 @@ macro_rules! str_enum {
     to_str: $to_str:ident,
     from_str: $from_str:ident,
     all_fieldless: $all:ident,
+    all_lane: $all_lane:ident,
     fieldless: [ $($fl:ident),* $(,)? ],
-    deferred: [ $($df:ident),* $(,)? ] $(,)?
+    lane: [ $($ln:ident),* $(,)? ] $(,)?
   ) => {
-    fn $to_str(op: &$Enum) -> Result<&'static str> {
-      Ok(match op {
-        $( $Enum::$fl => stringify!($fl), )*
-        $( $Enum::$df { .. } => return Err(deferred_lane_op(stringify!($df))), )*
-      })
+    fn $to_str(op: &$Enum) -> (&'static str, Option<u8>) {
+      match op {
+        $( $Enum::$fl => (stringify!($fl), None), )*
+        $( $Enum::$ln { idx } => (stringify!($ln), Some(*idx)), )*
+      }
     }
 
-    fn $from_str(s: &str) -> Result<$Enum> {
+    #[allow(unused_variables)]
+    fn $from_str(s: &str, lane: Option<u8>) -> Result<$Enum> {
       Ok(match s {
         $( stringify!($fl) => $Enum::$fl, )*
+        $( stringify!($ln) => $Enum::$ln {
+          idx: lane.ok_or_else(|| missing_lane(stringify!($ln)))?,
+        }, )*
         other => return Err(unknown_op($kind, other)),
       })
     }
 
     #[cfg(test)]
     const $all: &[$Enum] = &[ $( $Enum::$fl, )* ];
+
+    #[cfg(test)]
+    const $all_lane: &[$Enum] = &[ $( $Enum::$ln { idx: 7 }, )* ];
   };
 }
 
@@ -995,6 +1037,7 @@ str_enum! {
   to_str: binop_to_str,
   from_str: binop_from_str,
   all_fieldless: BINOP_ALL_FIELDLESS,
+  all_lane: BINOP_ALL_LANE,
   fieldless: [
     I32Eq, I32Ne, I32LtS, I32LtU, I32GtS, I32GtU, I32LeS, I32LeU, I32GeS, I32GeU, I64Eq, I64Ne,
     I64LtS, I64LtU, I64GtS, I64GtU, I64LeS, I64LeU, I64GeS, I64GeU, F32Eq, F32Ne, F32Lt, F32Gt,
@@ -1024,7 +1067,7 @@ str_enum! {
     F32x4RelaxedMax, F64x2RelaxedMin, F64x2RelaxedMax, I16x8RelaxedQ15mulrS,
     I16x8RelaxedDotI8x16I7x16S,
   ],
-  deferred: [
+  lane: [
     I8x16ReplaceLane, I16x8ReplaceLane, I32x4ReplaceLane, I64x2ReplaceLane, F32x4ReplaceLane,
     F64x2ReplaceLane,
   ],
@@ -1036,6 +1079,7 @@ str_enum! {
   to_str: unop_to_str,
   from_str: unop_from_str,
   all_fieldless: UNOP_ALL_FIELDLESS,
+  all_lane: UNOP_ALL_LANE,
   fieldless: [
     I32Eqz, I32Clz, I32Ctz, I32Popcnt, I64Eqz, I64Clz, I64Ctz, I64Popcnt, F32Abs, F32Neg,
     F32Ceil, F32Floor, F32Trunc, F32Nearest, F32Sqrt, F64Abs, F64Neg, F64Ceil, F64Floor,
@@ -1062,7 +1106,7 @@ str_enum! {
     I32x4RelaxedTruncF32x4S, I32x4RelaxedTruncF32x4U, I32x4RelaxedTruncF64x2SZero,
     I32x4RelaxedTruncF64x2UZero,
   ],
-  deferred: [
+  lane: [
     I8x16ExtractLaneS, I8x16ExtractLaneU, I16x8ExtractLaneS, I16x8ExtractLaneU,
     I32x4ExtractLane, I64x2ExtractLane, F32x4ExtractLane, F64x2ExtractLane,
   ],
@@ -1074,13 +1118,59 @@ str_enum! {
   to_str: ternop_to_str,
   from_str: ternop_from_str,
   all_fieldless: TERNOP_ALL_FIELDLESS,
+  all_lane: TERNOP_ALL_LANE,
   fieldless: [
     F32x4RelaxedMadd, F32x4RelaxedNmadd, F64x2RelaxedMadd, F64x2RelaxedNmadd,
     I8x16RelaxedLaneselect, I16x8RelaxedLaneselect, I32x4RelaxedLaneselect,
     I64x2RelaxedLaneselect, I32x4RelaxedDotI8x16I7x16AddS,
   ],
-  deferred: [
+  lane: [
   ],
+}
+
+// ---------------------------------------------------------------------------
+// SIMD byte-payload conversions (v128 const bytes, i8x16.shuffle indices).
+//
+// Both cross as a raw `Uint8Array` of EXACTLY 16 bytes; any other length is a
+// catchable REPRESENTATION error (mirror of the `constexpr::ConstExpr::v128`
+// factory), never a wasm semantic check. Each is `#[inline(never)]` so its
+// `[u8; 16]`/`u128` temporaries live in their OWN frame rather than inflating the
+// recursive walkers (`emit_one`/`validate_one`/`read_one`) — the same stack-frame
+// discipline as `emit_atomic` (see `MAX_NESTING_DEPTH`).
+// ---------------------------------------------------------------------------
+
+/// Fold exactly 16 little-endian bytes into a `u128` (a v128 const), or a
+/// catchable error on any other length. `#[inline(never)]`: keeps the `[u8; 16]`
+/// out of the emit/validate walker frames.
+#[inline(never)]
+fn v128_bytes_to_u128(bytes: &[u8]) -> Result<u128> {
+  let array: [u8; 16] = bytes.try_into().map_err(|_| {
+    Error::from_reason(format!(
+      "v128 const requires exactly 16 bytes, got {}",
+      bytes.len()
+    ))
+  })?;
+  Ok(u128::from_le_bytes(array))
+}
+
+/// Unfold a `u128` (a v128 const) into its 16 little-endian bytes as a
+/// `Uint8Array`. `#[inline(never)]`: keeps the `[u8; 16]` out of `read_one`'s
+/// frame.
+#[inline(never)]
+fn v128_u128_to_bytes(value: u128) -> Uint8Array {
+  Uint8Array::from(value.to_le_bytes().to_vec())
+}
+
+/// Coerce a byte slice to the `[u8; 16]` shuffle immediate, or a catchable error
+/// on any other length. The single source of the length check + message shared by
+/// [`emit_shuffle`] and [`validate_shuffle`].
+fn to_shuffle_indices(bytes: &[u8]) -> Result<[u8; 16]> {
+  bytes.try_into().map_err(|_| {
+    Error::from_reason(format!(
+      "i8x16.shuffle requires exactly 16 lane indices, got {}",
+      bytes.len()
+    ))
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,6 +1227,7 @@ fn emit_one(
     labels,
     default_label,
     op,
+    lane,
     memory,
     src_memory,
     data,
@@ -1151,6 +1242,7 @@ fn emit_one(
     atomic_op,
     atomic_width,
     sixty_four,
+    shuffle_indices,
   } = d;
 
   match r#type.as_str() {
@@ -1178,6 +1270,10 @@ fn emit_one(
         }
         ConstValue::F32 { value } => wir::Value::F32(value as f32),
         ConstValue::F64 { value } => wir::Value::F64(value),
+        // The `[u8; 16]` -> `u128` fold lives in `v128_bytes_to_u128` (an
+        // `#[inline(never)]` helper) so its array temporary stays out of this
+        // recursive walker's frame; `wv` already sizes for `Value::V128(u128)`.
+        ConstValue::V128 { value } => wir::Value::V128(v128_bytes_to_u128(&value)?),
       };
       fb.instr_seq(seq_id).instr(wir::Const { value: wv });
     }
@@ -1278,17 +1374,36 @@ fn emit_one(
         default,
       });
     }
+    // `Binop`/`Unop` decode BOTH fieldless ops and the 14 lane-carriers: the
+    // `op` name selects the variant and, for a lane op, `lane` supplies its `idx`
+    // (missing lane on a lane op => catchable error inside `from_str`). The op
+    // enums are `Copy` (a `BinaryOp`/`UnaryOp` is tiny), so this arm adds no
+    // meaningful frame; the big match lives in the separate `*_from_str` fn.
     "Binop" => {
-      let op = binop_from_str(&op.ok_or_else(|| missing("Binop", "op"))?)?;
+      let op = binop_from_str(&op.ok_or_else(|| missing("Binop", "op"))?, lane)?;
       fb.instr_seq(seq_id).instr(wir::Binop { op });
     }
     "Unop" => {
-      let op = unop_from_str(&op.ok_or_else(|| missing("Unop", "op"))?)?;
+      let op = unop_from_str(&op.ok_or_else(|| missing("Unop", "op"))?, lane)?;
       fb.instr_seq(seq_id).instr(wir::Unop { op });
     }
     "TernOp" => {
-      let op = ternop_from_str(&op.ok_or_else(|| missing("TernOp", "op"))?)?;
+      // TernaryOp has no lane-carriers; `lane` is ignored.
+      let op = ternop_from_str(&op.ok_or_else(|| missing("TernOp", "op"))?, lane)?;
       fb.instr_seq(seq_id).instr(wir::TernOp { op });
+    }
+    // Fixed-shape SIMD instructions. `V128Bitselect`/`I8x16Swizzle` are fieldless
+    // (trivial arms). `I8x16Shuffle` carries a 16-byte immediate whose length
+    // check + `[u8; 16]` build live in `emit_shuffle` (an `#[inline(never)]`
+    // helper) so its array temporary stays out of this recursive walker's frame.
+    "V128Bitselect" => {
+      fb.instr_seq(seq_id).instr(wir::V128Bitselect {});
+    }
+    "I8x16Swizzle" => {
+      fb.instr_seq(seq_id).instr(wir::I8x16Swizzle {});
+    }
+    "I8x16Shuffle" => {
+      emit_shuffle(fb, seq_id, shuffle_indices)?;
     }
     "MemorySize" => {
       let memory = memory_id_at(
@@ -1563,6 +1678,23 @@ fn emit_atomic(
   Ok(())
 }
 
+/// Emit one `I8x16Shuffle`. Split out of [`emit_one`] and marked
+/// `#[inline(never)]` for the same frame-size reason as [`emit_atomic`]: the
+/// `[u8; 16]` immediate lives in this function's OWN frame, not the recursive
+/// `emit_one` frame. Requires the `shuffleIndices` field present and EXACTLY 16
+/// bytes (a representation constraint, not a wasm semantic check).
+#[inline(never)]
+fn emit_shuffle(
+  fb: &mut FunctionBuilder,
+  seq_id: wir::InstrSeqId,
+  shuffle_indices: Option<Uint8Array>,
+) -> Result<()> {
+  let bytes = shuffle_indices.ok_or_else(|| missing("I8x16Shuffle", "shuffleIndices"))?;
+  let indices = to_shuffle_indices(&bytes)?;
+  fb.instr_seq(seq_id).instr(wir::I8x16Shuffle { indices });
+  Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Preflight: a read-only mirror of the emit walk, run BEFORE any arena mutation.
 // ---------------------------------------------------------------------------
@@ -1608,17 +1740,25 @@ pub(crate) fn validate_body(module: &Module, body: &[InstrDesc], label_len: usiz
 fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> {
   match d.r#type.as_str() {
     // Fieldless leaf ops: nothing to resolve. `RefIsNull` joins them (its emit
-    // arm takes no payload).
-    "Unreachable" | "Return" | "Drop" | "RefIsNull" => {}
+    // arm takes no payload); so do the fieldless SIMD `V128Bitselect` /
+    // `I8x16Swizzle`.
+    "Unreachable" | "Return" | "Drop" | "RefIsNull" | "V128Bitselect" | "I8x16Swizzle" => {}
     "Const" => {
-      // Mirror emit's only fallible Const check: an i64 that is not lossless.
+      // Mirror emit's fallible Const checks: an i64 that is not lossless, and a
+      // v128 that is not exactly 16 bytes (via the shared `v128_bytes_to_u128`).
       let value = d.value.as_ref().ok_or_else(|| missing("Const", "value"))?;
-      if let ConstValue::I64 { value } = value {
-        if !value.get_i64().1 {
-          return Err(Error::from_reason(
-            "i64 const value does not fit losslessly in a signed 64-bit integer",
-          ));
+      match value {
+        ConstValue::I64 { value } => {
+          if !value.get_i64().1 {
+            return Err(Error::from_reason(
+              "i64 const value does not fit losslessly in a signed 64-bit integer",
+            ));
+          }
         }
+        ConstValue::V128 { value } => {
+          v128_bytes_to_u128(value)?;
+        }
+        ConstValue::I32 { .. } | ConstValue::F32 { .. } | ConstValue::F64 { .. } => {}
       }
     }
     "LocalGet" => {
@@ -1691,17 +1831,33 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
         validate_label(l, label_len)?;
       }
     }
-    // The only fallible step for an operator is the op-string decode: check the
-    // `op` field is present and names a buildable (fieldless) variant, discarding
-    // the decoded op. Ops carry no ids/labels, so nothing else needs resolving.
+    // The fallible steps for an operator are the op-string decode AND (for a lane
+    // op) the presence of `lane`: `from_str` is passed `d.lane`, so a lane op
+    // missing its lane is rejected here exactly as emit would, discarding the
+    // decoded op. Ops carry no ids/labels, so nothing else needs resolving.
     "Binop" => {
-      binop_from_str(d.op.as_deref().ok_or_else(|| missing("Binop", "op"))?)?;
+      binop_from_str(
+        d.op.as_deref().ok_or_else(|| missing("Binop", "op"))?,
+        d.lane,
+      )?;
     }
     "Unop" => {
-      unop_from_str(d.op.as_deref().ok_or_else(|| missing("Unop", "op"))?)?;
+      unop_from_str(
+        d.op.as_deref().ok_or_else(|| missing("Unop", "op"))?,
+        d.lane,
+      )?;
     }
     "TernOp" => {
-      ternop_from_str(d.op.as_deref().ok_or_else(|| missing("TernOp", "op"))?)?;
+      ternop_from_str(
+        d.op.as_deref().ok_or_else(|| missing("TernOp", "op"))?,
+        d.lane,
+      )?;
+    }
+    // `I8x16Shuffle` preflight mirrors `emit_shuffle`: `shuffleIndices` present
+    // and exactly 16 bytes. Delegated to `validate_shuffle` (`#[inline(never)]`)
+    // to keep its `[u8; 16]` out of this recursive walker's frame.
+    "I8x16Shuffle" => {
+      validate_shuffle(d)?;
     }
     // Memory + load/store. The fallible steps mirror emit exactly: required
     // fields present, each memory/data index resolves (the abort guards), and a
@@ -1969,6 +2125,21 @@ fn validate_atomic(module: &Module, d: &InstrDesc) -> Result<()> {
   Ok(())
 }
 
+/// Preflight one `I8x16Shuffle` descriptor. Split out of [`validate_one`] and
+/// marked `#[inline(never)]` for the same frame-size reason as [`emit_shuffle`]:
+/// the `[u8; 16]` immediate stays out of the recursive walker's frame. Mirrors
+/// `emit_shuffle`: `shuffleIndices` present and (via the shared
+/// [`to_shuffle_indices`]) exactly 16 bytes.
+#[inline(never)]
+fn validate_shuffle(d: &InstrDesc) -> Result<()> {
+  let bytes = d
+    .shuffle_indices
+    .as_ref()
+    .ok_or_else(|| missing("I8x16Shuffle", "shuffleIndices"))?;
+  to_shuffle_indices(bytes)?;
+  Ok(())
+}
+
 /// Validate a block type against the pre-call arena, mirroring
 /// [`to_instr_seq_type`] and reusing its resolvers. `MultiValue` is the primary
 /// abort vector: an index naming the function's own future entry/sig type is out
@@ -2048,11 +2219,12 @@ fn read_one(
         },
         wir::Value::F32(v) => ConstValue::F32 { value: v as f64 },
         wir::Value::F64(v) => ConstValue::F64 { value: v },
-        wir::Value::V128(_) => {
-          return Err(Error::from_reason(
-            "v128 const is not yet supported by instructions() (SIMD is a later task)",
-          ))
-        }
+        // The `u128` -> 16 little-endian bytes unfold lives in
+        // `v128_u128_to_bytes` (an `#[inline(never)]` helper) so its `[u8; 16]`
+        // stays out of this recursive walker's frame.
+        wir::Value::V128(v) => ConstValue::V128 {
+          value: v128_u128_to_bytes(v),
+        },
       });
       d
     }
@@ -2138,19 +2310,37 @@ fn read_one(
       d.default_label = Some(label_depth(bt.default, label_stack)?);
       d
     }
+    // `Binop`/`Unop` read BOTH fieldless and lane-carrying ops: `to_str` yields
+    // the name plus, for a lane op, its `idx` (set as `lane`). `to_str` is
+    // infallible (every walrus variant maps), so no `?`.
     wir::Instr::Binop(b) => {
       let mut d = InstrDesc::new("Binop");
-      d.op = Some(binop_to_str(&b.op)?.to_string());
+      let (name, lane) = binop_to_str(&b.op);
+      d.op = Some(name.to_string());
+      d.lane = lane;
       d
     }
     wir::Instr::Unop(u) => {
       let mut d = InstrDesc::new("Unop");
-      d.op = Some(unop_to_str(&u.op)?.to_string());
+      let (name, lane) = unop_to_str(&u.op);
+      d.op = Some(name.to_string());
+      d.lane = lane;
       d
     }
     wir::Instr::TernOp(t) => {
       let mut d = InstrDesc::new("TernOp");
-      d.op = Some(ternop_to_str(&t.op)?.to_string());
+      // TernaryOp has no lane-carriers, so `lane` is always `None` here.
+      let (name, _lane) = ternop_to_str(&t.op);
+      d.op = Some(name.to_string());
+      d
+    }
+    // Fixed-shape SIMD instructions (C6a). The two fieldless ones are trivial;
+    // `I8x16Shuffle`'s 16-byte immediate is unfolded into a `Uint8Array`.
+    wir::Instr::V128Bitselect(_) => InstrDesc::new("V128Bitselect"),
+    wir::Instr::I8x16Swizzle(_) => InstrDesc::new("I8x16Swizzle"),
+    wir::Instr::I8x16Shuffle(e) => {
+      let mut d = InstrDesc::new("I8x16Shuffle");
+      d.shuffle_indices = Some(Uint8Array::from(e.indices.to_vec()));
       d
     }
     wir::Instr::MemorySize(e) => {
@@ -2331,23 +2521,55 @@ mod tests {
   use std::collections::HashSet;
 
   /// For one generated table: `to_str` maps every fieldless variant to a UNIQUE
-  /// name, and `from_str(to_str(v)) == v` for all of them (compared through
-  /// `{:?}` since the walrus enums have no `PartialEq`). This is the definitive
-  /// proof the two directions are exact inverses over the whole enum.
+  /// name with NO lane, and `from_str(to_str(v), None) == v` for all of them
+  /// (compared through `{:?}` since the walrus enums have no `PartialEq`). This is
+  /// the definitive proof the two directions are exact inverses over the fieldless
+  /// variants.
   fn check_roundtrip<T: std::fmt::Debug>(
     all: &[T],
-    to_str: fn(&T) -> Result<&'static str>,
-    from_str: fn(&str) -> Result<T>,
+    to_str: fn(&T) -> (&'static str, Option<u8>),
+    from_str: fn(&str, Option<u8>) -> Result<T>,
   ) {
     let mut names = HashSet::new();
     for v in all {
-      let name = to_str(v).expect("a fieldless variant must map to a name");
+      let (name, lane) = to_str(v);
+      assert_eq!(lane, None, "a fieldless variant must not carry a lane");
       assert!(names.insert(name), "duplicate operator name `{name}`");
-      let back = from_str(name).expect("a fieldless name must decode back to a variant");
+      let back = from_str(name, None).expect("a fieldless name must decode back to a variant");
       assert_eq!(
         format!("{v:?}"),
         format!("{back:?}"),
         "round-trip mismatch for `{name}`"
+      );
+    }
+    assert_eq!(names.len(), all.len());
+  }
+
+  /// For one generated table's LANE variants: `to_str` surfaces the name plus the
+  /// variant's `idx`; `from_str(name, None)` is a catchable error (a lane op needs
+  /// its lane); and `from_str(name, Some(idx))` rebuilds the exact variant. This
+  /// proves the lane name<->variant mapping is an exact inverse and that a missing
+  /// lane is rejected.
+  fn check_lane_roundtrip<T: std::fmt::Debug>(
+    all: &[T],
+    to_str: fn(&T) -> (&'static str, Option<u8>),
+    from_str: fn(&str, Option<u8>) -> Result<T>,
+  ) {
+    let mut names = HashSet::new();
+    for v in all {
+      let (name, lane) = to_str(v);
+      // The test consts instantiate every lane variant with `idx: 7`.
+      assert_eq!(lane, Some(7), "a lane variant must surface its `idx`");
+      assert!(names.insert(name), "duplicate lane operator name `{name}`");
+      assert!(
+        from_str(name, None).is_err(),
+        "lane op `{name}` must require a lane"
+      );
+      let back = from_str(name, Some(7)).expect("a lane name + lane must build the variant");
+      assert_eq!(
+        format!("{v:?}"),
+        format!("{back:?}"),
+        "lane round-trip mismatch for `{name}`"
       );
     }
     assert_eq!(names.len(), all.len());
@@ -2372,21 +2594,21 @@ mod tests {
   }
 
   #[test]
-  fn deferred_lane_carriers_are_rejected_both_directions() {
-    // A representative deferred lane-carrier from each enum that has them.
-    let binop_lane = wir::BinaryOp::I8x16ReplaceLane { idx: 0 };
-    let unop_lane = wir::UnaryOp::I8x16ExtractLaneS { idx: 0 };
+  fn lane_carriers_round_trip_and_require_a_lane() {
+    // The 14 lane-carriers (6 BinaryOp `*ReplaceLane`, 8 UnaryOp `*ExtractLane*`,
+    // 0 TernaryOp) map name<->variant exactly, surface their `idx`, and reject a
+    // missing lane.
+    assert_eq!(BINOP_ALL_LANE.len(), 6);
+    assert_eq!(UNOP_ALL_LANE.len(), 8);
+    assert_eq!(TERNOP_ALL_LANE.len(), 0);
+    check_lane_roundtrip(BINOP_ALL_LANE, binop_to_str, binop_from_str);
+    check_lane_roundtrip(UNOP_ALL_LANE, unop_to_str, unop_from_str);
+    check_lane_roundtrip(TERNOP_ALL_LANE, ternop_to_str, ternop_from_str);
 
-    // `to_str` refuses to read a lane-carrier (catchable, mentions the deferral).
-    let e = binop_to_str(&binop_lane).unwrap_err();
-    assert!(format!("{e}").contains("deferred"), "got: {e}");
-    let e = unop_to_str(&unop_lane).unwrap_err();
-    assert!(format!("{e}").contains("deferred"), "got: {e}");
-
-    // `from_str` refuses to build a lane-carrier by name, and any bogus name too.
-    assert!(binop_from_str("I8x16ReplaceLane").is_err());
-    assert!(unop_from_str("I8x16ExtractLaneS").is_err());
-    assert!(binop_from_str("NotARealOp").is_err());
-    assert!(ternop_from_str("").is_err());
+    // An unknown name is still a catchable error in every table (C1b behavior),
+    // and a spurious lane on a fieldless name is simply ignored.
+    assert!(binop_from_str("NotARealOp", None).is_err());
+    assert!(ternop_from_str("", None).is_err());
+    assert!(binop_from_str("I32Add", Some(3)).is_ok());
   }
 }

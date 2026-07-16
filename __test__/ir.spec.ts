@@ -702,35 +702,38 @@ test('C1b negative: a Binop/Unop/TernOp descriptor missing its `op` field throws
   })
 })
 
-test('C1b negative: a deferred lane-carrier op name is not buildable (rejected catchably)', (t) => {
-  // The 14 lane-carrying SIMD ops are deferred to C6; from_str rejects their
-  // names (they are not buildable without a lane index this task does not model).
+test('C6a: a lane-carrier op name WITHOUT a `lane` is not buildable (rejected catchably)', (t) => {
+  // C6a makes the 14 lane-carrying SIMD ops buildable, but ONLY with a `lane`
+  // index: omitting it is a catchable representation error (no longer "unknown
+  // operator" — the name IS known now, it just needs its lane).
   t.throws(() => empty().buildFunction([], [], [], [{ type: 'Unop', op: 'I8x16ExtractLaneS' }]), {
-    message: /unknown unary operator `I8x16ExtractLaneS`/,
+    message: /SIMD lane op `I8x16ExtractLaneS` requires a `lane` index/,
   })
   t.throws(() => empty().buildFunction([], [], [], [{ type: 'Binop', op: 'I8x16ReplaceLane' }]), {
-    message: /unknown binary operator `I8x16ReplaceLane`/,
+    message: /SIMD lane op `I8x16ReplaceLane` requires a `lane` index/,
   })
 })
 
 // A hand-authored module whose one function contains a lane-carrier op:
 // (i32.const 0)(i8x16.splat)(i8x16.extract_lane_s 0)(drop). Produced from walrus
-// directly (buildFunction cannot emit a lane op), so the read path can be
-// exercised against a genuine lane-carrying instruction.
+// directly, so the read path can be exercised against a genuine lane-carrying
+// instruction decoded from real wasm bytes (not just our own emit).
 const LANE_CARRIER_MODULE = new Uint8Array([
   0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00, 0x07,
   0x05, 0x01, 0x01, 0x66, 0x00, 0x00, 0x0a, 0x0c, 0x01, 0x0a, 0x00, 0x41, 0x00, 0xfd, 0x0f, 0xfd, 0x15, 0x00, 0x1a,
   0x0b,
 ])
 
-test('C1b negative: reading a module containing a lane-carrier op throws catchably (deferred to C6)', (t) => {
+test('C6a: reading a module containing a lane-carrier op yields `op` + `lane` (no longer deferred)', (t) => {
   const m = new ModuleConfig().onlyStableFeatures(false).parse(LANE_CARRIER_MODULE)
   const f = m.functions.getByIndex(0)!
-  t.throws(() => f.instructions(), {
-    message: /deferred to the SIMD task \(C6\)/,
-  })
-  // Process survived the guarded read.
-  t.is(1 + 1, 2)
+  // The lane-carrying `i8x16.extract_lane_s 0` decodes to op + lane 0.
+  t.deepEqual(f.instructions(), [
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Unop', op: 'I8x16Splat' },
+    { type: 'Unop', op: 'I8x16ExtractLaneS', lane: 0 },
+    { type: 'Drop' },
+  ])
 })
 
 // ---------------------------------------------------------------------------
@@ -1569,4 +1572,160 @@ test('C5 negative: a non-lossless MemArg offset on an atomic throws catchably', 
     message: /MemArg offset must be a non-negative integer that fits in a u64/,
   })
   t.is(1 + 1, 2)
+})
+
+// ---------------------------------------------------------------------------
+// C6a: SIMD part 1 — the v128 const, the 14 lane-carrying Binop/Unop ops
+// (`*ReplaceLane` / `*ExtractLane*`, carried as `op` + `lane`), and the three
+// fixed-shape SIMD instructions (`V128Bitselect`, `I8x16Swizzle`,
+// `I8x16Shuffle`). Same walrus fact as the earlier operator tasks:
+// `strict_validate(false)` is a no-op in 0.26.4, so an ill-typed body can never
+// re-parse. The EXHAUSTIVE test therefore uses the IN-MEMORY read path
+// (`buildFunction` -> `instructions()` on the same module, never touching the
+// parser/validator); a separate WELL-TYPED body proves the ops (and the v128
+// little-endian byte order) survive the emit -> bytes -> re-parse boundary.
+//
+// MIRROR-WALRUS: `buildFunction` only guards representation hazards — a v128
+// const's bytes are EXACTLY 16, an i8x16.shuffle's indices are EXACTLY 16, a
+// lane op has a `lane` (napi range-checks it to a u8). It does NOT type-check: a
+// lane index past the vector width, a shuffle index >= 32, or an ill-typed body
+// all build and emit as-is.
+// ---------------------------------------------------------------------------
+
+// A distinctive 16-byte v128 pattern: asymmetric so a byte-order or off-by-one
+// error in the round-trip is visible.
+const V128_PATTERN = new Uint8Array([0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb])
+
+// The 6 BinaryOp `*ReplaceLane` and 8 UnaryOp `*ExtractLane*` lane-carriers, each
+// with a representative lane index (distinct values catch any op/lane mixup).
+const LANE_BINOPS: InstrDesc[] = [
+  { type: 'Binop', op: 'I8x16ReplaceLane', lane: 15 },
+  { type: 'Binop', op: 'I16x8ReplaceLane', lane: 7 },
+  { type: 'Binop', op: 'I32x4ReplaceLane', lane: 3 },
+  { type: 'Binop', op: 'I64x2ReplaceLane', lane: 1 },
+  { type: 'Binop', op: 'F32x4ReplaceLane', lane: 2 },
+  { type: 'Binop', op: 'F64x2ReplaceLane', lane: 0 },
+]
+const LANE_UNOPS: InstrDesc[] = [
+  { type: 'Unop', op: 'I8x16ExtractLaneS', lane: 1 },
+  { type: 'Unop', op: 'I8x16ExtractLaneU', lane: 2 },
+  { type: 'Unop', op: 'I16x8ExtractLaneS', lane: 3 },
+  { type: 'Unop', op: 'I16x8ExtractLaneU', lane: 4 },
+  { type: 'Unop', op: 'I32x4ExtractLane', lane: 3 },
+  { type: 'Unop', op: 'I64x2ExtractLane', lane: 1 },
+  { type: 'Unop', op: 'F32x4ExtractLane', lane: 2 },
+  { type: 'Unop', op: 'F64x2ExtractLane', lane: 0 },
+]
+
+test('C6a EXHAUSTIVE: v128 const, all 14 lane ops, and the 3 fixed-shape SIMD instrs round-trip in-memory', (t) => {
+  const body: InstrDesc[] = [
+    // v128 const with the distinctive pattern.
+    { type: 'Const', value: { type: 'V128', value: V128_PATTERN } },
+    // every lane-carrying op with its representative lane.
+    ...LANE_BINOPS,
+    ...LANE_UNOPS,
+    // the fieldless fixed-shape SIMD instrs.
+    { type: 'V128Bitselect' },
+    { type: 'I8x16Swizzle' },
+    // i8x16.shuffle with a distinctive 16-byte index pattern.
+    {
+      type: 'I8x16Shuffle',
+      shuffleIndices: new Uint8Array([15, 0, 14, 1, 13, 2, 12, 3, 11, 4, 10, 5, 9, 6, 8, 7]),
+    },
+  ]
+
+  const m = empty()
+  const idx = m.buildFunction([], [], [], body)
+  // Read back from the SAME in-memory module (no emit/re-parse, so walrus'
+  // always-on function-body validator never runs on this ill-typed body).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+})
+
+// A WELL-TYPED, stack-balanced SIMD body: correct operands and in-range lane /
+// shuffle immediates so the emitted module is valid wasm a real engine accepts.
+// It exercises the v128 const, a Unop lane op, a Binop lane op, and all three
+// fixed-shape instrs.
+const V128_A = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+const V128_B = new Uint8Array(16).fill(0xff)
+const WELL_TYPED_SIMD_BODY: InstrDesc[] = [
+  // v128.const A ; i8x16.extract_lane_s 3 ; drop
+  { type: 'Const', value: { type: 'V128', value: V128_A } },
+  { type: 'Unop', op: 'I8x16ExtractLaneS', lane: 3 },
+  { type: 'Drop' },
+  // v128.const A ; i32.const 42 ; i8x16.replace_lane 5 ; drop
+  { type: 'Const', value: { type: 'V128', value: V128_A } },
+  { type: 'Const', value: { type: 'I32', value: 42 } },
+  { type: 'Binop', op: 'I8x16ReplaceLane', lane: 5 },
+  { type: 'Drop' },
+  // v128.const A ; v128.const B ; i8x16.shuffle <0..15> ; drop
+  { type: 'Const', value: { type: 'V128', value: V128_A } },
+  { type: 'Const', value: { type: 'V128', value: V128_B } },
+  { type: 'I8x16Shuffle', shuffleIndices: new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]) },
+  { type: 'Drop' },
+  // v128.const A ; v128.const B ; i8x16.swizzle ; drop
+  { type: 'Const', value: { type: 'V128', value: V128_A } },
+  { type: 'Const', value: { type: 'V128', value: V128_B } },
+  { type: 'I8x16Swizzle' },
+  { type: 'Drop' },
+  // v128.const A ; v128.const B ; v128.const B ; v128.bitselect ; drop
+  { type: 'Const', value: { type: 'V128', value: V128_A } },
+  { type: 'Const', value: { type: 'V128', value: V128_B } },
+  { type: 'Const', value: { type: 'V128', value: V128_B } },
+  { type: 'V128Bitselect' },
+  { type: 'Drop' },
+]
+
+test('C6a: a well-typed SIMD body emits valid wasm and round-trips through re-parse (v128 endianness proven)', (t) => {
+  const m = empty()
+  const idx = m.buildFunction([], [], [], WELL_TYPED_SIMD_BODY)
+  m.functions.getByIndex(idx)!.name = 'simd6a'
+  const bytes = m.emitWasm(false)
+
+  // Independent proof the bytes are real, well-typed (stable) SIMD wasm — this is
+  // the endianness proof: the v128 const bytes survive the LE binary encoding.
+  t.true(WebAssembly.validate(bytes))
+
+  // Re-parse (all proposals on so every SIMD opcode decodes) and read back: the
+  // ops, lanes, shuffle indices, and v128 bytes all decode to the same body.
+  const reparsed = new ModuleConfig().onlyStableFeatures(false).parse(bytes)
+  const read = reparsed.functions.byName('simd6a')!.instructions()
+  t.deepEqual(read, WELL_TYPED_SIMD_BODY)
+})
+
+test('C6a negative: a lane op missing its `lane` throws catchably (both Binop and Unop)', (t) => {
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'Binop', op: 'F64x2ReplaceLane' }]), {
+    message: /SIMD lane op `F64x2ReplaceLane` requires a `lane` index/,
+  })
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'Unop', op: 'F32x4ExtractLane' }]), {
+    message: /SIMD lane op `F32x4ExtractLane` requires a `lane` index/,
+  })
+})
+
+test('C6a negative: a v128 const whose byte length != 16 throws catchably', (t) => {
+  const short = { type: 'Const', value: { type: 'V128', value: new Uint8Array(15) } } as InstrDesc
+  t.throws(() => empty().buildFunction([], [], [], [short]), {
+    message: /v128 const requires exactly 16 bytes, got 15/,
+  })
+  const long = { type: 'Const', value: { type: 'V128', value: new Uint8Array(17) } } as InstrDesc
+  t.throws(() => empty().buildFunction([], [], [], [long]), {
+    message: /v128 const requires exactly 16 bytes, got 17/,
+  })
+})
+
+test('C6a negative: an I8x16Shuffle whose indices length != 16 (or absent) throws catchably', (t) => {
+  const short = { type: 'I8x16Shuffle', shuffleIndices: new Uint8Array([1, 2, 3]) } as InstrDesc
+  t.throws(() => empty().buildFunction([], [], [], [short]), {
+    message: /i8x16.shuffle requires exactly 16 lane indices, got 3/,
+  })
+  // Absent shuffleIndices is a missing-field error.
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'I8x16Shuffle' }]), {
+    message: /`I8x16Shuffle` instruction is missing its `shuffleIndices` field/,
+  })
+})
+
+test('C6a negative: an unknown SIMD op string still throws (C1b behavior intact)', (t) => {
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'Binop', op: 'I8x16NotARealLaneOp', lane: 0 }]), {
+    message: /unknown binary operator `I8x16NotARealLaneOp`/,
+  })
 })
