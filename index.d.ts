@@ -527,6 +527,25 @@ export declare class WasmFunction {
    */
   ty(): WasmType
   /**
+   * This function's instruction body, as an array of [`InstrDesc`] descriptors.
+   *
+   * Only a LOCAL function has a body: this throws a catchable error for an
+   * imported function (whose body lives in the host) or an uninitialized
+   * placeholder. The descriptors are the exact inverse of
+   * [`crate::WasmModule::build_function`] — reading a body and building it back
+   * round-trips.
+   *
+   * Branch targets are read back as RELATIVE label depths (`0` = the innermost
+   * enclosing `block`/`loop`/`if`), matching wasm and `buildFunction`; walrus'
+   * absolute sequence ids are inverted via a label stack.
+   *
+   * This is the C1a subset (leaf ops, `Const`, local/global get/set/tee,
+   * `Call`, `Select`, `Block`/`Loop`/`IfElse`, `Br`/`BrIf`/`BrTable`). An
+   * instruction outside that subset throws a catchable error naming it, rather
+   * than aborting the process (later tasks add the remaining families).
+   */
+  instructions(): Array<InstrDesc>
+  /**
    * The import that brings this function into the module, as a live
    * [`WasmImport`] handle, or `null` if this function is locally defined (or an
    * uninitialized placeholder).
@@ -1011,6 +1030,32 @@ export declare class WasmModule {
    * etc.).
    */
   gc(): void
+  /**
+   * Build a new locally-defined function from an instruction-descriptor array
+   * and append it to the module, returning its stable index.
+   *
+   * `params`/`results` are the function signature; `argLocalIndices` are the
+   * stable indices of the locals (pre-created via `module.locals.add`) bound
+   * to the parameters, in order; `body` is the instruction body (see
+   * [`InstrDesc`]). The body is the inverse of
+   * [`crate::WasmFunction::instructions`]: the two round-trip.
+   *
+   * Branch targets in `body` are RELATIVE label depths (`0` = the innermost
+   * enclosing `block`/`loop`/`if`), matching wasm; they are resolved to
+   * walrus' absolute sequence ids internally via a label stack.
+   *
+   * MIRROR-WALRUS: only process-aborting hazards are guarded (an out-of-range
+   * local/global/func index, an out-of-range branch label, or a bad
+   * multi-value block-type index are rejected catchably BEFORE a panicking
+   * walrus lookup). The body is NOT validated for wasm well-formedness — an
+   * ill-typed body is built and emitted as-is, and `WebAssembly.validate` (or
+   * a re-parse) is the place to catch it.
+   *
+   * Self-reference limitation: a walrus `FunctionId` is only minted when the
+   * builder finishes, so a body cannot `Call` the function it is defining (the
+   * index names no live function yet, and that errs).
+   */
+  buildFunction(params: Array<ValType>, results: Array<ValType>, argLocalIndices: Array<number>, body: Array<InstrDesc>): number
   /** The name of this module, as stored in the wasm "name" custom section. */
   get name(): string | null
   /** Set the name of this module, stored in the wasm "name" custom section. */
@@ -1594,6 +1639,25 @@ export declare const enum AbstractHeapType {
 }
 
 /**
+ * The type of a control-flow block (`block`/`loop`/`if`), mirroring
+ * `walrus::ir::InstrSeqType`.
+ *
+ * Generated as a TypeScript discriminated union keyed on `type`:
+ * `{ type: 'Empty' } | { type: 'Value', value: ValType }`
+ * `| { type: 'MultiValue', typeIndex: number }`.
+ *
+ * `Empty` is a block with no parameters and no result; `Value` is a block that
+ * leaves a single result and takes no parameters; `MultiValue` references a
+ * function type (by its stable index) for arbitrary parameters/results.
+ */
+export type BlockType =
+  | { type: 'Empty' }
+  | { type: 'Value', /** The single result value type. */
+value: ValType }
+| { type: 'MultiValue', /** The stable index of the function type describing this block's signature. */
+typeIndex: number }
+
+/**
  * A composite type to create via [`crate::types::WasmTypes::add_composite`],
  * mirroring the shape of `walrus::CompositeType` (`Function | Struct | Array`).
  *
@@ -1633,6 +1697,33 @@ export declare const enum ConstExprKind {
   /** An extended constant expression (a sequence of const operations). */
   Extended = 'Extended'
 }
+
+/**
+ * A constant value carried by a `*.const` instruction, mirroring
+ * `walrus::ir::Value` (V128 is intentionally excluded until the SIMD task).
+ *
+ * Generated as a TypeScript discriminated union keyed on `type`:
+ * `{ type: 'I32', value: number } | { type: 'I64', value: bigint }`
+ * `| { type: 'F32', value: number } | { type: 'F64', value: number }`.
+ *
+ * `I64` crosses the boundary as a JS `bigint` for exactness; an `f32` has no
+ * dedicated JS type, so `F32` uses a `number` (`f64`) that is narrowed to
+ * `f32` on emit.
+ *
+ * Named `ConstValue`, not `Value`: napi-derive reserves the bare type name
+ * `Value` and maps it to TS `any` (it assumes a `serde_json::Value`-style
+ * dynamic value), which would erase the union from `InstrDesc.value`. The
+ * rename keeps the field precisely typed.
+ */
+export type ConstValue =
+  | { type: 'I32', /** The constant value. */
+value: number }
+| { type: 'I64', /** The constant value. */
+value: bigint }
+| { type: 'F32', /** The constant value. */
+value: number }
+| { type: 'F64', /** The constant value. */
+value: number }
 
 /**
  * Whether a data segment is active (auto-initialized into a memory at
@@ -1800,6 +1891,58 @@ export declare const enum ImportKindTag {
   Global = 'Global',
   /** An imported tag (exception handling). */
   Tag = 'Tag'
+}
+
+/**
+ * A single wasm instruction, as a wide tagged record shared by both the read
+ * (`WasmFunction::instructions`) and build (`WasmModule::buildFunction`)
+ * directions.
+ *
+ * `type` is the discriminant (the walrus variant name, e.g. `"Const"`,
+ * `"LocalGet"`, `"Block"`, `"Br"`); every other field is optional and only the
+ * ones relevant to that `type` are set. Control-flow bodies nest as
+ * `Array<InstrDesc>` (`seq` for `block`/`loop`, `consequent`/`alternative` for
+ * `if`/`else`), making the interface self-referential.
+ *
+ * This is the C1a subset: leaf ops (`Unreachable`/`Return`/`Drop`), `Const`,
+ * local/global get/set/tee, `Call`, `Select`, the control constructs
+ * (`Block`/`Loop`/`IfElse`), and the branches (`Br`/`BrIf`/`BrTable`). Any
+ * other instruction is rejected catchably by both directions (later tasks add
+ * numeric ops, memory, tables, refs, atomics, SIMD, GC, and EH).
+ */
+export interface InstrDesc {
+  /** The instruction discriminant — the walrus variant name. */
+  type: string
+  /** `Const`: the constant value. */
+  value?: ConstValue
+  /** `LocalGet`/`LocalSet`/`LocalTee`: the referenced local's stable index. */
+  local?: number
+  /** `GlobalGet`/`GlobalSet`: the referenced global's stable index. */
+  global?: number
+  /** `Call`: the callee function's stable index. */
+  func?: number
+  /**
+   * `Select`: the optional result type of a typed `select` (absent => a plain,
+   * untyped `select`).
+   */
+  selectType?: ValType
+  /** `Block`/`Loop`/`IfElse`: the block's type signature. */
+  blockType?: BlockType
+  /** `Block`/`Loop`: the body instructions. */
+  seq?: Array<InstrDesc>
+  /** `IfElse`: the `then`-arm instructions. */
+  consequent?: Array<InstrDesc>
+  /** `IfElse`: the `else`-arm instructions. */
+  alternative?: Array<InstrDesc>
+  /**
+   * `Br`/`BrIf`: the relative label depth of the branch target
+   * (`0` = the innermost enclosing block/loop/if).
+   */
+  label?: number
+  /** `BrTable`: the relative label depths of the table's targets, in order. */
+  labels?: Array<number>
+  /** `BrTable`: the relative label depth of the default (fallthrough) target. */
+  defaultLabel?: number
 }
 
 /**

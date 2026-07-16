@@ -1,9 +1,10 @@
 use napi::bindgen_prelude::{Reference, Result};
-use napi::Env;
+use napi::{Env, Error};
 use napi_derive::napi;
 use walrus::FunctionId;
 
 use crate::imports::WasmImport;
+use crate::ir::{read_instr_seq, InstrDesc};
 use crate::types::WasmType;
 use crate::WasmModule;
 
@@ -234,6 +235,37 @@ impl WasmFunction {
       id,
       module: self.module.clone(env)?,
     })
+  }
+
+  #[napi]
+  /// This function's instruction body, as an array of [`InstrDesc`] descriptors.
+  ///
+  /// Only a LOCAL function has a body: this throws a catchable error for an
+  /// imported function (whose body lives in the host) or an uninitialized
+  /// placeholder. The descriptors are the exact inverse of
+  /// [`crate::WasmModule::build_function`] — reading a body and building it back
+  /// round-trips.
+  ///
+  /// Branch targets are read back as RELATIVE label depths (`0` = the innermost
+  /// enclosing `block`/`loop`/`if`), matching wasm and `buildFunction`; walrus'
+  /// absolute sequence ids are inverted via a label stack.
+  ///
+  /// This is the C1a subset (leaf ops, `Const`, local/global get/set/tee,
+  /// `Call`, `Select`, `Block`/`Loop`/`IfElse`, `Br`/`BrIf`/`BrTable`). An
+  /// instruction outside that subset throws a catchable error naming it, rather
+  /// than aborting the process (later tasks add the remaining families).
+  pub fn instructions(&self) -> Result<Vec<InstrDesc>> {
+    self.ensure_exists()?;
+    let lf = match &self.module.inner.funcs.get(self.id).kind {
+      walrus::FunctionKind::Local(lf) => lf,
+      _ => {
+        return Err(Error::from_reason(
+          "cannot read instructions of a non-local function (it is imported or uninitialized)",
+        ))
+      }
+    };
+    let mut label_stack = Vec::new();
+    read_instr_seq(lf, lf.entry_block(), &mut label_stack)
   }
 
   #[napi]

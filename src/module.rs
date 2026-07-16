@@ -1,8 +1,11 @@
 use napi::bindgen_prelude::{Reference, Result, Uint8Array};
 use napi::{Env, Error};
 use napi_derive::napi;
-use walrus::{Module, RawCustomSection};
+use walrus::{FunctionBuilder, Module, RawCustomSection};
 
+use crate::convert::val_type_to_walrus_in;
+use crate::ir::{emit_desc, local_id_at, InstrDesc};
+use crate::valtype::ValType;
 use crate::{
   ModuleConfig, WasmCustomSections, WasmDataSegments, WasmElements, WasmExports, WasmFunction,
   WasmFunctions, WasmGlobals, WasmImports, WasmLocals, WasmMemories, WasmMemory, WasmProducers,
@@ -77,6 +80,65 @@ impl WasmModule {
   /// etc.).
   pub fn gc(&mut self) {
     walrus::passes::gc::run(&mut self.inner);
+  }
+
+  #[napi]
+  /// Build a new locally-defined function from an instruction-descriptor array
+  /// and append it to the module, returning its stable index.
+  ///
+  /// `params`/`results` are the function signature; `argLocalIndices` are the
+  /// stable indices of the locals (pre-created via `module.locals.add`) bound
+  /// to the parameters, in order; `body` is the instruction body (see
+  /// [`InstrDesc`]). The body is the inverse of
+  /// [`crate::WasmFunction::instructions`]: the two round-trip.
+  ///
+  /// Branch targets in `body` are RELATIVE label depths (`0` = the innermost
+  /// enclosing `block`/`loop`/`if`), matching wasm; they are resolved to
+  /// walrus' absolute sequence ids internally via a label stack.
+  ///
+  /// MIRROR-WALRUS: only process-aborting hazards are guarded (an out-of-range
+  /// local/global/func index, an out-of-range branch label, or a bad
+  /// multi-value block-type index are rejected catchably BEFORE a panicking
+  /// walrus lookup). The body is NOT validated for wasm well-formedness — an
+  /// ill-typed body is built and emitted as-is, and `WebAssembly.validate` (or
+  /// a re-parse) is the place to catch it.
+  ///
+  /// Self-reference limitation: a walrus `FunctionId` is only minted when the
+  /// builder finishes, so a body cannot `Call` the function it is defining (the
+  /// index names no live function yet, and that errs).
+  pub fn build_function(
+    &mut self,
+    params: Vec<ValType>,
+    results: Vec<ValType>,
+    arg_local_indices: Vec<u32>,
+    body: Vec<InstrDesc>,
+  ) -> Result<u32> {
+    // Convert the signature and resolve the argument locals BEFORE creating the
+    // builder, so a failed conversion/lookup never leaves a half-built function
+    // behind. `val_type_to_walrus_in` resolves concrete refs and rejects
+    // unsupported/entry-type indices catchably.
+    let params_w = params
+      .into_iter()
+      .map(|v| val_type_to_walrus_in(&self.inner, v))
+      .collect::<Result<Vec<_>>>()?;
+    let results_w = results
+      .into_iter()
+      .map(|v| val_type_to_walrus_in(&self.inner, v))
+      .collect::<Result<Vec<_>>>()?;
+    let arg_ids = arg_local_indices
+      .into_iter()
+      .map(|i| local_id_at(&self.inner, i))
+      .collect::<Result<Vec<_>>>()?;
+
+    // `FunctionBuilder::new` borrows `&mut types` only for this call (it returns
+    // an owned builder holding no borrow of the module), so `emit_desc` may then
+    // borrow `&self.inner` to resolve ids/types while pushing into the builder.
+    let mut fb = FunctionBuilder::new(&mut self.inner.types, &params_w, &results_w);
+    let entry = fb.func_body_id();
+    let mut label_stack = Vec::new();
+    emit_desc(&mut fb, &self.inner, entry, body, &mut label_stack)?;
+    let id = fb.finish(arg_ids, &mut self.inner.funcs);
+    Ok(id.index() as u32)
   }
 
   #[napi(getter)]
