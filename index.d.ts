@@ -270,6 +270,110 @@ export declare class WasmDataSegments {
 }
 
 /**
+ * A single element segment in a module, as a live handle: it holds the
+ * segment's id plus a strong reference to the owning [`WasmModule`], and every
+ * accessor reads or writes through to that module.
+ *
+ * READ + delete only — building a new element segment (`add`) needs
+ * function-list / expression-list id validation and is a deliberate later task.
+ */
+export declare class WasmElement {
+  /**
+   * This segment's stable index — its identity for numeric lookup. Readable
+   * even after the segment is deleted (it never touches the arena).
+   */
+  get index(): number
+  /** This segment's name from the wasm "name" custom section, if any. */
+  get name(): string | null
+  /** Set this segment's name, stored in the wasm "name" custom section. */
+  set name(name: string | undefined | null)
+  /** Whether this segment is passive, declared, or active (read only). */
+  get kind(): ElementKindTag
+  /**
+   * The table this active segment initializes, or `null` if it is passive or
+   * declared.
+   *
+   * A method (not a getter) because it materializes a fresh [`WasmTable`]
+   * wrapper on each call.
+   */
+  table(): WasmTable | null
+  /**
+   * This active segment's initialization offset as a [`ConstExpr`], or `null`
+   * if it is passive or declared.
+   *
+   * A method (not a getter) because it materializes a fresh `ConstExpr` wrapper
+   * on each call.
+   */
+  offset(): ConstExpr | null
+  /**
+   * Whether this segment's items are function references (`Functions`) or
+   * constant expressions (`Expressions`) (read only).
+   */
+  get itemsKind(): ElementItemsTag
+  /**
+   * The functions this segment references, as live [`WasmFunction`] handles, or
+   * `null` if this segment's items are constant expressions (`Expressions`).
+   *
+   * A method (not a getter) because it materializes fresh `WasmFunction`
+   * wrappers on each call. The order matches the segment's item order.
+   */
+  functionItems(): Array<WasmFunction> | null
+  /**
+   * The element type of this segment's expression items as a [`ValType`] (the
+   * `Ref` variant), or `null` if this segment's items are function references
+   * (`Functions`).
+   *
+   * Fallible: the ref's heap type may embed a `#[non_exhaustive]` walrus heap
+   * variant a later 0.26.x adds; that surfaces as a catchable JS error, never a
+   * process-aborting panic.
+   */
+  expressionElementType(): ValType | null
+  /**
+   * This segment's constant-expression items as [`ConstExpr`] wrappers, or
+   * `null` if this segment's items are function references (`Functions`).
+   *
+   * A method (not a getter) because it materializes fresh `ConstExpr` wrappers
+   * on each call. Read only: the items are cloned out, so no id validation is
+   * needed (that would only be required when building a new segment).
+   */
+  expressionItems(): Array<ConstExpr> | null
+}
+
+/**
+ * The element segments of a module. Each accessor materializes a fresh
+ * [`WasmElement`] handle that reads and writes straight through to the owning
+ * [`WasmModule`]; the collection itself caches nothing.
+ */
+export declare class WasmElements {
+  /** The number of element segments in the module. */
+  get length(): number
+  /** Every element segment in the module, as live item handles. */
+  items(): Array<WasmElement>
+  /**
+   * The element segment whose stable `.index` equals `index`, or `null` if none
+   * exists.
+   */
+  getByIndex(index: number): WasmElement | null
+  /**
+   * Delete an element segment from the module. Takes the handle itself: a JS
+   * number can never be turned back into a walrus id, so the wrapper is the
+   * only way to name an item for removal.
+   *
+   * It is the caller's responsibility to ensure nothing still references the
+   * deleted segment (walrus does not check; a dangling `table.init` /
+   * `elem.drop` would abort emit).
+   *
+   * Same no-panic invariant as the item accessors: walrus'
+   * `ModuleElements::delete` asserts the id is live, and a panic across FFI
+   * aborts the process. Id equality includes the arena_id, so this liveness
+   * scan rejects BOTH already-deleted ids (`iter()` skips tombstoned entries)
+   * AND handles that belong to a different module (arena_id mismatch),
+   * surfacing a catchable JS error instead of aborting.
+   */
+  delete(element: WasmElement): void
+}
+
+/**
  * A single function in a module, as a live handle: it holds the function's id
  * plus a strong reference to the owning [`WasmModule`], and every accessor
  * reads or writes through to that module.
@@ -645,6 +749,11 @@ export declare class WasmModule {
    * returned object reads and writes back to this module.
    */
   get data(): WasmDataSegments
+  /**
+   * The element segments of this module. Each handle materialized through the
+   * returned object reads and writes back to this module.
+   */
+  get elements(): WasmElements
 }
 
 /**
@@ -940,6 +1049,50 @@ export declare const enum DataKindTag {
   Active = 'Active',
   /** A passive data segment (copied on demand via `memory.init`). */
   Passive = 'Passive'
+}
+
+/**
+ * Whether an element segment's items are a list of function references or a
+ * list of constant expressions.
+ *
+ * Mirrors the discriminant of `walrus::ElementItems`
+ * (`Functions(Vec<FunctionId>)` / `Expressions(RefType, Vec<ConstExpr>)`). The
+ * two variants are read through the accessor methods
+ * [`WasmElement::function_items`] (populated for `Functions`) and
+ * [`WasmElement::expression_element_type`] / [`WasmElement::expression_items`]
+ * (populated for `Expressions`), each of which returns `null` for the
+ * non-matching variant. They are separate methods rather than one structured
+ * object because the payloads are `#[napi]` class handles (`WasmFunction` /
+ * `ConstExpr`), which napi cannot nest inside a `#[napi(object)]`.
+ */
+export declare const enum ElementItemsTag {
+  /** The segment's items are function references (`Functions`). */
+  Functions = 'Functions',
+  /** The segment's items are constant expressions (`Expressions`). */
+  Expressions = 'Expressions'
+}
+
+/**
+ * Whether an element segment is passive, declared, or active.
+ *
+ * Mirrors the discriminant of `walrus::ElementKind` (`Passive` / `Declared` /
+ * `Active { table, offset }`). The active variant's table and offset are read
+ * through the [`WasmElement::table`] / [`WasmElement::offset`] accessors, which
+ * return `null` for a passive or declared segment.
+ */
+export declare const enum ElementKindTag {
+  /** A passive element segment (copied on demand via `table.init`). */
+  Passive = 'Passive',
+  /**
+   * A declared element segment (referenced only by `ref.func`; not usable to
+   * initialize a table).
+   */
+  Declared = 'Declared',
+  /**
+   * An active element segment (copied into a table at a fixed offset at
+   * instantiation).
+   */
+  Active = 'Active'
 }
 
 /**
