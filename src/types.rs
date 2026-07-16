@@ -6,7 +6,7 @@ use napi_derive::napi;
 use walrus::ir::InstrSeqType;
 use walrus::TypeId;
 
-use crate::valtype::{FieldType, ValType};
+use crate::valtype::{CompositeType, FieldType, ValType};
 use crate::WasmModule;
 
 /// Ids of internal function-entry types (one per local function). walrus keeps
@@ -271,6 +271,71 @@ impl WasmTypes {
       module: self.module.clone(env)?,
     })
   }
+
+  #[napi]
+  /// Add a composite type — a `Struct`, `Array`, or `Function` — with explicit
+  /// subtyping controls, returning a live handle. This generalizes
+  /// [`WasmTypes::add_struct`] / [`WasmTypes::add_array`] (which hardcode
+  /// `is_final = true` and no supertype).
+  ///
+  /// `is_final` marks the type as final (not further subtypable). `supertype`,
+  /// if given, is an EXISTING type in this module that the new type extends;
+  /// walrus records the subtype relationship verbatim (mirror-walrus: it is NOT
+  /// checked for subtyping legality — a semantically invalid relationship is the
+  /// caller's responsibility, catchable via `WebAssembly.validate` / re-parse).
+  ///
+  /// Each field / param / result is converted through the module-aware path, so
+  /// it may reference another type via a concrete ref
+  /// (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+  /// names no live type in this module is rejected with a catchable error BEFORE
+  /// any arena mutation (a bogus index would otherwise abort at emit). Refs may
+  /// name only EXISTING types — a set of mutually-recursive types that
+  /// forward-reference each other needs an explicit rec group (a later task).
+  ///
+  /// **supertype liveness guard:** a `supertype` handle must be live in THIS
+  /// module. walrus stores the raw supertype `TypeId` and resolves it to an
+  /// index at emit via a panicking `get_type_index`; a foreign-module or
+  /// already-deleted handle would abort the whole Node process there. It is
+  /// rejected with a catchable error before any arena mutation.
+  ///
+  /// walrus deduplicates structurally: adding a composite identical to an
+  /// existing type (same shape, `is_final`, and supertype) returns a handle to
+  /// that existing type (the arena does not grow). This mirrors walrus and is
+  /// intended behavior.
+  ///
+  /// The returned handle holds its own strong reference to the module, so it
+  /// stays valid as long as it is held.
+  pub fn add_composite(
+    &mut self,
+    env: Env,
+    composite: CompositeType,
+    is_final: bool,
+    supertype: Option<&WasmType>,
+  ) -> Result<WasmType> {
+    // supertype liveness guard: reject a foreign/deleted supertype id BEFORE
+    // touching the arena, so a failed add never mutates the module and no
+    // unresolvable id can reach the panicking emit-time `get_type_index`.
+    if let Some(s) = supertype {
+      if !self.module.inner.types.iter().any(|t| t.id() == s.id) {
+        return Err(Error::from_reason(
+          "supertype is not in this module (or was deleted)",
+        ));
+      }
+    }
+    // Build the walrus value (resolving concrete refs, rejecting a bad index)
+    // BEFORE mutating the arena.
+    let comp = crate::convert::composite_type_to_walrus_in(&self.module.inner, composite)?;
+    let super_id = supertype.map(|s| s.id);
+    let id = self
+      .module
+      .inner
+      .types
+      .add_composite(comp, is_final, super_id);
+    Ok(WasmType {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
 }
 
 /// A single type in a module, as a live handle: it holds the type's id plus a
@@ -433,5 +498,50 @@ impl WasmType {
   pub fn is_final(&self) -> Result<bool> {
     self.ensure_exists()?;
     Ok(self.module.inner.types.get(self.id).is_final)
+  }
+
+  #[napi]
+  /// The sibling type handles in this type's recursion group, INCLUDING this
+  /// type itself (walrus stores every type in a rec group — a singleton
+  /// implicit group for a non-recursive type).
+  ///
+  /// A pure id-wrap of `walrus::ModuleTypes::rec_group_for_type` — no extra
+  /// validation. Each returned handle holds its own strong reference to the
+  /// module. If walrus reports no group for this id (should not happen for a
+  /// live type), this falls back to a single-element vec of self.
+  pub fn rec_group_members(&self, env: Env) -> Result<Vec<WasmType>> {
+    self.ensure_exists()?;
+    let ids: Vec<TypeId> = match self.module.inner.types.rec_group_for_type(self.id) {
+      Some(rg) => rg.types.clone(),
+      None => vec![self.id],
+    };
+    ids
+      .into_iter()
+      .map(|id| {
+        Ok(WasmType {
+          id,
+          module: self.module.clone(env)?,
+        })
+      })
+      .collect()
+  }
+
+  #[napi(getter)]
+  /// Whether this type's recursion group was written as an explicit `(rec ...)`
+  /// wrapper (as opposed to an implicit singleton group). Explicit singleton
+  /// groups are semantically distinct in the GC spec, so walrus preserves the
+  /// flag. Types created via `addStruct` / `addArray` / `addComposite` land in
+  /// implicit singleton groups (`false`).
+  pub fn is_explicit_rec_group(&self) -> Result<bool> {
+    self.ensure_exists()?;
+    Ok(
+      self
+        .module
+        .inner
+        .types
+        .rec_group_for_type(self.id)
+        .map(|rg| rg.is_explicit)
+        .unwrap_or(false),
+    )
   }
 }

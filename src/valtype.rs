@@ -112,3 +112,37 @@ pub struct FieldType {
   /// Whether this field is mutable.
   pub mutable: bool,
 }
+
+/// A composite type to create via [`crate::types::WasmTypes::add_composite`],
+/// mirroring the shape of `walrus::CompositeType` (`Function | Struct | Array`).
+///
+/// Generated as a TypeScript discriminated union keyed on `type`:
+/// `{ type: 'Struct'; fields: FieldType[] }`
+/// `| { type: 'Array'; element: FieldType }`
+/// `| { type: 'Function'; params: ValType[]; results: ValType[] }`.
+///
+/// This is the *creation* input for a composite type; the created type's shape
+/// is read back through the individual `structFields()` / `arrayElement()` /
+/// `params()` / `results()` accessors. Fields/params/results are converted via
+/// the module-aware write path, so a `Concrete`/`Exact` ref to an EXISTING type
+/// in the module resolves (a bad/entry-type index is rejected catchably).
+#[napi]
+pub enum CompositeType {
+  /// A GC struct type: a sequence of field types.
+  Struct {
+    /// The struct's fields, in order.
+    fields: Vec<FieldType>,
+  },
+  /// A GC array type: a single element field type shared by all elements.
+  Array {
+    /// The element field type.
+    element: FieldType,
+  },
+  /// A function type: parameter and result value types.
+  Function {
+    /// The parameter value types.
+    params: Vec<ValType>,
+    /// The result value types.
+    results: Vec<ValType>,
+  },
+}

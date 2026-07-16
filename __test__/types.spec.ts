@@ -14,8 +14,13 @@ const __dirname = join(fileURLToPath(import.meta.url), '..')
 //   types-struct.wasm: type 0 = (struct (field i32)) — a GC composite (non-function) type
 const FUNC_FIXTURE = join(__dirname, 'fixtures', 'types.wasm')
 const STRUCT_FIXTURE = join(__dirname, 'fixtures', 'types-struct.wasm')
+// types-rec.wasm: an EXPLICIT `(rec ...)` group of two mutually-referencing
+// GC structs (type 0 = (struct (field (ref null $b))), type 1 = mirror). Used
+// for the rec-group readers.
+const REC_FIXTURE = join(__dirname, 'fixtures', 'types-rec.wasm')
 const funcBytes = readFileSync(FUNC_FIXTURE)
 const structBytes = readFileSync(STRUCT_FIXTURE)
+const recBytes = readFileSync(REC_FIXTURE)
 
 // A module with one LOCAL function (see fixtures/functions.wat): func $imp is
 // imported (type (param i32)), func $loc is local (type (param i32)(result i32)).
@@ -27,6 +32,7 @@ const functionsBytes = readFileSync(FUNCTIONS_FIXTURE)
 
 const load = () => WasmModule.fromBuffer(funcBytes)
 const loadStruct = () => new ModuleConfig().onlyStableFeatures(false).parse(structBytes)
+const loadRec = () => new ModuleConfig().onlyStableFeatures(false).parse(recBytes)
 
 // An empty (8-byte) module we can build GC types into from scratch, hermetically.
 const EMPTY_MODULE = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
@@ -448,4 +454,266 @@ test('delete-guard: a deleted struct handle throws on structFields/isFinal/super
   t.regex(t.throws(() => s.structFields())!.message, /deleted/)
   t.regex(t.throws(() => s.isFinal)!.message, /deleted/)
   t.regex(t.throws(() => s.supertype)!.message, /deleted/)
+})
+
+// ---------------------------------------------------------------------------
+// Composite subtyping (addComposite) + rec-group readers (B5b)
+// ---------------------------------------------------------------------------
+
+test('addComposite creates a Struct whose fields round-trip', (t) => {
+  const m = emptyModule()
+  const s = m.types.addComposite(
+    {
+      type: 'Struct',
+      fields: [
+        { storage: { type: 'Val', value: { type: 'I32' } }, mutable: true },
+        { storage: { type: 'I8' }, mutable: false },
+      ],
+    },
+    true,
+  )
+
+  t.is(s.kind, 'Struct')
+  t.is(s.isFinal, true)
+  t.is(s.supertype, null)
+  t.deepEqual(s.structFields(), [
+    { storage: { type: 'Val', value: { type: 'I32' } }, mutable: true },
+    { storage: { type: 'I8' }, mutable: false },
+  ])
+
+  const reparsed = reparseGc(m.emitWasm(false))
+  const rs = reparsed.types.items().find((x) => x.kind === 'Struct')
+  t.truthy(rs)
+  t.deepEqual(rs!.structFields(), [
+    { storage: { type: 'Val', value: { type: 'I32' } }, mutable: true },
+    { storage: { type: 'I8' }, mutable: false },
+  ])
+})
+
+test('addComposite creates an Array whose element round-trips', (t) => {
+  const m = emptyModule()
+  const a = m.types.addComposite(
+    { type: 'Array', element: { storage: { type: 'Val', value: { type: 'F64' } }, mutable: true } },
+    true,
+  )
+
+  t.is(a.kind, 'Array')
+  t.is(a.isFinal, true)
+  t.is(a.supertype, null)
+  t.deepEqual(a.arrayElement(), { storage: { type: 'Val', value: { type: 'F64' } }, mutable: true })
+
+  const reparsed = reparseGc(m.emitWasm(false))
+  const ra = reparsed.types.items().find((x) => x.kind === 'Array')
+  t.truthy(ra)
+  t.deepEqual(ra!.arrayElement(), { storage: { type: 'Val', value: { type: 'F64' } }, mutable: true })
+})
+
+test('addComposite creates a Function readable via params()/results() and round-trips', (t) => {
+  const m = emptyModule()
+  const fn = m.types.addComposite(
+    { type: 'Function', params: [{ type: 'I32' }, { type: 'F32' }], results: [{ type: 'I64' }] },
+    true,
+  )
+
+  t.is(fn.kind, 'Function')
+  t.deepEqual(fn.params(), [{ type: 'I32' }, { type: 'F32' }])
+  t.deepEqual(fn.results(), [{ type: 'I64' }])
+
+  // A bare function type is core wasm (stable), so a plain re-parse suffices.
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const found = reparsed.types.find([{ type: 'I32' }, { type: 'F32' }], [{ type: 'I64' }])
+  t.truthy(found)
+  t.deepEqual(found!.params(), [{ type: 'I32' }, { type: 'F32' }])
+  t.deepEqual(found!.results(), [{ type: 'I64' }])
+})
+
+test('addComposite subtyping: a derived struct records its supertype and round-trips', (t) => {
+  const m = emptyModule()
+  // Base: non-final so it can be subtyped; a single immutable i32 field.
+  const base = m.types.addComposite(
+    { type: 'Struct', fields: [{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: false }] },
+    false,
+  )
+  t.is(base.isFinal, false)
+  t.is(base.supertype, null)
+
+  // Derived: final, extends base with an extra immutable f64 field (valid GC
+  // width subtyping — the shared prefix field is identical).
+  const derived = m.types.addComposite(
+    {
+      type: 'Struct',
+      fields: [
+        { storage: { type: 'Val', value: { type: 'I32' } }, mutable: false },
+        { storage: { type: 'Val', value: { type: 'F64' } }, mutable: false },
+      ],
+    },
+    true,
+    base,
+  )
+
+  t.is(derived.isFinal, true)
+  t.truthy(derived.supertype)
+  t.is(derived.supertype!.index, base.index)
+
+  // Round-trip: walrus strict-validates the subtype relationship on re-parse,
+  // so a preserved supertype link proves it emitted a valid `(sub ...)`.
+  const reparsed = reparseGc(m.emitWasm(false))
+  const structs = reparsed.types.items().filter((x) => x.kind === 'Struct')
+  const rBase = structs.find((x) => x.structFields().length === 1)
+  const rDerived = structs.find((x) => x.structFields().length === 2)
+  t.truthy(rBase)
+  t.truthy(rDerived)
+  t.is(rBase!.isFinal, false)
+  t.is(rDerived!.isFinal, true)
+  t.truthy(rDerived!.supertype)
+  t.is(rDerived!.supertype!.index, rBase!.index)
+})
+
+test('addComposite supertype guard: a foreign-module supertype throws (process stays alive)', (t) => {
+  const a = emptyModule()
+  const b = emptyModule()
+  // A supertype handle that belongs to a DIFFERENT module.
+  const foreignBase = b.types.addComposite(
+    { type: 'Struct', fields: [{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: false }] },
+    false,
+  )
+
+  const err = t.throws(() =>
+    a.types.addComposite(
+      { type: 'Struct', fields: [{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: false }] },
+      true,
+      foreignBase,
+    ),
+  )
+  t.regex(err!.message, /not in this module|deleted/)
+
+  // Rejected BEFORE any arena mutation; both modules are alive and usable.
+  t.is(a.types.length, 0)
+  t.notThrows(() => a.types.addComposite({ type: 'Array', element: { storage: { type: 'I16' }, mutable: true } }, true))
+  t.is(a.types.length, 1)
+})
+
+test('addComposite: a struct field that is a concrete ref to an existing type round-trips', (t) => {
+  const m = emptyModule()
+  const a = m.types.addComposite(
+    { type: 'Struct', fields: [{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: true }] },
+    true,
+  )
+  const b = m.types.addComposite(
+    {
+      type: 'Struct',
+      fields: [
+        {
+          storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: a.index } } },
+          mutable: false,
+        },
+      ],
+    },
+    true,
+  )
+
+  t.deepEqual(b.structFields(), [
+    {
+      storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: a.index } } },
+      mutable: false,
+    },
+  ])
+
+  // Emit resolves the concrete ref through get_type_index (the abort we guard);
+  // re-parse then confirms the ref survives (emit may reorder, so match by shape).
+  const reparsed = reparseGc(m.emitWasm(false))
+  const structs = reparsed.types.items().filter((x) => x.kind === 'Struct')
+  const rb = structs.find((x) => {
+    const f = x.structFields()[0]
+    return f?.storage.type === 'Val' && f.storage.value.type === 'Ref' && f.storage.value.heap.type === 'Concrete'
+  })
+  t.truthy(rb)
+  const field = rb!.structFields()[0]
+  if (field.storage.type !== 'Val' || field.storage.value.type !== 'Ref' || field.storage.value.heap.type !== 'Concrete') {
+    return t.fail('expected a concrete ref field')
+  }
+  const target = reparsed.types.getByIndex(field.storage.value.heap.typeIndex)
+  t.truthy(target)
+  t.is(target!.kind, 'Struct')
+  t.deepEqual(target!.structFields(), [{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: true }])
+})
+
+test('addComposite: a field referencing a nonexistent type index throws (no abort)', (t) => {
+  const m = emptyModule()
+  const err = t.throws(() =>
+    m.types.addComposite(
+      {
+        type: 'Struct',
+        fields: [
+          {
+            storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: 9999 } } },
+            mutable: false,
+          },
+        ],
+      },
+      true,
+    ),
+  )
+  t.regex(err!.message, /no type at index 9999/)
+  // Rejected before any arena mutation; the module is still usable.
+  t.is(m.types.length, 0)
+})
+
+test('addComposite structurally dedups (mirror walrus): an identical final type returns the same index', (t) => {
+  const m = emptyModule()
+  const first = m.types.addComposite(
+    { type: 'Array', element: { storage: { type: 'Val', value: { type: 'F32' } }, mutable: false } },
+    true,
+  )
+  const lenAfterFirst = m.types.length
+
+  const second = m.types.addComposite(
+    { type: 'Array', element: { storage: { type: 'Val', value: { type: 'F32' } }, mutable: false } },
+    true,
+  )
+  // walrus' ArenaSet dedups structurally identical composite types (same shape,
+  // is_final, and supertype) — the arena does not grow and the same id comes
+  // back. This mirrors walrus and is intended behavior.
+  t.is(m.types.length, lenAfterFirst)
+  t.is(second.index, first.index)
+})
+
+test('recGroupMembers: a freshly parsed plain type is its own singleton, not explicit', (t) => {
+  const m = loadStruct()
+  const s = m.types.items()[0]
+
+  const members = s.recGroupMembers()
+  t.is(members.length, 1)
+  t.is(members[0].index, s.index)
+  t.is(s.isExplicitRecGroup, false)
+})
+
+test('recGroupMembers: an explicit (rec ...) group lists all members and is explicit', (t) => {
+  const m = loadRec()
+  const structs = m.types.items().filter((x) => x.kind === 'Struct')
+  t.is(structs.length, 2)
+
+  const a = structs[0]
+  const members = a.recGroupMembers()
+  t.is(members.length, 2)
+  // Both siblings are present (including self), regardless of order.
+  t.deepEqual(
+    members.map((x) => x.index).sort((p, q) => p - q),
+    structs.map((x) => x.index).sort((p, q) => p - q),
+  )
+  t.is(a.isExplicitRecGroup, true)
+  // Every member reports the same explicit group.
+  for (const s of structs) {
+    t.is(s.isExplicitRecGroup, true)
+    t.is(s.recGroupMembers().length, 2)
+  }
+})
+
+test('recGroupMembers / isExplicitRecGroup delete-guard: a deleted handle throws', (t) => {
+  const m = emptyModule()
+  const s = m.types.addComposite({ type: 'Struct', fields: [{ storage: { type: 'I8' }, mutable: false }] }, true)
+  m.types.delete(s)
+
+  t.regex(t.throws(() => s.recGroupMembers())!.message, /deleted/)
+  t.regex(t.throws(() => s.isExplicitRecGroup)!.message, /deleted/)
 })

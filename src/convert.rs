@@ -22,7 +22,7 @@
 //! time). It is still fallible only because its `Ref` arm embeds a `HeapType`,
 //! whose conversion can fail.
 
-use crate::valtype::{AbstractHeapType, FieldType, HeapType, StorageType, ValType};
+use crate::valtype::{AbstractHeapType, CompositeType, FieldType, HeapType, StorageType, ValType};
 
 impl TryFrom<walrus::ValType> for ValType {
   type Error = napi::Error;
@@ -297,5 +297,49 @@ pub(crate) fn field_type_to_walrus_in(
   Ok(walrus::FieldType {
     element_type: storage_type_to_walrus_in(module, ft.storage)?,
     mutable: ft.mutable,
+  })
+}
+
+/// Module-aware `CompositeType` -> `walrus::CompositeType`, used by
+/// `WasmTypes::add_composite`.
+///
+/// Every field / param / result is converted through the module-aware `*_in`
+/// path (reusing [`field_type_to_walrus_in`] / [`val_type_to_walrus_in`]), so a
+/// `Concrete`/`Exact` ref to an EXISTING type resolves and a bad/entry-type
+/// index surfaces a catchable error. The caller builds this BEFORE mutating the
+/// arena, so a failed conversion never leaves a half-built type behind.
+pub(crate) fn composite_type_to_walrus_in(
+  module: &walrus::Module,
+  comp: CompositeType,
+) -> napi::Result<walrus::CompositeType> {
+  // `CompositeType` is our own (exhaustive) napi enum, so this match needs no
+  // `_` arm — a future variant would fail to compile here.
+  Ok(match comp {
+    CompositeType::Struct { fields } => {
+      let fields = fields
+        .into_iter()
+        .map(|f| field_type_to_walrus_in(module, f))
+        .collect::<napi::Result<Vec<_>>>()?;
+      walrus::CompositeType::Struct(walrus::StructType {
+        fields: fields.into_boxed_slice(),
+      })
+    }
+    CompositeType::Array { element } => walrus::CompositeType::Array(walrus::ArrayType {
+      field: field_type_to_walrus_in(module, element)?,
+    }),
+    CompositeType::Function { params, results } => {
+      let params = params
+        .into_iter()
+        .map(|v| val_type_to_walrus_in(module, v))
+        .collect::<napi::Result<Vec<_>>>()?;
+      let results = results
+        .into_iter()
+        .map(|v| val_type_to_walrus_in(module, v))
+        .collect::<napi::Result<Vec<_>>>()?;
+      walrus::CompositeType::Function(walrus::FunctionType::new(
+        params.into_boxed_slice(),
+        results.into_boxed_slice(),
+      ))
+    }
   })
 }

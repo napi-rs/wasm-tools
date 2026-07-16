@@ -1410,6 +1410,25 @@ export declare class WasmType {
    * types without an explicit subtype declaration to final.
    */
   get isFinal(): boolean
+  /**
+   * The sibling type handles in this type's recursion group, INCLUDING this
+   * type itself (walrus stores every type in a rec group — a singleton
+   * implicit group for a non-recursive type).
+   *
+   * A pure id-wrap of `walrus::ModuleTypes::rec_group_for_type` — no extra
+   * validation. Each returned handle holds its own strong reference to the
+   * module. If walrus reports no group for this id (should not happen for a
+   * live type), this falls back to a single-element vec of self.
+   */
+  recGroupMembers(): Array<WasmType>
+  /**
+   * Whether this type's recursion group was written as an explicit `(rec ...)`
+   * wrapper (as opposed to an implicit singleton group). Explicit singleton
+   * groups are semantically distinct in the GC spec, so walrus preserves the
+   * flag. Types created via `addStruct` / `addArray` / `addComposite` land in
+   * implicit singleton groups (`false`).
+   */
+  get isExplicitRecGroup(): boolean
 }
 
 /**
@@ -1509,6 +1528,41 @@ export declare class WasmTypes {
    * deduplication as [`WasmTypes::add_struct`].
    */
   addArray(element: FieldType): WasmType
+  /**
+   * Add a composite type — a `Struct`, `Array`, or `Function` — with explicit
+   * subtyping controls, returning a live handle. This generalizes
+   * [`WasmTypes::add_struct`] / [`WasmTypes::add_array`] (which hardcode
+   * `is_final = true` and no supertype).
+   *
+   * `is_final` marks the type as final (not further subtypable). `supertype`,
+   * if given, is an EXISTING type in this module that the new type extends;
+   * walrus records the subtype relationship verbatim (mirror-walrus: it is NOT
+   * checked for subtyping legality — a semantically invalid relationship is the
+   * caller's responsibility, catchable via `WebAssembly.validate` / re-parse).
+   *
+   * Each field / param / result is converted through the module-aware path, so
+   * it may reference another type via a concrete ref
+   * (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+   * names no live type in this module is rejected with a catchable error BEFORE
+   * any arena mutation (a bogus index would otherwise abort at emit). Refs may
+   * name only EXISTING types — a set of mutually-recursive types that
+   * forward-reference each other needs an explicit rec group (a later task).
+   *
+   * **supertype liveness guard:** a `supertype` handle must be live in THIS
+   * module. walrus stores the raw supertype `TypeId` and resolves it to an
+   * index at emit via a panicking `get_type_index`; a foreign-module or
+   * already-deleted handle would abort the whole Node process there. It is
+   * rejected with a catchable error before any arena mutation.
+   *
+   * walrus deduplicates structurally: adding a composite identical to an
+   * existing type (same shape, `is_final`, and supertype) returns a handle to
+   * that existing type (the arena does not grow). This mirrors walrus and is
+   * intended behavior.
+   *
+   * The returned handle holds its own strong reference to the module, so it
+   * stays valid as long as it is held.
+   */
+  addComposite(composite: CompositeType, isFinal: boolean, supertype?: WasmType | undefined | null): WasmType
 }
 
 /** An abstract heap type, mirroring `walrus::AbstractHeapType` 1:1. */
@@ -1538,6 +1592,30 @@ export declare const enum AbstractHeapType {
   /** The abstract `noexn` heap type (bottom type for exception refs). */
   NoExn = 'NoExn'
 }
+
+/**
+ * A composite type to create via [`crate::types::WasmTypes::add_composite`],
+ * mirroring the shape of `walrus::CompositeType` (`Function | Struct | Array`).
+ *
+ * Generated as a TypeScript discriminated union keyed on `type`:
+ * `{ type: 'Struct'; fields: FieldType[] }`
+ * `| { type: 'Array'; element: FieldType }`
+ * `| { type: 'Function'; params: ValType[]; results: ValType[] }`.
+ *
+ * This is the *creation* input for a composite type; the created type's shape
+ * is read back through the individual `structFields()` / `arrayElement()` /
+ * `params()` / `results()` accessors. Fields/params/results are converted via
+ * the module-aware write path, so a `Concrete`/`Exact` ref to an EXISTING type
+ * in the module resolves (a bad/entry-type index is rejected catchably).
+ */
+export type CompositeType =
+  | { type: 'Struct', /** The struct's fields, in order. */
+fields: Array<FieldType> }
+| { type: 'Array', /** The element field type. */
+element: FieldType }
+| { type: 'Function', /** The parameter value types. */
+params: Array<ValType>, /** The result value types. */
+results: Array<ValType> }
 
 /**
  * The discriminant of a [`ConstExpr`], mirroring the five `walrus::ConstExpr`
