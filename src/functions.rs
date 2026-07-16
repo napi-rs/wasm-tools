@@ -3,6 +3,7 @@ use napi::Env;
 use napi_derive::napi;
 use walrus::FunctionId;
 
+use crate::imports::WasmImport;
 use crate::types::WasmType;
 use crate::WasmModule;
 
@@ -203,5 +204,25 @@ impl WasmFunction {
       id,
       module: self.module.clone(env)?,
     })
+  }
+
+  #[napi]
+  /// The import that brings this function into the module, as a live
+  /// [`WasmImport`] handle, or `null` if this function is locally defined (or an
+  /// uninitialized placeholder).
+  ///
+  /// A method (not a getter) because it materializes a fresh wrapper on each
+  /// call. Wrapping the id is a pure cross-link (the reverse of
+  /// `WasmImport.func()`); a later access on the returned handle self-guards
+  /// against the import having been deleted.
+  pub fn import(&self, env: Env) -> Result<Option<WasmImport>> {
+    self.ensure_exists()?;
+    match &self.module.inner.funcs.get(self.id).kind {
+      walrus::FunctionKind::Import(f) => Ok(Some(WasmImport {
+        id: f.import,
+        module: self.module.clone(env)?,
+      })),
+      _ => Ok(None),
+    }
   }
 }

@@ -4,9 +4,9 @@ use napi_derive::napi;
 use walrus::{Module, RawCustomSection};
 
 use crate::{
-  ModuleConfig, WasmCustomSections, WasmDataSegments, WasmElements, WasmExports, WasmFunctions,
-  WasmGlobals, WasmImports, WasmLocals, WasmMemories, WasmProducers, WasmTables, WasmTags,
-  WasmTypes,
+  ModuleConfig, WasmCustomSections, WasmDataSegments, WasmElements, WasmExports, WasmFunction,
+  WasmFunctions, WasmGlobals, WasmImports, WasmLocals, WasmMemories, WasmMemory, WasmProducers,
+  WasmTables, WasmTags, WasmTypes,
 };
 
 #[napi]
@@ -89,6 +89,68 @@ impl WasmModule {
   /// Set the name of this module, stored in the wasm "name" custom section.
   pub fn set_name(&mut self, name: Option<String>) {
     self.inner.name = name;
+  }
+
+  #[napi(getter)]
+  /// This module's start function — run automatically at instantiation — as a
+  /// live [`WasmFunction`] handle, or `null` if the module has none.
+  ///
+  /// A pure id-wrap: `null` is returned only when no start is set, never as a
+  /// liveness check. If the stored start function was later deleted the returned
+  /// handle self-guards on its own accessors (and the module would abort at emit
+  /// — see `set_start`).
+  pub fn start(&self, this: Reference<WasmModule>, env: Env) -> Result<Option<WasmFunction>> {
+    match self.inner.start {
+      Some(id) => Ok(Some(WasmFunction {
+        id,
+        module: this.clone(env)?,
+      })),
+      None => Ok(None),
+    }
+  }
+
+  #[napi(setter)]
+  /// Set (or clear, with `null`) this module's start function.
+  ///
+  /// Id-ref guarded: walrus stores the raw `FunctionId` and resolves it to an
+  /// index at emit via a panicking `get_function_index`, so a function handle
+  /// from a different module (or an already-deleted one) would abort the whole
+  /// Node process there. We reject such a handle with a catchable error BEFORE
+  /// storing it, leaving the current start unchanged. Passing `null` clears the
+  /// start unconditionally (always safe).
+  pub fn set_start(&mut self, start: Option<&WasmFunction>) -> Result<()> {
+    match start {
+      Some(f) => {
+        if !self.inner.funcs.iter().any(|x| x.id() == f.id) {
+          return Err(Error::from_reason(
+            "function is not in this module (or was deleted)",
+          ));
+        }
+        self.inner.start = Some(f.id);
+        Ok(())
+      }
+      None => {
+        self.inner.start = None;
+        Ok(())
+      }
+    }
+  }
+
+  #[napi(getter)]
+  /// This module's main memory — the first memory (wasm memory index 0) — as a
+  /// live [`WasmMemory`] handle, or `null` if the module has no memory.
+  ///
+  /// A documented convenience, NOT a walrus passthrough: walrus has no
+  /// `main_memory()` accessor, so "main memory" here means the conventional
+  /// first memory that single-memory modules use for all loads/stores.
+  pub fn main_memory(&self, this: Reference<WasmModule>, env: Env) -> Result<Option<WasmMemory>> {
+    match self.inner.memories.iter().next().map(|m| m.id()) {
+      Some(id) => Ok(Some(WasmMemory {
+        id,
+        module: this.clone(env)?,
+      })),
+      None => Ok(None),
+    }
   }
 
   #[napi(getter)]

@@ -3,6 +3,7 @@ use napi::Env;
 use napi_derive::napi;
 use walrus::MemoryId;
 
+use crate::imports::WasmImport;
 use crate::WasmModule;
 
 /// The memories of a module. Each accessor materializes a fresh [`WasmMemory`]
@@ -237,5 +238,24 @@ impl WasmMemory {
   pub fn is_imported(&self) -> Result<bool> {
     self.ensure_exists()?;
     Ok(self.module.inner.memories.get(self.id).import.is_some())
+  }
+
+  #[napi]
+  /// The import that brings this memory into the module, as a live
+  /// [`WasmImport`] handle, or `null` if this memory is locally defined.
+  ///
+  /// A method (not a getter) because it materializes a fresh wrapper on each
+  /// call. Wrapping the id is a pure cross-link (the reverse of
+  /// `WasmImport.memory()`); a later access on the returned handle self-guards
+  /// against the import having been deleted.
+  pub fn import(&self, env: Env) -> Result<Option<WasmImport>> {
+    self.ensure_exists()?;
+    match self.module.inner.memories.get(self.id).import {
+      Some(id) => Ok(Some(WasmImport {
+        id,
+        module: self.module.clone(env)?,
+      })),
+      None => Ok(None),
+    }
   }
 }

@@ -4,6 +4,7 @@ use napi_derive::napi;
 use walrus::GlobalId;
 
 use crate::constexpr::ConstExpr;
+use crate::imports::WasmImport;
 use crate::valtype::ValType;
 use crate::WasmModule;
 
@@ -263,5 +264,24 @@ impl WasmGlobal {
       }),
       walrus::GlobalKind::Import(_) => None,
     })
+  }
+
+  #[napi]
+  /// The import that brings this global into the module, as a live
+  /// [`WasmImport`] handle, or `null` if this global is locally defined.
+  ///
+  /// A method (not a getter) because it materializes a fresh wrapper on each
+  /// call. Wrapping the id is a pure cross-link (the reverse of
+  /// `WasmImport.global()`); a later access on the returned handle self-guards
+  /// against the import having been deleted.
+  pub fn import(&self, env: Env) -> Result<Option<WasmImport>> {
+    self.ensure_exists()?;
+    match &self.module.inner.globals.get(self.id).kind {
+      walrus::GlobalKind::Import(id) => Ok(Some(WasmImport {
+        id: *id,
+        module: self.module.clone(env)?,
+      })),
+      walrus::GlobalKind::Local(_) => Ok(None),
+    }
   }
 }

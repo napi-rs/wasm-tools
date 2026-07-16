@@ -20,6 +20,17 @@ const fixtureBytes = readFileSync(FIXTURE)
 
 const load = () => WasmModule.fromBuffer(fixtureBytes)
 
+// A second committed fixture (see fixtures/import-links.wat, built with
+// `wat2wasm --enable-exceptions`) that additionally carries an IMPORTED memory,
+// table, and tag (plus local variants), so the reverse item->import cross-link
+// can be exercised for every item kind. Hermetic — the bytes are read, not
+// compiled.
+//   imported: memory 0, table 0, tag 0, func 0, global 0
+//   local:    table 1, tag 1, func 1 ($start), global 1
+const LINKS_FIXTURE = join(__dirname, 'fixtures', 'import-links.wasm')
+const linksBytes = readFileSync(LINKS_FIXTURE)
+const loadLinks = () => WasmModule.fromBuffer(linksBytes)
+
 test('imports collection reports length and materializes item handles', (t) => {
   const m = load()
   t.is(m.imports.length, 2)
@@ -139,4 +150,79 @@ test('delete-guard: using a handle after delete throws on kind/module/name inste
 
   // The identity accessor stays usable — it never touches the arena.
   t.is(handle.index, 0)
+})
+
+test('reverse cross-link: an imported function resolves to its import; a local one is null', (t) => {
+  const m = load()
+
+  const importedFn = m.functions.getByIndex(0)!
+  const imp = importedFn.import()
+  t.truthy(imp)
+  t.is(imp!.module, 'e')
+  t.is(imp!.name, 'f')
+  t.is(imp!.kind, 'Function')
+  // The forward cross-link round-trips back to the same function.
+  t.is(imp!.func()!.index, 0)
+
+  const localFn = m.functions.getByIndex(1)!
+  t.is(localFn.import(), null)
+})
+
+test('reverse cross-link: an imported global resolves to its import; a local one is null', (t) => {
+  const m = load()
+
+  const importedG = m.globals.getByIndex(0)!
+  const imp = importedG.import()
+  t.truthy(imp)
+  t.is(imp!.kind, 'Global')
+  t.is(imp!.global()!.index, 0)
+
+  const localG = m.globals.getByIndex(1)!
+  t.is(localG.import(), null)
+})
+
+test('reverse cross-link: a locally defined memory has no import', (t) => {
+  const m = load()
+  // In imports-exports the memory at index 0 is locally defined.
+  t.is(m.memories.getByIndex(0)!.import(), null)
+})
+
+test('reverse cross-link: imported memory/table/tag each resolve to their import; local ones are null', (t) => {
+  const m = loadLinks()
+
+  const mem = m.memories.getByIndex(0)!.import()
+  t.truthy(mem)
+  t.is(mem!.name, 'mem')
+  t.is(mem!.kind, 'Memory')
+  t.is(mem!.memory()!.index, 0)
+
+  const tbl = m.tables.getByIndex(0)!.import()
+  t.truthy(tbl)
+  t.is(tbl!.name, 'tbl')
+  t.is(tbl!.kind, 'Table')
+  t.is(tbl!.table()!.index, 0)
+
+  const tag = m.tags.getByIndex(0)!.import()
+  t.truthy(tag)
+  t.is(tag!.name, 'tag')
+  t.is(tag!.kind, 'Tag')
+  t.is(tag!.tag()!.index, 0)
+
+  // The local variants carry no import.
+  t.is(m.tables.getByIndex(1)!.import(), null)
+  t.is(m.tags.getByIndex(1)!.import(), null)
+})
+
+test('reverse cross-link delete-guard: import() on a deleted item throws instead of aborting', (t) => {
+  const m = loadLinks()
+
+  const mem = m.memories.getByIndex(0)!
+  m.memories.delete(mem)
+  const errMem = t.throws(() => mem.import())
+  t.regex(errMem!.message, /deleted/)
+
+  const g = m.globals.getByIndex(1)!
+  m.globals.delete(g)
+  const errG = t.throws(() => g.import())
+  t.regex(errG!.message, /deleted/)
 })

@@ -526,6 +526,17 @@ export declare class WasmFunction {
    * mode is the delete guard.
    */
   ty(): WasmType
+  /**
+   * The import that brings this function into the module, as a live
+   * [`WasmImport`] handle, or `null` if this function is locally defined (or an
+   * uninitialized placeholder).
+   *
+   * A method (not a getter) because it materializes a fresh wrapper on each
+   * call. Wrapping the id is a pure cross-link (the reverse of
+   * `WasmImport.func()`); a later access on the returned handle self-guards
+   * against the import having been deleted.
+   */
+  import(): WasmImport | null
 }
 
 /**
@@ -605,6 +616,16 @@ export declare class WasmGlobal {
    * wrapper on each call.
    */
   init(): ConstExpr | null
+  /**
+   * The import that brings this global into the module, as a live
+   * [`WasmImport`] handle, or `null` if this global is locally defined.
+   *
+   * A method (not a getter) because it materializes a fresh wrapper on each
+   * call. Wrapping the id is a pure cross-link (the reverse of
+   * `WasmImport.global()`); a later access on the returned handle self-guards
+   * against the import having been deleted.
+   */
+  import(): WasmImport | null
 }
 
 /**
@@ -879,6 +900,16 @@ export declare class WasmMemory {
    * later imports task; only the boolean is available now.
    */
   get isImported(): boolean
+  /**
+   * The import that brings this memory into the module, as a live
+   * [`WasmImport`] handle, or `null` if this memory is locally defined.
+   *
+   * A method (not a getter) because it materializes a fresh wrapper on each
+   * call. Wrapping the id is a pure cross-link (the reverse of
+   * `WasmImport.memory()`); a later access on the returned handle self-guards
+   * against the import having been deleted.
+   */
+  import(): WasmImport | null
 }
 
 export declare class WasmModule {
@@ -912,6 +943,36 @@ export declare class WasmModule {
   get name(): string | null
   /** Set the name of this module, stored in the wasm "name" custom section. */
   set name(name: string | undefined | null)
+  /**
+   * This module's start function — run automatically at instantiation — as a
+   * live [`WasmFunction`] handle, or `null` if the module has none.
+   *
+   * A pure id-wrap: `null` is returned only when no start is set, never as a
+   * liveness check. If the stored start function was later deleted the returned
+   * handle self-guards on its own accessors (and the module would abort at emit
+   * — see `set_start`).
+   */
+  get start(): WasmFunction | null
+  /**
+   * Set (or clear, with `null`) this module's start function.
+   *
+   * Id-ref guarded: walrus stores the raw `FunctionId` and resolves it to an
+   * index at emit via a panicking `get_function_index`, so a function handle
+   * from a different module (or an already-deleted one) would abort the whole
+   * Node process there. We reject such a handle with a catchable error BEFORE
+   * storing it, leaving the current start unchanged. Passing `null` clears the
+   * start unconditionally (always safe).
+   */
+  set start(start: WasmFunction | undefined | null)
+  /**
+   * This module's main memory — the first memory (wasm memory index 0) — as a
+   * live [`WasmMemory`] handle, or `null` if the module has no memory.
+   *
+   * A documented convenience, NOT a walrus passthrough: walrus has no
+   * `main_memory()` accessor, so "main memory" here means the conventional
+   * first memory that single-memory modules use for all loads/stores.
+   */
+  get mainMemory(): WasmMemory | null
   /**
    * The `producers` custom section of this module, describing the tools that
    * produced it. Mutations through the returned object write back to this
@@ -1049,6 +1110,16 @@ export declare class WasmTable {
    * later imports task; only the boolean is available now.
    */
   get isImported(): boolean
+  /**
+   * The import that brings this table into the module, as a live [`WasmImport`]
+   * handle, or `null` if this table is locally defined.
+   *
+   * A method (not a getter) because it materializes a fresh wrapper on each
+   * call. Wrapping the id is a pure cross-link (the reverse of
+   * `WasmImport.table()`); a later access on the returned handle self-guards
+   * against the import having been deleted.
+   */
+  import(): WasmImport | null
 }
 
 /**
@@ -1132,6 +1203,16 @@ export declare class WasmTag {
    * exception's payload value types.
    */
   ty(): WasmType
+  /**
+   * The import that brings this tag into the module, as a live [`WasmImport`]
+   * handle, or `null` if this tag is locally defined.
+   *
+   * A method (not a getter) because it materializes a fresh wrapper on each
+   * call. Wrapping the id is a pure cross-link (the reverse of
+   * `WasmImport.tag()`); a later access on the returned handle self-guards
+   * against the import having been deleted.
+   */
+  import(): WasmImport | null
 }
 
 /**

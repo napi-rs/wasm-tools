@@ -11,6 +11,14 @@ const __dirname = join(fileURLToPath(import.meta.url), '..')
 const FIXTURE = join(__dirname, '..', 'crates', 'panic', 'panic.wasm32-wasi.wasm')
 const fixtureBytes = readFileSync(FIXTURE)
 
+// Committed fixture (see fixtures/import-links.wat, built at authoring time with
+// `wat2wasm --enable-exceptions`; hermetic). It has a start function (function
+// index 1), an imported memory at index 0, and imported + local variants of
+// every item kind.
+const IMPORT_LINKS = join(__dirname, 'fixtures', 'import-links.wasm')
+const importLinksBytes = readFileSync(IMPORT_LINKS)
+const loadLinks = () => WasmModule.fromBuffer(importLinksBytes)
+
 const tmpFile = (name: string) => join(mkdtempSync(join(tmpdir(), 'wasm-a1-')), name)
 
 // A minimal, valid wasm module: the 8-byte magic + version header with no
@@ -112,4 +120,64 @@ test('fromBufferWithConfig honors the supplied ModuleConfig', (t) => {
   assertValid(t, emitted)
   // With the producers section disabled the emitted module drops it entirely.
   t.is(customSectionCount(emitted, 'producers'), 0)
+})
+
+test('start getter returns the module start function handle', (t) => {
+  const m = loadLinks()
+  t.truthy(m.start)
+  t.is(m.start!.index, 1)
+})
+
+test('start setter clears the start (null) through emit and re-parse', (t) => {
+  const m = loadLinks()
+  m.start = null
+  t.is(m.start, null)
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  t.is(reparsed.start, null)
+})
+
+test('start setter assigns a function that persists through emit and re-parse', (t) => {
+  const m = loadLinks()
+  // Clear then re-assign to prove the setter writes through (not just that the
+  // fixture already had this start).
+  m.start = null
+  t.is(m.start, null)
+
+  const f = m.functions.getByIndex(1)!
+  m.start = f
+  t.truthy(m.start)
+  t.is(m.start!.index, 1)
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  t.truthy(reparsed.start)
+  t.is(reparsed.start!.index, 1)
+})
+
+test('start setter rejects a function from a different module and leaves start unchanged', (t) => {
+  const a = loadLinks()
+  const b = loadLinks()
+
+  // A WasmFunction minted from module B carries B's arena_id; walrus would
+  // resolve `module.start` via a panicking get_function_index at A's emit and
+  // abort the whole process. The id-ref guard rejects it first.
+  const foreign = b.functions.getByIndex(1)!
+  const err = t.throws(() => {
+    a.start = foreign
+  })
+  t.regex(err!.message, /not in this module|deleted/)
+
+  // The rejected set did not mutate A, and the process is still alive.
+  t.truthy(a.start)
+  t.is(a.start!.index, 1)
+})
+
+test('mainMemory returns the first memory (index 0), null when the module has none', (t) => {
+  const m = loadLinks()
+  t.truthy(m.mainMemory)
+  t.is(m.mainMemory!.index, 0)
+
+  // A module with no memory section has no main memory.
+  const empty = WasmModule.fromBuffer(emptyModuleBytes())
+  t.is(empty.mainMemory, null)
 })

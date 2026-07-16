@@ -3,6 +3,7 @@ use napi::Env;
 use napi_derive::napi;
 use walrus::TagId;
 
+use crate::imports::WasmImport;
 use crate::types::WasmType;
 use crate::WasmModule;
 
@@ -201,5 +202,24 @@ impl WasmTag {
       id,
       module: self.module.clone(env)?,
     })
+  }
+
+  #[napi]
+  /// The import that brings this tag into the module, as a live [`WasmImport`]
+  /// handle, or `null` if this tag is locally defined.
+  ///
+  /// A method (not a getter) because it materializes a fresh wrapper on each
+  /// call. Wrapping the id is a pure cross-link (the reverse of
+  /// `WasmImport.tag()`); a later access on the returned handle self-guards
+  /// against the import having been deleted.
+  pub fn import(&self, env: Env) -> Result<Option<WasmImport>> {
+    self.ensure_exists()?;
+    match &self.module.inner.tags.get(self.id).kind {
+      walrus::TagKind::Import(id) => Ok(Some(WasmImport {
+        id: *id,
+        module: self.module.clone(env)?,
+      })),
+      walrus::TagKind::Local => Ok(None),
+    }
   }
 }
