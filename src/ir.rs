@@ -559,9 +559,11 @@ pub struct RefType {
 /// `StructGet`/`StructGetS`/`StructGetU`/`StructSet` and `ArrayNew`/
 /// `ArrayNewDefault`/`ArrayNewFixed`/`ArrayNewData`/`ArrayNewElem`/`ArrayGet`/
 /// `ArrayGetS`/`ArrayGetU`/`ArraySet`/`ArrayLen`/`ArrayFill`/`ArrayCopy`/
-/// `ArrayInitData`/`ArrayInitElem`). Any other instruction is rejected catchably
-/// by both directions (later tasks add the remaining GC reference ops — ref
-/// cast/test/i31/convert/call_ref and br_on_cast/null — and EH).
+/// `ArrayInitData`/`ArrayInitElem`), and the C7b GC reference subset — the
+/// label-free ops (`RefAsNonNull`/`CallRef`/`ReturnCallRef`/`RefI31`/`I31GetS`/
+/// `I31GetU`/`RefTest`/`RefCast`/`AnyConvertExtern`/`ExternConvertAny`/`RefEq`).
+/// Any other instruction is rejected catchably by both directions (later tasks
+/// add the label-carrying `br_on_*` GC branches and EH).
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.
@@ -1799,6 +1801,16 @@ fn emit_one(
       fb.instr_seq(seq_id)
         .instr(wir::ReturnCallIndirect { ty, table });
     }
+    // GC reference instructions (C7b) — the label-free subset (the `br_on_*`
+    // label-carriers are a later task). Delegated to `emit_gc_ref` (an
+    // `#[inline(never)]` helper) for the SAME frame-size reason as `emit_atomic`:
+    // eleven inline arms — even individually `RefNull`-sized — were MEASURED to
+    // grow this recursive walker's -O0 frame past the at-cap headroom (the at-cap
+    // canary SIGSEGV'd), so their locals live in the helper's own frame instead.
+    "RefAsNonNull" | "CallRef" | "ReturnCallRef" | "RefI31" | "I31GetS" | "I31GetU" | "RefTest"
+    | "RefCast" | "AnyConvertExtern" | "ExternConvertAny" | "RefEq" => {
+      emit_gc_ref(fb, module, seq_id, r#type.as_str(), type_index, ref_type)?;
+    }
     // GC struct instructions (C7a). Delegated to `emit_struct` (an
     // `#[inline(never)]` helper) SO THAT the six arms' locals do NOT inflate this
     // recursive walker's frame — the same stack-frame discipline as `emit_atomic`
@@ -1830,7 +1842,7 @@ fn emit_one(
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
          C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
-         atomic, table, reference/tail-call, and GC struct/array subset)"
+         atomic, table, reference/tail-call, and GC struct/array/reference subset)"
       )));
     }
   }
@@ -2186,6 +2198,96 @@ fn emit_array(
   Ok(())
 }
 
+/// Emit one label-free GC reference instruction (C7b). Split out of [`emit_one`]
+/// and marked `#[inline(never)]` for the same frame-size reason as
+/// [`emit_atomic`]: the eleven arms' locals and call temporaries live in this
+/// function's OWN frame, not the recursive `emit_one` frame (inlining them was
+/// MEASURED to push the -O0 at-cap round-trip into a SIGSEGV).
+///
+/// `CallRef`/`ReturnCallRef` resolve their callee type through
+/// [`resolve_type_id`] (the abort guard; rejects a nonexistent AND an internal
+/// function-entry-type index) exactly like `CallIndirect` — MIRROR-WALRUS: that
+/// the type is actually a FUNCTION type is NOT checked. `RefTest`/`RefCast` are
+/// EXACT payload twins of `RefNull`: they REUSE the `refType` field (walrus
+/// stores the pair as two fields, `nullable` + `heap_type`, rather than a
+/// bundled `RefType`) and route the heap through the MODULE-AWARE
+/// [`heap_type_to_walrus_in`] — the abort guard for a concrete/exact heap naming
+/// a foreign/deleted/entry `TypeId`; whether the tested/cast type is legal for
+/// the operand is NOT checked. The seven remaining ops are fieldless. The caller
+/// only routes the eleven GC reference discriminants here, so the final arm is
+/// unreachable.
+#[inline(never)]
+fn emit_gc_ref(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  seq_id: wir::InstrSeqId,
+  ty_str: &str,
+  type_index: Option<u32>,
+  ref_type: Option<RefType>,
+) -> Result<()> {
+  match ty_str {
+    "RefAsNonNull" => {
+      fb.instr_seq(seq_id).instr(wir::RefAsNonNull {});
+    }
+    "CallRef" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("CallRef", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::CallRef { ty });
+    }
+    "ReturnCallRef" => {
+      let ty = resolve_type_id(
+        module,
+        type_index.ok_or_else(|| missing("ReturnCallRef", "typeIndex"))?,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::ReturnCallRef { ty });
+    }
+    "RefI31" => {
+      fb.instr_seq(seq_id).instr(wir::RefI31 {});
+    }
+    "I31GetS" => {
+      fb.instr_seq(seq_id).instr(wir::I31GetS {});
+    }
+    "I31GetU" => {
+      fb.instr_seq(seq_id).instr(wir::I31GetU {});
+    }
+    "RefTest" => {
+      let rt = ref_type.ok_or_else(|| missing("RefTest", "refType"))?;
+      let heap_type = heap_type_to_walrus_in(module, rt.heap)?;
+      fb.instr_seq(seq_id).instr(wir::RefTest {
+        nullable: rt.nullable,
+        heap_type,
+      });
+    }
+    "RefCast" => {
+      let rt = ref_type.ok_or_else(|| missing("RefCast", "refType"))?;
+      let heap_type = heap_type_to_walrus_in(module, rt.heap)?;
+      fb.instr_seq(seq_id).instr(wir::RefCast {
+        nullable: rt.nullable,
+        heap_type,
+      });
+    }
+    "AnyConvertExtern" => {
+      fb.instr_seq(seq_id).instr(wir::AnyConvertExtern {});
+    }
+    "ExternConvertAny" => {
+      fb.instr_seq(seq_id).instr(wir::ExternConvertAny {});
+    }
+    "RefEq" => {
+      fb.instr_seq(seq_id).instr(wir::RefEq {});
+    }
+    // Unreachable: `emit_one` only routes the eleven GC reference discriminants
+    // here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not a GC reference instruction"
+      )))
+    }
+  }
+  Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Preflight: a read-only mirror of the emit walk, run BEFORE any arena mutation.
 // ---------------------------------------------------------------------------
@@ -2232,7 +2334,8 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
   match d.r#type.as_str() {
     // Fieldless leaf ops: nothing to resolve. `RefIsNull` joins them (its emit
     // arm takes no payload); so do the fieldless SIMD `V128Bitselect` /
-    // `I8x16Swizzle`.
+    // `I8x16Swizzle`. (The seven fieldless C7b GC reference ops are routed to
+    // `validate_gc_ref` below instead, mirroring the emit dispatch exactly.)
     "Unreachable" | "Return" | "Drop" | "RefIsNull" | "V128Bitselect" | "I8x16Swizzle" => {}
     "Const" => {
       // Mirror emit's fallible Const checks: an i64 that is not lossless, and a
@@ -2546,6 +2649,19 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
           .ok_or_else(|| missing("ReturnCallIndirect", "table"))?,
       )?;
     }
+    // GC reference instructions (C7b) — the label-free subset. Delegated to
+    // `validate_gc_ref` (`#[inline(never)]`) for the SAME frame-size reason as
+    // `validate_atomic` (keep its locals out of this recursive walker's frame; the
+    // inline arms were measured to erode the at-cap headroom). Mirrors
+    // `emit_gc_ref` arm-for-arm: `CallRef`/`ReturnCallRef` resolve their callee
+    // type via `resolve_type_id` and `RefTest`/`RefCast` resolve their `refType`'s
+    // heap via the module-aware `heap_type_to_walrus_in` (both abort guards) — a
+    // missing preflight resolution re-opens the emit-abort / partial-mutation
+    // defect. The seven fieldless ops need no check.
+    "RefAsNonNull" | "CallRef" | "ReturnCallRef" | "RefI31" | "I31GetS" | "I31GetU" | "RefTest"
+    | "RefCast" | "AnyConvertExtern" | "ExternConvertAny" | "RefEq" => {
+      validate_gc_ref(module, d)?;
+    }
     // GC struct/array instructions (C7a). Delegated to `validate_struct`/
     // `validate_array` (`#[inline(never)]`) for the SAME frame-size reason as
     // `validate_atomic` (keep their locals out of this recursive walker's frame).
@@ -2565,7 +2681,7 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
          C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
-         atomic, table, reference/tail-call, and GC struct/array subset)"
+         atomic, table, reference/tail-call, and GC struct/array/reference subset)"
       )));
     }
   }
@@ -2850,6 +2966,59 @@ fn validate_array(module: &Module, d: &InstrDesc) -> Result<()> {
     other => {
       return Err(Error::from_reason(format!(
         "`{other}` is not an array instruction"
+      )))
+    }
+  }
+  Ok(())
+}
+
+/// Preflight one label-free GC reference descriptor (C7b). Split out of
+/// [`validate_one`] and marked `#[inline(never)]` for the same frame-size reason
+/// as [`validate_atomic`] (keep its locals out of the recursive walker's frame).
+/// Mirrors [`emit_gc_ref`] arm-for-arm: `CallRef`/`ReturnCallRef` resolve the
+/// SAME `TypeId` via [`resolve_type_id`] and `RefTest`/`RefCast` resolve the SAME
+/// heap type via the module-aware [`heap_type_to_walrus_in`] (the abort guards),
+/// with the SAME missing-field errors; the seven fieldless ops have nothing to
+/// resolve. The caller only routes the eleven GC reference discriminants here, so
+/// the final arm is unreachable.
+#[inline(never)]
+fn validate_gc_ref(module: &Module, d: &InstrDesc) -> Result<()> {
+  match d.r#type.as_str() {
+    "RefAsNonNull" | "RefI31" | "I31GetS" | "I31GetU" | "AnyConvertExtern" | "ExternConvertAny"
+    | "RefEq" => {}
+    "CallRef" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("CallRef", "typeIndex"))?,
+      )?;
+    }
+    "ReturnCallRef" => {
+      resolve_type_id(
+        module,
+        d.type_index
+          .ok_or_else(|| missing("ReturnCallRef", "typeIndex"))?,
+      )?;
+    }
+    "RefTest" => {
+      let rt = d
+        .ref_type
+        .as_ref()
+        .ok_or_else(|| missing("RefTest", "refType"))?;
+      heap_type_to_walrus_in(module, rt.heap.clone())?;
+    }
+    "RefCast" => {
+      let rt = d
+        .ref_type
+        .as_ref()
+        .ok_or_else(|| missing("RefCast", "refType"))?;
+      heap_type_to_walrus_in(module, rt.heap.clone())?;
+    }
+    // Unreachable: `validate_one` only routes the eleven GC reference
+    // discriminants here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not a GC reference instruction"
       )))
     }
   }
@@ -3272,6 +3441,46 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
       d.table = Some(e.table.index() as u32);
       d
     }
+    // GC reference instructions (C7b) — the label-free subset. Built INLINE as
+    // tail expressions, exactly like every other leaf arm (see the C7a note just
+    // below for why READ inlines where EMIT/VALIDATE delegate). `CallRef`/
+    // `ReturnCallRef` surface their callee `TypeId` as `type_index` (like
+    // `CallIndirect`); `RefTest`/`RefCast` rebuild the shared `refType` payload
+    // through the SAME fallible walrus -> napi heap conversion as `RefNull`
+    // (`try_into` errs catchably on a `#[non_exhaustive]` future heap variant).
+    wir::Instr::RefAsNonNull(_) => InstrDesc::new("RefAsNonNull"),
+    wir::Instr::CallRef(e) => {
+      let mut d = InstrDesc::new("CallRef");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::ReturnCallRef(e) => {
+      let mut d = InstrDesc::new("ReturnCallRef");
+      d.type_index = Some(e.ty.index() as u32);
+      d
+    }
+    wir::Instr::RefI31(_) => InstrDesc::new("RefI31"),
+    wir::Instr::I31GetS(_) => InstrDesc::new("I31GetS"),
+    wir::Instr::I31GetU(_) => InstrDesc::new("I31GetU"),
+    wir::Instr::RefTest(e) => {
+      let mut d = InstrDesc::new("RefTest");
+      d.ref_type = Some(RefType {
+        nullable: e.nullable,
+        heap: e.heap_type.try_into()?,
+      });
+      d
+    }
+    wir::Instr::RefCast(e) => {
+      let mut d = InstrDesc::new("RefCast");
+      d.ref_type = Some(RefType {
+        nullable: e.nullable,
+        heap: e.heap_type.try_into()?,
+      });
+      d
+    }
+    wir::Instr::AnyConvertExtern(_) => InstrDesc::new("AnyConvertExtern"),
+    wir::Instr::ExternConvertAny(_) => InstrDesc::new("ExternConvertAny"),
+    wir::Instr::RefEq(_) => InstrDesc::new("RefEq"),
     // GC struct/array instructions (C7a). These arms build the descriptor INLINE
     // (each `let mut d = InstrDesc::new(..); ..; d` is the arm's tail expression),
     // exactly like every arm above — deliberately NOT via a by-value-returning
@@ -3405,7 +3614,7 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
       return Err(Error::from_reason(format!(
         "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2/C3/C4/C5 \
          core, control-flow, numeric-operator, memory/load-store, atomic, table, \
-         reference/tail-call, and GC struct/array subset is)"
+         reference/tail-call, and GC struct/array/reference subset is)"
       )));
     }
   })

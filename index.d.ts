@@ -2014,9 +2014,11 @@ export declare const enum ImportKindTag {
  * `StructGet`/`StructGetS`/`StructGetU`/`StructSet` and `ArrayNew`/
  * `ArrayNewDefault`/`ArrayNewFixed`/`ArrayNewData`/`ArrayNewElem`/`ArrayGet`/
  * `ArrayGetS`/`ArrayGetU`/`ArraySet`/`ArrayLen`/`ArrayFill`/`ArrayCopy`/
- * `ArrayInitData`/`ArrayInitElem`). Any other instruction is rejected catchably
- * by both directions (later tasks add the remaining GC reference ops — ref
- * cast/test/i31/convert/call_ref and br_on_cast/null — and EH).
+ * `ArrayInitData`/`ArrayInitElem`), and the C7b GC reference subset — the
+ * label-free ops (`RefAsNonNull`/`CallRef`/`ReturnCallRef`/`RefI31`/`I31GetS`/
+ * `I31GetU`/`RefTest`/`RefCast`/`AnyConvertExtern`/`ExternConvertAny`/`RefEq`).
+ * Any other instruction is rejected catchably by both directions (later tasks
+ * add the label-carrying `br_on_*` GC branches and EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */

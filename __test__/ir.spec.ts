@@ -2192,3 +2192,219 @@ test('C7a negative: a struct/array descriptor missing a required field throws ca
     message: /`ArrayCopy` instruction is missing its `srcTypeIndex` field/,
   })
 })
+
+// ---------------------------------------------------------------------------
+// C7b: GC reference instructions — the 11 label-free ops (the `br_on_*`
+// label-carriers are C7c). NO new InstrDesc field: CallRef/ReturnCallRef REUSE
+// `typeIndex` + `resolve_type_id` (rejects a nonexistent AND an internal
+// function-entry-type index), exactly like C3's call_indirect; RefTest/RefCast
+// REUSE `refType` + the module-aware heap resolution, exactly like C4's RefNull
+// (walrus stores the payload as two fields, `nullable` + `heap_type`, which the
+// shared `RefType` object bundles); the other 7 ops are fieldless.
+//
+// Same walrus fact as C1b/C2/C7a: `strict_validate(false)` is a no-op in
+// 0.26.4, so the EXHAUSTIVE test uses the IN-MEMORY read path (buildFunction ->
+// instructions() on the same module). A separate WELL-TYPED body proves the ops
+// survive the emit -> bytes -> re-parse boundary (GC/func-refs need
+// onlyStableFeatures(false) on parse).
+//
+// MIRROR-WALRUS: buildFunction only guards process-aborting hazards (the callee
+// type / concrete heap type resolves; required fields present). It does NOT
+// type-check — a call_ref naming a STRUCT type, a ref.test on an empty stack,
+// or an i31.get_s with no i31 operand all build as-is.
+// ---------------------------------------------------------------------------
+
+test('C7b EXHAUSTIVE: all 11 GC reference instrs round-trip in-memory', (t) => {
+  const m = empty()
+  const fn = m.types.add([I32], [I32]).index
+  const s = m.types.addStruct([...STRUCT_FIELDS]).index
+
+  const body: InstrDesc[] = [
+    { type: 'RefAsNonNull' },
+    // The typed calls reference a real FUNCTION type.
+    { type: 'CallRef', typeIndex: fn },
+    { type: 'ReturnCallRef', typeIndex: fn },
+    { type: 'RefI31' },
+    { type: 'I31GetS' },
+    { type: 'I31GetU' },
+    // RefTest with an ABSTRACT heap, nullable TRUE...
+    { type: 'RefTest', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Any' } } },
+    // ...and nullable FALSE — proving the flag round-trips rather than defaults.
+    { type: 'RefTest', refType: { nullable: false, heap: { type: 'Abstract', kind: 'Eq' } } },
+    // RefTest with a CONCRETE struct heap — the abort-guarded path.
+    { type: 'RefTest', refType: { nullable: false, heap: { type: 'Concrete', typeIndex: s } } },
+    // RefCast: abstract (i31) AND concrete, with BOTH nullabilities.
+    { type: 'RefCast', refType: { nullable: false, heap: { type: 'Abstract', kind: 'I31' } } },
+    { type: 'RefCast', refType: { nullable: true, heap: { type: 'Concrete', typeIndex: s } } },
+    { type: 'AnyConvertExtern' },
+    { type: 'ExternConvertAny' },
+    { type: 'RefEq' },
+  ]
+
+  const idx = m.buildFunction([], [], [], body)
+  // Read back from the SAME in-memory module (no emit/re-parse; buildFunction is
+  // MIRROR-WALRUS, so this ill-typed-but-well-formed body builds directly).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+
+  // Sanity: all 11 instruction kinds are present.
+  const kinds = new Set(read.map((dd) => dd.type))
+  for (const k of [
+    'RefAsNonNull',
+    'CallRef',
+    'ReturnCallRef',
+    'RefI31',
+    'I31GetS',
+    'I31GetU',
+    'RefTest',
+    'RefCast',
+    'AnyConvertExtern',
+    'ExternConvertAny',
+    'RefEq',
+  ]) {
+    t.true(kinds.has(k), `body should contain a ${k}`)
+  }
+  // The typed calls carried the FUNCTION type index (not the struct's).
+  t.is(read.find((dd) => dd.type === 'CallRef')!.typeIndex, fn)
+  t.is(read.find((dd) => dd.type === 'ReturnCallRef')!.typeIndex, fn)
+  // The concrete RefTest/RefCast carried the struct type index unchanged, and
+  // the nullable flag is per-instruction (not defaulted).
+  const concreteTest = read.find((dd) => dd.type === 'RefTest' && dd.refType!.heap.type === 'Concrete')!
+  t.is((concreteTest.refType!.heap as { type: 'Concrete'; typeIndex: number }).typeIndex, s)
+  t.false(concreteTest.refType!.nullable)
+  const concreteCast = read.find((dd) => dd.type === 'RefCast' && dd.refType!.heap.type === 'Concrete')!
+  t.is((concreteCast.refType!.heap as { type: 'Concrete'; typeIndex: number }).typeIndex, s)
+  t.true(concreteCast.refType!.nullable)
+})
+
+test('C7b: a well-typed GC reference body emits valid wasm and round-trips through re-parse', (t) => {
+  const m = empty()
+  // WELL-TYPED throughout (traps only at runtime, which validation permits):
+  // ref.i31 on an i32.const feeds i31.get_s / i31.get_u / ref.as_non_null;
+  // ref.null any feeds ref.test / ref.cast (eq is a supertype-hierarchy sibling
+  // under any, so the test/cast validate); two eqrefs feed ref.eq; a null extern
+  // feeds any.convert_extern and a null any feeds extern.convert_any.
+  const body: InstrDesc[] = [
+    { type: 'Const', value: { type: 'I32', value: 5 } },
+    { type: 'RefI31' },
+    { type: 'I31GetS' },
+    { type: 'Drop' },
+    { type: 'Const', value: { type: 'I32', value: 6 } },
+    { type: 'RefI31' },
+    { type: 'I31GetU' },
+    { type: 'Drop' },
+    { type: 'Const', value: { type: 'I32', value: 7 } },
+    { type: 'RefI31' },
+    { type: 'RefAsNonNull' },
+    { type: 'Drop' },
+    { type: 'RefNull', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Any' } } },
+    { type: 'RefTest', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Eq' } } },
+    { type: 'Drop' },
+    { type: 'RefNull', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Any' } } },
+    { type: 'RefCast', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Eq' } } },
+    { type: 'Drop' },
+    { type: 'RefNull', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Eq' } } },
+    { type: 'RefNull', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Eq' } } },
+    { type: 'RefEq' },
+    { type: 'Drop' },
+    { type: 'RefNull', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Extern' } } },
+    { type: 'AnyConvertExtern' },
+    { type: 'Drop' },
+    { type: 'RefNull', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Any' } } },
+    { type: 'ExternConvertAny' },
+    { type: 'Drop' },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'gcref'
+  const bytes = m.emitWasm(false)
+
+  // Re-parse with GC enabled (onlyStableFeatures(false)); the abstract-heap-only
+  // body needs no index fixup, so the read must deep-equal what was built.
+  const reparsed = new ModuleConfig().onlyStableFeatures(false).strictValidate(false).parse(bytes)
+  const read = reparsed.functions.byName('gcref')!.instructions()
+  t.deepEqual(read, body)
+})
+
+test('C7b negative: a nonexistent or entry-type callee type on call_ref/return_call_ref throws catchably (no abort)', (t) => {
+  const m = empty()
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'CallRef', typeIndex: 9999 }]), {
+    message: /no type at index 9999/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ReturnCallRef', typeIndex: 9999 }]), {
+    message: /no type at index 9999/,
+  })
+
+  // A MULTI-VALUE result signature records an internal ENTRY type in the raw
+  // arena (the C7a trick): naming it must be rejected by resolve_type_id too.
+  m.buildFunction(
+    [],
+    [I32, I32],
+    [],
+    [
+      { type: 'Const', value: { type: 'I32', value: 0 } },
+      { type: 'Const', value: { type: 'I32', value: 0 } },
+    ],
+  )
+  const s = m.types.addStruct([...STRUCT_FIELDS]).index
+  let entryIndex = -1
+  for (let i = 0; i < s; i++) {
+    if (m.types.getByIndex(i) === null) {
+      entryIndex = i
+      break
+    }
+  }
+  t.true(entryIndex >= 0, 'expected an internal entry type below the struct index')
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'CallRef', typeIndex: entryIndex }]), {
+    message: new RegExp(`no type at index ${entryIndex}`),
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ReturnCallRef', typeIndex: entryIndex }]), {
+    message: new RegExp(`no type at index ${entryIndex}`),
+  })
+  // Process is still alive and the failed builds left the module emittable.
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C7b negative: a RefTest/RefCast concrete or exact heap naming a bad type index throws catchably (no abort)', (t) => {
+  const m = empty()
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [{ type: 'RefTest', refType: { nullable: true, heap: { type: 'Concrete', typeIndex: 9999 } } }],
+      ),
+    { message: /no type at index 9999/ },
+  )
+  // The Exact heap path is guarded by the same resolution.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [{ type: 'RefCast', refType: { nullable: false, heap: { type: 'Exact', typeIndex: 9999 } } }],
+      ),
+    { message: /no type at index 9999/ },
+  )
+  // Process survived and the module was never mutated.
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C7b negative: a GC reference descriptor missing a required field throws catchably', (t) => {
+  const m = empty()
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'CallRef' }]), {
+    message: /`CallRef` instruction is missing its `typeIndex` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ReturnCallRef' }]), {
+    message: /`ReturnCallRef` instruction is missing its `typeIndex` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'RefTest' }]), {
+    message: /`RefTest` instruction is missing its `refType` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'RefCast' }]), {
+    message: /`RefCast` instruction is missing its `refType` field/,
+  })
+})
