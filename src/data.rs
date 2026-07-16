@@ -90,6 +90,33 @@ impl WasmDataSegments {
   /// error instead of aborting.
   pub fn delete(&mut self, data: &WasmData) -> Result<()> {
     if self.module.inner.data.iter().any(|d| d.id() == data.id) {
+      // walrus's parser records every ACTIVE segment's id in its owning
+      // memory's `data_segments` back-link set, and `ModuleData::delete` does
+      // NOT cascade that removal. Left stale, a later `gc()` on a rooted memory
+      // iterates the set and calls `data.get(id)` on this now-tombstoned id — a
+      // panic across FFI that ABORTS the whole Node process. Restore walrus'
+      // invariant: drop the back-link before tombstoning the segment.
+      //
+      // Extract the `MemoryId` (Copy) out of the kind FIRST so the shared
+      // `data.get` borrow ends before the mutable `memories.get_mut` borrow
+      // (distinct `Module` fields → split borrow is fine). Passive segments have
+      // no back-link; if the owning memory was already deleted, its set is gone
+      // too — the liveness scan skips it.
+      let active_memory = match self.module.inner.data.get(data.id).kind {
+        DataKind::Active { memory, .. } => Some(memory),
+        DataKind::Passive => None,
+      };
+      if let Some(mem) = active_memory {
+        if self.module.inner.memories.iter().any(|m| m.id() == mem) {
+          self
+            .module
+            .inner
+            .memories
+            .get_mut(mem)
+            .data_segments
+            .remove(&data.id);
+        }
+      }
       self.module.inner.data.delete(data.id);
       Ok(())
     } else {
@@ -173,6 +200,21 @@ impl WasmDataSegments {
       },
       value.to_vec(),
     );
+    // Maintain walrus' ACTIVE-segment back-link invariant (which its parser
+    // upholds at data.rs:218): record the new segment's id in its owning
+    // memory's `data_segments` set, symmetric with the removal in `delete`.
+    // (In walrus 0.26.4 gc unconditionally roots every active segment
+    // — used.rs:178-184 — so this insert is not what keeps the segment alive
+    // across gc; it keeps the memory<->data invariant consistent and defensive
+    // against any future consumer of `data_segments`.) `memory.id` was
+    // validated live above, so `get_mut` cannot panic.
+    self
+      .module
+      .inner
+      .memories
+      .get_mut(memory.id)
+      .data_segments
+      .insert(id);
     Ok(WasmData {
       id,
       module: self.module.clone(env)?,

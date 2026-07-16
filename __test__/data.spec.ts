@@ -18,6 +18,16 @@ const fixtureBytes = readFileSync(FIXTURE)
 
 const load = () => WasmModule.fromBuffer(fixtureBytes)
 
+// A rooted variant whose memory is EXPORTED, so gc() treats it as a root and
+// traverses its `data_segments` back-link set (the path that aborts on a stale
+// back-link). See fixtures/data-rooted.wat.
+//   memory 0: initial 1, exported "mem"
+//   data[0]: ACTIVE  memory 0, offset (i32.const 0), bytes "hi"
+const ROOTED_FIXTURE = join(__dirname, 'fixtures', 'data-rooted.wasm')
+const rootedBytes = readFileSync(ROOTED_FIXTURE)
+
+const loadRooted = () => WasmModule.fromBuffer(rootedBytes)
+
 // The canonical 8-byte empty module (valid header, zero sections). Used to build
 // a foreign module whose items are alien to the fixture module.
 const EMPTY_MODULE = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
@@ -196,6 +206,48 @@ test('delete-guard: cross-module delete throws and leaves both modules unchanged
 
   t.is(a.data.length, 2)
   t.is(b.data.length, 2)
+})
+
+// gc-abort regression: deleting an ACTIVE segment used to leave a stale id in
+// its owning memory's `data_segments` back-link set. A later gc() on the ROOTED
+// (exported) memory then called walrus' `data.get(tombstonedId)`, which panics
+// across FFI and ABORTS the whole Node process (SIGABRT, exit 134). This test
+// COMPLETING — the process staying alive through gc, emit, and re-parse, and
+// every later test still running — is the proof the back-link is now cleaned up.
+test('delete of an active segment then gc() does not abort on a rooted memory', (t) => {
+  const m = loadRooted()
+  const active = m.data.items()[0]
+  t.is(active.kind, 'Active')
+
+  m.data.delete(active)
+  t.is(m.data.length, 0)
+
+  // Before the fix this aborts the worker instead of returning.
+  m.gc()
+
+  // The module is still coherent: it emits and re-parses with no data segments.
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  t.is(reparsed.data.length, 0)
+})
+
+// End-to-end sanity for the add_active back-link (the other direction of the
+// same invariant): adding an active segment then running gc() on a rooted
+// memory must neither abort nor lose the segment. NB in walrus 0.26.4 gc
+// unconditionally roots every active segment (used.rs:178-184), so this holds
+// regardless of the back-link insert; the assertion guards the add+gc+emit path
+// against future regressions (e.g. an abort or a lost segment).
+test('addActive segment survives gc on a rooted memory', (t) => {
+  const m = loadRooted()
+  const mem = m.memories.items()[0]
+  const added = m.data.addActive(mem, ConstExpr.i32(8), new Uint8Array([42]))
+  t.is(added.kind, 'Active')
+
+  m.gc()
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const survived = reparsed.data.items().find((d) => d.value.length === 1 && d.value[0] === 42)
+  t.truthy(survived)
+  t.is(survived!.kind, 'Active')
 })
 
 test('delete-guard: using a handle after delete throws instead of crashing', (t) => {
