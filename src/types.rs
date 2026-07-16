@@ -6,7 +6,7 @@ use napi_derive::napi;
 use walrus::ir::InstrSeqType;
 use walrus::TypeId;
 
-use crate::valtype::ValType;
+use crate::valtype::{FieldType, ValType};
 use crate::WasmModule;
 
 /// Ids of internal function-entry types (one per local function). walrus keeps
@@ -29,8 +29,8 @@ fn entry_type_ids(module: &walrus::Module) -> HashSet<TypeId> {
 ///
 /// Mirrors the discriminant of `walrus::CompositeType`
 /// (`Function | Struct | Array`). Only `Function` types have `params()` /
-/// `results()`; the `Struct` / `Array` variants are the GC composite types and
-/// their field types are not yet exposed (a later GC-types task).
+/// `results()`; the `Struct` / `Array` GC composite types expose their field
+/// types through `structFields()` / `arrayElement()` instead.
 #[napi(string_enum)]
 pub enum TypeKind {
   /// A function type: has parameter and result value types.
@@ -224,6 +224,53 @@ impl WasmTypes {
       None => Ok(None),
     }
   }
+
+  #[napi]
+  /// Add a new GC `struct` type (final, no supertype), returning a live handle.
+  ///
+  /// Each field's storage type is converted through the module-aware path, so a
+  /// field may reference another type via a concrete ref
+  /// (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+  /// names no live type in this module is rejected with a catchable error
+  /// BEFORE any arena mutation (a bogus index would otherwise abort at emit).
+  /// Fields may reference only EXISTING types — a self-referential struct needs
+  /// a rec group (a later task).
+  ///
+  /// walrus deduplicates structurally: adding a struct identical to an existing
+  /// type returns a handle to that existing type (the arena does not grow).
+  /// This mirrors walrus and is intended behavior.
+  ///
+  /// The returned handle holds its own strong reference to the module, so it
+  /// stays valid as long as it is held.
+  pub fn add_struct(&mut self, env: Env, fields: Vec<FieldType>) -> Result<WasmType> {
+    // Convert (resolving each concrete ref, rejecting a bad index) BEFORE
+    // touching the arena, so a failed add never mutates the module.
+    let fields = fields
+      .into_iter()
+      .map(|f| crate::convert::field_type_to_walrus_in(&self.module.inner, f))
+      .collect::<Result<Vec<_>>>()?;
+    let id = self.module.inner.types.add_struct(fields);
+    Ok(WasmType {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
+
+  #[napi]
+  /// Add a new GC `array` type (final, no supertype), returning a live handle.
+  ///
+  /// The element's storage type is converted through the module-aware path, so
+  /// it may be a concrete ref to another EXISTING type; a bad index is rejected
+  /// with a catchable error before any arena mutation. Same structural
+  /// deduplication as [`WasmTypes::add_struct`].
+  pub fn add_array(&mut self, env: Env, element: FieldType) -> Result<WasmType> {
+    let element = crate::convert::field_type_to_walrus_in(&self.module.inner, element)?;
+    let id = self.module.inner.types.add_array(element);
+    Ok(WasmType {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
 }
 
 /// A single type in a module, as a live handle: it holds the type's id plus a
@@ -279,8 +326,9 @@ impl WasmType {
   }
 
   #[napi(getter)]
-  /// This type's kind (`Function`, `Struct`, or `Array`). Only `Function`
-  /// types have `params()` / `results()`.
+  /// This type's kind (`Function`, `Struct`, or `Array`). `Function` types have
+  /// `params()` / `results()`; `Struct` / `Array` types have `structFields()` /
+  /// `arrayElement()`.
   pub fn kind(&self) -> Result<TypeKind> {
     self.ensure_exists()?;
     // `walrus::CompositeType` is NOT `#[non_exhaustive]`, so this match is
@@ -325,5 +373,65 @@ impl WasmType {
         self.id.index()
       ))),
     }
+  }
+
+  #[napi]
+  /// This GC `struct` type's field types.
+  ///
+  /// A method (not a getter) because it can fail: it throws a catchable error
+  /// if this type is not a struct type (a `Function`/`Array` type). Same guard
+  /// shape as [`WasmType::params`] — walrus' `unwrap_struct()` would PANIC on a
+  /// non-struct type and abort the process across FFI, so we go through
+  /// `as_struct()` and surface an error instead.
+  pub fn struct_fields(&self) -> Result<Vec<FieldType>> {
+    self.ensure_exists()?;
+    match self.module.inner.types.get(self.id).as_struct() {
+      Some(st) => st.fields.iter().copied().map(FieldType::try_from).collect(),
+      None => Err(Error::from_reason(format!(
+        "type {} is not a struct type",
+        self.id.index()
+      ))),
+    }
+  }
+
+  #[napi]
+  /// This GC `array` type's element field type.
+  ///
+  /// Same fallibility as [`WasmType::struct_fields`]: throws for a non-array
+  /// type rather than hitting walrus' `unwrap_array` panic.
+  pub fn array_element(&self) -> Result<FieldType> {
+    self.ensure_exists()?;
+    match self.module.inner.types.get(self.id).as_array() {
+      Some(at) => FieldType::try_from(at.field),
+      None => Err(Error::from_reason(format!(
+        "type {} is not an array type",
+        self.id.index()
+      ))),
+    }
+  }
+
+  #[napi(getter)]
+  /// This type's declared supertype, or `null` if it has none.
+  ///
+  /// A pure id-wrap of `walrus::Type::supertype`. The returned handle holds its
+  /// own strong reference to the module.
+  pub fn supertype(&self, env: Env) -> Result<Option<WasmType>> {
+    self.ensure_exists()?;
+    match self.module.inner.types.get(self.id).supertype {
+      Some(sup) => Ok(Some(WasmType {
+        id: sup,
+        module: self.module.clone(env)?,
+      })),
+      None => Ok(None),
+    }
+  }
+
+  #[napi(getter)]
+  /// Whether this type is final (cannot be further subtyped). Types created by
+  /// `addStruct` / `addArray` are final; walrus also defaults freshly parsed
+  /// types without an explicit subtype declaration to final.
+  pub fn is_final(&self) -> Result<bool> {
+    self.ensure_exists()?;
+    Ok(self.module.inner.types.get(self.id).is_final)
   }
 }

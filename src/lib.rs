@@ -36,4 +36,4 @@ pub use producers::{ProducerFieldInfo, ProducerValueInfo, WasmProducers};
 pub use tables::{WasmTable, WasmTables};
 pub use tags::{TagKindTag, WasmTag, WasmTags};
 pub use types::{TypeKind, WasmType, WasmTypes};
-pub use valtype::{AbstractHeapType, HeapType, ValType};
+pub use valtype::{AbstractHeapType, FieldType, HeapType, StorageType, ValType};

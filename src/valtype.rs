@@ -35,9 +35,11 @@ pub enum ValType {
 /// A heap type for reference (`ValType::Ref`) values.
 ///
 /// The `Concrete` and `Exact` variants carry a `type_index` — the stable
-/// `.index()` of the referenced type in the module's type arena. This is
-/// display-only: an index alone cannot rebuild a walrus `TypeId`, so there is
-/// no reverse conversion (read-only value layer).
+/// `.index()` of the referenced type in the module's type arena. The pure
+/// value-layer conversion is read-only (an index alone cannot rebuild a walrus
+/// `TypeId`); the reverse direction is resolved against a live module by the
+/// module-aware converters in [`crate::convert`] (`resolve_type_id`), used when
+/// a struct/array field references another type via `(ref $t)`.
 #[napi]
 pub enum HeapType {
   /// An abstract heap type (`func`, `extern`, `any`, ...).
@@ -77,4 +79,36 @@ pub enum AbstractHeapType {
   Exn,
   /// The abstract `noexn` heap type (bottom type for exception refs).
   NoExn,
+}
+
+/// A packed storage type for GC struct and array fields, mirroring
+/// `walrus::StorageType`.
+///
+/// Generated as a TypeScript discriminated union keyed on `type`:
+/// `{ type: 'I8' } | { type: 'I16' } | { type: 'Val'; value: ValType }`.
+///
+/// The packed `I8` / `I16` variants store a smaller integer than a full value
+/// type (read back through `struct.get_s` / `struct.get_u`); they unpack to
+/// `i32`. The `Val` variant wraps any ordinary [`ValType`] (including a
+/// `(ref $t)` reference to another type).
+#[napi]
+pub enum StorageType {
+  /// An 8-bit packed integer field.
+  I8,
+  /// A 16-bit packed integer field.
+  I16,
+  /// A standard (unpacked) value type field.
+  Val { value: ValType },
+}
+
+/// A field type for GC struct and array fields, mirroring `walrus::FieldType`.
+///
+/// Combines a [`StorageType`] with a mutability flag. Generated as a TypeScript
+/// object `{ storage: StorageType; mutable: boolean }`.
+#[napi(object)]
+pub struct FieldType {
+  /// The storage type of this field.
+  pub storage: StorageType,
+  /// Whether this field is mutable.
+  pub mutable: bool,
 }

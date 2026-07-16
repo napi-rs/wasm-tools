@@ -22,7 +22,7 @@
 //! time). It is still fallible only because its `Ref` arm embeds a `HeapType`,
 //! whose conversion can fail.
 
-use crate::valtype::{AbstractHeapType, HeapType, ValType};
+use crate::valtype::{AbstractHeapType, FieldType, HeapType, StorageType, ValType};
 
 impl TryFrom<walrus::ValType> for ValType {
   type Error = napi::Error;
@@ -101,16 +101,46 @@ impl TryFrom<walrus::AbstractHeapType> for AbstractHeapType {
   }
 }
 
+// `walrus::StorageType` is NOT `#[non_exhaustive]` (it has exactly `I8`, `I16`,
+// `Val(ValType)`), so this match is total and needs no `_` arm. It is fallible
+// only because the `Val` arm embeds a `ValType`, whose `Ref` variant embeds a
+// `#[non_exhaustive]` `HeapType`.
+impl TryFrom<walrus::StorageType> for StorageType {
+  type Error = napi::Error;
+
+  fn try_from(st: walrus::StorageType) -> napi::Result<Self> {
+    Ok(match st {
+      walrus::StorageType::I8 => StorageType::I8,
+      walrus::StorageType::I16 => StorageType::I16,
+      walrus::StorageType::Val(vt) => StorageType::Val {
+        value: vt.try_into()?,
+      },
+    })
+  }
+}
+
+impl TryFrom<walrus::FieldType> for FieldType {
+  type Error = napi::Error;
+
+  fn try_from(ft: walrus::FieldType) -> napi::Result<Self> {
+    Ok(FieldType {
+      storage: ft.element_type.try_into()?,
+      mutable: ft.mutable,
+    })
+  }
+}
+
 // ---------------------------------------------------------------------------
-// WRITE direction (napi -> walrus).
+// Pure WRITE direction (napi -> walrus), with NO module access.
 //
-// Used when building walrus values from JS: `globals.addLocal(ty, ...)` and
-// `ConstExpr::ref_null(...)`. `ValType` -> `walrus::ValType` is fallible only
-// because a `Ref` embeds a `HeapType`; the heap-type conversion itself rejects
-// concrete/indexed heap types, which cannot be reconstructed from a bare
-// `type_index` (rebuilding a walrus `TypeId` needs a type handle — deferred to
-// the GC-types task). That rejection is a catchable `napi::Error`, never a
-// panic.
+// Used by the value-only write paths (`globals.addLocal(ty, ...)`,
+// `ConstExpr::ref_null(...)`) that have no live type arena to consult.
+// `ValType` -> `walrus::ValType` is fallible only because a `Ref` embeds a
+// `HeapType`, and this pure conversion REJECTS a concrete/indexed heap: a bare
+// `type_index` cannot be rebuilt into a walrus `TypeId` without the arena. The
+// module-aware `*_in` converters further below ARE given the arena and resolve
+// concrete refs instead of rejecting them (used by struct/array field
+// creation). The rejection here is a catchable `napi::Error`, never a panic.
 // ---------------------------------------------------------------------------
 
 impl TryFrom<ValType> for walrus::ValType {
@@ -137,11 +167,12 @@ impl TryFrom<HeapType> for walrus::HeapType {
   fn try_from(heap: HeapType) -> napi::Result<Self> {
     match heap {
       HeapType::Abstract { kind } => Ok(walrus::HeapType::Abstract(kind.into())),
-      // A `type_index` (a stable arena index) cannot rebuild a walrus `TypeId`;
-      // that requires a type handle. Reject it with a catchable error until the
-      // GC-types task threads real type handles through.
+      // A bare `type_index` (a stable arena index) cannot rebuild a walrus
+      // `TypeId` without the type arena, which this pure conversion has no
+      // access to. Callers that CAN reach the arena (struct/array field
+      // creation) use `heap_type_to_walrus_in` instead, which resolves it.
       HeapType::Concrete { .. } | HeapType::Exact { .. } => Err(napi::Error::from_reason(
-        "concrete/indexed ref types require a type handle; not yet supported (see GC types task)",
+        "concrete/indexed ref types cannot be resolved without module access; use the module-aware conversion path",
       )),
     }
   }
@@ -166,4 +197,103 @@ impl From<AbstractHeapType> for walrus::AbstractHeapType {
       AbstractHeapType::NoExn => walrus::AbstractHeapType::NoExn,
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Module-aware WRITE direction (napi -> walrus, resolving concrete refs).
+//
+// The pure `TryFrom<HeapType> for walrus::HeapType` above REJECTS a
+// concrete/exact heap: rebuilding a walrus `TypeId` from a bare `type_index`
+// needs the module's type arena, which a free-standing `TryFrom` cannot reach.
+// These `*_in` converters take the live `&walrus::Module` and are the
+// module-aware supersets used by the write paths that CAN reach the arena
+// (struct/array field creation). Non-concrete inputs behave identically to the
+// pure conversions; only the concrete/exact heap path differs.
+// ---------------------------------------------------------------------------
+
+/// Resolve a JS `type_index` (a stable arena `.index()`) to the live
+/// `walrus::TypeId` it names, by scanning this module's type arena.
+///
+/// A `type_index` that names no live type in this module returns a catchable
+/// error rather than an unvalidated `TypeId`. This is a hard requirement: a
+/// made-up id would pass creation but ABORT the whole process at emit time —
+/// `HeapType::to_wasmencoder_heap_type` resolves it through the panicking
+/// `IdsToIndices::get_type_index`, and a panic across the FFI boundary is
+/// uncatchable. Rejecting the bad index here turns that abort into a normal JS
+/// exception.
+pub(crate) fn resolve_type_id(
+  module: &walrus::Module,
+  type_index: u32,
+) -> napi::Result<walrus::TypeId> {
+  module
+    .types
+    .iter()
+    .find(|t| t.id().index() as u32 == type_index)
+    .map(|t| t.id())
+    .ok_or_else(|| {
+      napi::Error::from_reason(format!("no type at index {type_index} in this module"))
+    })
+}
+
+/// Module-aware `HeapType` -> `walrus::HeapType`: like the pure `TryFrom`, but
+/// resolves a concrete/exact `type_index` against the live arena instead of
+/// rejecting it.
+pub(crate) fn heap_type_to_walrus_in(
+  module: &walrus::Module,
+  heap: HeapType,
+) -> napi::Result<walrus::HeapType> {
+  // `HeapType` is our own (exhaustive) napi enum, so this match needs no `_`.
+  match heap {
+    HeapType::Abstract { kind } => Ok(walrus::HeapType::Abstract(kind.into())),
+    HeapType::Concrete { type_index } => Ok(walrus::HeapType::Concrete(resolve_type_id(
+      module, type_index,
+    )?)),
+    HeapType::Exact { type_index } => Ok(walrus::HeapType::Exact(resolve_type_id(
+      module, type_index,
+    )?)),
+  }
+}
+
+/// Module-aware `ValType` -> `walrus::ValType`: primitives map directly; a
+/// `Ref` delegates its heap to [`heap_type_to_walrus_in`] so concrete refs
+/// resolve against the live arena.
+pub(crate) fn val_type_to_walrus_in(
+  module: &walrus::Module,
+  ty: ValType,
+) -> napi::Result<walrus::ValType> {
+  Ok(match ty {
+    ValType::I32 => walrus::ValType::I32,
+    ValType::I64 => walrus::ValType::I64,
+    ValType::F32 => walrus::ValType::F32,
+    ValType::F64 => walrus::ValType::F64,
+    ValType::V128 => walrus::ValType::V128,
+    ValType::Ref { nullable, heap } => walrus::ValType::Ref(walrus::RefType {
+      nullable,
+      heap_type: heap_type_to_walrus_in(module, heap)?,
+    }),
+  })
+}
+
+/// Module-aware `StorageType` -> `walrus::StorageType`.
+pub(crate) fn storage_type_to_walrus_in(
+  module: &walrus::Module,
+  st: StorageType,
+) -> napi::Result<walrus::StorageType> {
+  Ok(match st {
+    StorageType::I8 => walrus::StorageType::I8,
+    StorageType::I16 => walrus::StorageType::I16,
+    StorageType::Val { value } => walrus::StorageType::Val(val_type_to_walrus_in(module, value)?),
+  })
+}
+
+/// Module-aware `FieldType` -> `walrus::FieldType`, used when building a GC
+/// struct/array so a field can reference another type via `(ref $t)`.
+pub(crate) fn field_type_to_walrus_in(
+  module: &walrus::Module,
+  ft: FieldType,
+) -> napi::Result<walrus::FieldType> {
+  Ok(walrus::FieldType {
+    element_type: storage_type_to_walrus_in(module, ft.storage)?,
+    mutable: ft.mutable,
+  })
 }

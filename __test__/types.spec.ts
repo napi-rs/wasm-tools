@@ -28,6 +28,13 @@ const functionsBytes = readFileSync(FUNCTIONS_FIXTURE)
 const load = () => WasmModule.fromBuffer(funcBytes)
 const loadStruct = () => new ModuleConfig().onlyStableFeatures(false).parse(structBytes)
 
+// An empty (8-byte) module we can build GC types into from scratch, hermetically.
+const EMPTY_MODULE = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+const emptyModule = () => WasmModule.fromBuffer(EMPTY_MODULE)
+// GC composite types are non-stable, so re-parsing emitted GC bytes needs the
+// non-stable-features gate opened (same as loadStruct above).
+const reparseGc = (bytes: Uint8Array) => new ModuleConfig().onlyStableFeatures(false).parse(bytes)
+
 test('types collection reports length and materializes item handles', (t) => {
   const m = load()
   t.true(m.types.length >= 1)
@@ -250,4 +257,154 @@ test('real function types survive emit + re-parse after filtering', (t) => {
   t.is(reparsed.types.length, 2)
   t.truthy(reparsed.types.find([{ type: 'I32' }], []))
   t.truthy(reparsed.types.find([{ type: 'I32' }], [{ type: 'I32' }]))
+})
+
+// ---------------------------------------------------------------------------
+// GC struct / array composite types (B5a)
+// ---------------------------------------------------------------------------
+
+test('addStruct creates a struct whose fields (incl. packed i8) round-trip', (t) => {
+  const m = emptyModule()
+  const s = m.types.addStruct([
+    { storage: { type: 'Val', value: { type: 'I32' } }, mutable: true },
+    { storage: { type: 'I8' }, mutable: false },
+  ])
+
+  t.is(s.kind, 'Struct')
+  t.is(s.isFinal, true)
+  t.is(s.supertype, null)
+  t.deepEqual(s.structFields(), [
+    { storage: { type: 'Val', value: { type: 'I32' } }, mutable: true },
+    { storage: { type: 'I8' }, mutable: false },
+  ])
+
+  // Wrong-kind accessor throws catchably (never a walrus unwrap panic).
+  const err = t.throws(() => s.arrayElement())
+  t.regex(err!.message, /not an array type/)
+
+  // Emit -> re-parse -> the struct (packed field included) survives.
+  const reparsed = reparseGc(m.emitWasm(false))
+  const rs = reparsed.types.items().find((x) => x.kind === 'Struct')
+  t.truthy(rs)
+  t.deepEqual(rs!.structFields(), [
+    { storage: { type: 'Val', value: { type: 'I32' } }, mutable: true },
+    { storage: { type: 'I8' }, mutable: false },
+  ])
+})
+
+test('addArray creates an array whose element type round-trips', (t) => {
+  const m = emptyModule()
+  const a = m.types.addArray({ storage: { type: 'Val', value: { type: 'F64' } }, mutable: true })
+
+  t.is(a.kind, 'Array')
+  t.is(a.isFinal, true)
+  t.is(a.supertype, null)
+  t.deepEqual(a.arrayElement(), { storage: { type: 'Val', value: { type: 'F64' } }, mutable: true })
+
+  const err = t.throws(() => a.structFields())
+  t.regex(err!.message, /not a struct type/)
+
+  const reparsed = reparseGc(m.emitWasm(false))
+  const ra = reparsed.types.items().find((x) => x.kind === 'Array')
+  t.truthy(ra)
+  t.deepEqual(ra!.arrayElement(), { storage: { type: 'Val', value: { type: 'F64' } }, mutable: true })
+})
+
+test('a struct field can be a concrete ref to another type (the crux) and round-trips', (t) => {
+  const m = emptyModule()
+  // Struct A: a plain primitive struct.
+  const a = m.types.addStruct([{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: true }])
+  // Struct B: a field that is `(ref null $a)` — a concrete ref to A.
+  const b = m.types.addStruct([
+    {
+      storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: a.index } } },
+      mutable: false,
+    },
+  ])
+
+  // In memory, B's field reads back as a concrete ref that targets A's index.
+  t.deepEqual(b.structFields(), [
+    {
+      storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: a.index } } },
+      mutable: false,
+    },
+  ])
+
+  // Round-trip: emit (which resolves the concrete ref through get_type_index —
+  // the abort we guard against) then re-parse. Emit may reorder types, so we
+  // identify B by shape (its field is a concrete ref) and verify the ref still
+  // targets A's signature (a struct with a single mutable i32 field).
+  const reparsed = reparseGc(m.emitWasm(false))
+  const structs = reparsed.types.items().filter((x) => x.kind === 'Struct')
+  const rb = structs.find((x) => {
+    const f = x.structFields()[0]
+    return f?.storage.type === 'Val' && f.storage.value.type === 'Ref' && f.storage.value.heap.type === 'Concrete'
+  })
+  t.truthy(rb)
+  const field = rb!.structFields()[0]
+  // Narrow for TS then read the concrete target index.
+  if (field.storage.type !== 'Val' || field.storage.value.type !== 'Ref' || field.storage.value.heap.type !== 'Concrete') {
+    return t.fail('expected a concrete ref field')
+  }
+  const target = reparsed.types.getByIndex(field.storage.value.heap.typeIndex)
+  t.truthy(target)
+  t.is(target!.kind, 'Struct')
+  t.deepEqual(target!.structFields(), [{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: true }])
+})
+
+test('concrete-ref resolution guard: a field referencing a nonexistent type index throws (no abort)', (t) => {
+  const m = emptyModule()
+  const err = t.throws(() =>
+    m.types.addStruct([
+      {
+        storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: 9999 } } },
+        mutable: false,
+      },
+    ]),
+  )
+  t.regex(err!.message, /no type at index 9999/)
+
+  // The rejection happens BEFORE any arena mutation, and the process is alive:
+  // the module is still fully usable.
+  t.is(m.types.length, 0)
+  t.notThrows(() => m.types.addStruct([{ storage: { type: 'I16' }, mutable: true }]))
+  t.is(m.types.length, 1)
+})
+
+test('addStruct structurally dedups (mirror walrus): an identical struct returns the same index', (t) => {
+  const m = emptyModule()
+  const first = m.types.addStruct([{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: true }])
+  const lenAfterFirst = m.types.length
+
+  const second = m.types.addStruct([{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: true }])
+  // walrus' ArenaSet dedups structurally identical composite types — the arena
+  // does not grow and the same id comes back. This mirrors walrus and is
+  // intended behavior (documented, not fought).
+  t.is(m.types.length, lenAfterFirst)
+  t.is(second.index, first.index)
+
+  // An array dedups the same way.
+  const arr1 = m.types.addArray({ storage: { type: 'Val', value: { type: 'F32' } }, mutable: false })
+  const lenAfterArr = m.types.length
+  const arr2 = m.types.addArray({ storage: { type: 'Val', value: { type: 'F32' } }, mutable: false })
+  t.is(m.types.length, lenAfterArr)
+  t.is(arr2.index, arr1.index)
+})
+
+test('supertype/isFinal read on a freshly parsed final struct fixture', (t) => {
+  const m = loadStruct()
+  const s = m.types.items()[0]
+  t.is(s.kind, 'Struct')
+  t.is(s.supertype, null)
+  t.is(s.isFinal, true)
+})
+
+test('delete-guard: a deleted struct handle throws on structFields/isFinal/supertype', (t) => {
+  const m = emptyModule()
+  const s = m.types.addStruct([{ storage: { type: 'I8' }, mutable: false }])
+  m.types.delete(s)
+
+  t.regex(t.throws(() => s.structFields())!.message, /deleted/)
+  t.regex(t.throws(() => s.isFinal)!.message, /deleted/)
+  t.regex(t.throws(() => s.supertype)!.message, /deleted/)
 })

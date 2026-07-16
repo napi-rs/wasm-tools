@@ -1358,8 +1358,9 @@ export declare class WasmType {
   /** Set this type's name. */
   set name(name: string | undefined | null)
   /**
-   * This type's kind (`Function`, `Struct`, or `Array`). Only `Function`
-   * types have `params()` / `results()`.
+   * This type's kind (`Function`, `Struct`, or `Array`). `Function` types have
+   * `params()` / `results()`; `Struct` / `Array` types have `structFields()` /
+   * `arrayElement()`.
    */
   get kind(): TypeKind
   /**
@@ -1379,6 +1380,36 @@ export declare class WasmType {
    * rather than hitting walrus' `unwrap_function` panic.
    */
   results(): Array<ValType>
+  /**
+   * This GC `struct` type's field types.
+   *
+   * A method (not a getter) because it can fail: it throws a catchable error
+   * if this type is not a struct type (a `Function`/`Array` type). Same guard
+   * shape as [`WasmType::params`] — walrus' `unwrap_struct()` would PANIC on a
+   * non-struct type and abort the process across FFI, so we go through
+   * `as_struct()` and surface an error instead.
+   */
+  structFields(): Array<FieldType>
+  /**
+   * This GC `array` type's element field type.
+   *
+   * Same fallibility as [`WasmType::struct_fields`]: throws for a non-array
+   * type rather than hitting walrus' `unwrap_array` panic.
+   */
+  arrayElement(): FieldType
+  /**
+   * This type's declared supertype, or `null` if it has none.
+   *
+   * A pure id-wrap of `walrus::Type::supertype`. The returned handle holds its
+   * own strong reference to the module.
+   */
+  get supertype(): WasmType | null
+  /**
+   * Whether this type is final (cannot be further subtyped). Types created by
+   * `addStruct` / `addArray` are final; walrus also defaults freshly parsed
+   * types without an explicit subtype declaration to final.
+   */
+  get isFinal(): boolean
 }
 
 /**
@@ -1450,6 +1481,34 @@ export declare class WasmTypes {
    * query is rejected with a catchable error, same as `add`.
    */
   find(params: Array<ValType>, results: Array<ValType>): WasmType | null
+  /**
+   * Add a new GC `struct` type (final, no supertype), returning a live handle.
+   *
+   * Each field's storage type is converted through the module-aware path, so a
+   * field may reference another type via a concrete ref
+   * (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+   * names no live type in this module is rejected with a catchable error
+   * BEFORE any arena mutation (a bogus index would otherwise abort at emit).
+   * Fields may reference only EXISTING types — a self-referential struct needs
+   * a rec group (a later task).
+   *
+   * walrus deduplicates structurally: adding a struct identical to an existing
+   * type returns a handle to that existing type (the arena does not grow).
+   * This mirrors walrus and is intended behavior.
+   *
+   * The returned handle holds its own strong reference to the module, so it
+   * stays valid as long as it is held.
+   */
+  addStruct(fields: Array<FieldType>): WasmType
+  /**
+   * Add a new GC `array` type (final, no supertype), returning a live handle.
+   *
+   * The element's storage type is converted through the module-aware path, so
+   * it may be a concrete ref to another EXISTING type; a bad index is rejected
+   * with a catchable error before any arena mutation. Same structural
+   * deduplication as [`WasmTypes::add_struct`].
+   */
+  addArray(element: FieldType): WasmType
 }
 
 /** An abstract heap type, mirroring `walrus::AbstractHeapType` 1:1. */
@@ -1580,6 +1639,19 @@ export declare const enum ExportItemTag {
 }
 
 /**
+ * A field type for GC struct and array fields, mirroring `walrus::FieldType`.
+ *
+ * Combines a [`StorageType`] with a mutability flag. Generated as a TypeScript
+ * object `{ storage: StorageType; mutable: boolean }`.
+ */
+export interface FieldType {
+  /** The storage type of this field. */
+  storage: StorageType
+  /** Whether this field is mutable. */
+  mutable: boolean
+}
+
+/**
  * Whether a function is imported, locally defined, or an uninitialized
  * placeholder.
  *
@@ -1619,9 +1691,11 @@ export declare const enum GlobalKind {
  * A heap type for reference (`ValType::Ref`) values.
  *
  * The `Concrete` and `Exact` variants carry a `type_index` — the stable
- * `.index()` of the referenced type in the module's type arena. This is
- * display-only: an index alone cannot rebuild a walrus `TypeId`, so there is
- * no reverse conversion (read-only value layer).
+ * `.index()` of the referenced type in the module's type arena. The pure
+ * value-layer conversion is read-only (an index alone cannot rebuild a walrus
+ * `TypeId`); the reverse direction is resolved against a live module by the
+ * module-aware converters in [`crate::convert`] (`resolve_type_id`), used when
+ * a struct/array field references another type via `(ref $t)`.
  */
 export type HeapType =
   | { type: 'Abstract', kind: AbstractHeapType }
@@ -1672,6 +1746,23 @@ export interface RawSectionInfo {
 }
 
 /**
+ * A packed storage type for GC struct and array fields, mirroring
+ * `walrus::StorageType`.
+ *
+ * Generated as a TypeScript discriminated union keyed on `type`:
+ * `{ type: 'I8' } | { type: 'I16' } | { type: 'Val'; value: ValType }`.
+ *
+ * The packed `I8` / `I16` variants store a smaller integer than a full value
+ * type (read back through `struct.get_s` / `struct.get_u`); they unpack to
+ * `i32`. The `Val` variant wraps any ordinary [`ValType`] (including a
+ * `(ref $t)` reference to another type).
+ */
+export type StorageType =
+  | { type: 'I8' }
+  | { type: 'I16' }
+  | { type: 'Val', value: ValType }
+
+/**
  * Whether a tag is imported or locally defined.
  *
  * Mirrors the discriminant of `walrus::TagKind` (`Import(ImportId)` /
@@ -1690,8 +1781,8 @@ export declare const enum TagKindTag {
  *
  * Mirrors the discriminant of `walrus::CompositeType`
  * (`Function | Struct | Array`). Only `Function` types have `params()` /
- * `results()`; the `Struct` / `Array` variants are the GC composite types and
- * their field types are not yet exposed (a later GC-types task).
+ * `results()`; the `Struct` / `Array` GC composite types expose their field
+ * types through `structFields()` / `arrayElement()` instead.
  */
 export declare const enum TypeKind {
   /** A function type: has parameter and result value types. */
