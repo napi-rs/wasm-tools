@@ -2016,9 +2016,10 @@ export declare const enum ImportKindTag {
  * `ArrayGetS`/`ArrayGetU`/`ArraySet`/`ArrayLen`/`ArrayFill`/`ArrayCopy`/
  * `ArrayInitData`/`ArrayInitElem`), and the C7b GC reference subset — the
  * label-free ops (`RefAsNonNull`/`CallRef`/`ReturnCallRef`/`RefI31`/`I31GetS`/
- * `I31GetU`/`RefTest`/`RefCast`/`AnyConvertExtern`/`ExternConvertAny`/`RefEq`).
- * Any other instruction is rejected catchably by both directions (later tasks
- * add the label-carrying `br_on_*` GC branches and EH).
+ * `I31GetU`/`RefTest`/`RefCast`/`AnyConvertExtern`/`ExternConvertAny`/`RefEq`),
+ * and the C7c GC branch subset — the label-carrying ops (`BrOnNull`/
+ * `BrOnNonNull`/`BrOnCast`/`BrOnCastFail`). Any other instruction is rejected
+ * catchably by both directions (a later task adds EH).
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -2048,7 +2049,8 @@ export interface InstrDesc {
   /** `IfElse`: the `else`-arm instructions. */
   alternative?: Array<InstrDesc>
   /**
-   * `Br`/`BrIf`: the relative label depth of the branch target
+   * `Br`/`BrIf`/`BrOnNull`/`BrOnNonNull`/`BrOnCast`/`BrOnCastFail`: the
+   * relative label depth of the branch target
    * (`0` = the innermost enclosing block/loop/if).
    */
   label?: number
@@ -2115,7 +2117,13 @@ export interface InstrDesc {
    * `BlockType::MultiValue`).
    */
   typeIndex?: number
-  /** `RefNull`: the reference type of the null being produced (`(ref null $t)`). */
+  /**
+   * The reference-type payload: for `RefNull` the type of the null being
+   * produced (`(ref null $t)`); for `RefTest`/`RefCast` the tested/cast-to
+   * type; for `BrOnCast`/`BrOnCastFail` the SOURCE/input pair of the cast
+   * (walrus' `from_nullable` + `from_heap_type` — the target pair is
+   * `toRefType`).
+   */
   refType?: RefType
   /** `AtomicRmw`: the read/modify/write operation. */
   atomicOp?: AtomicOp
@@ -2150,6 +2158,11 @@ export interface InstrDesc {
    * type uses `type_index`), mirroring walrus' `ArrayCopy { dst_ty, src_ty }`.
    */
   srcTypeIndex?: number
+  /**
+   * `BrOnCast`/`BrOnCastFail`: the TARGET pair of the cast (walrus'
+   * `to_nullable` + `to_heap_type`); the source/input pair uses `refType`.
+   */
+  toRefType?: RefType
 }
 
 /**

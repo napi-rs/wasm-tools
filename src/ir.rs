@@ -553,9 +553,10 @@ pub struct RefType {
 /// `ArrayGetS`/`ArrayGetU`/`ArraySet`/`ArrayLen`/`ArrayFill`/`ArrayCopy`/
 /// `ArrayInitData`/`ArrayInitElem`), and the C7b GC reference subset — the
 /// label-free ops (`RefAsNonNull`/`CallRef`/`ReturnCallRef`/`RefI31`/`I31GetS`/
-/// `I31GetU`/`RefTest`/`RefCast`/`AnyConvertExtern`/`ExternConvertAny`/`RefEq`).
-/// Any other instruction is rejected catchably by both directions (later tasks
-/// add the label-carrying `br_on_*` GC branches and EH).
+/// `I31GetU`/`RefTest`/`RefCast`/`AnyConvertExtern`/`ExternConvertAny`/`RefEq`),
+/// and the C7c GC branch subset — the label-carrying ops (`BrOnNull`/
+/// `BrOnNonNull`/`BrOnCast`/`BrOnCastFail`). Any other instruction is rejected
+/// catchably by both directions (a later task adds EH).
 //
 // MAINTENANCE (plain comment so the generated .d.ts is unchanged): the three
 // self-referential edge fields (`seq`/`consequent`/`alternative`) do NOT cross
@@ -590,7 +591,8 @@ pub struct InstrDesc {
   pub consequent: Option<Vec<InstrDesc>>,
   /// `IfElse`: the `else`-arm instructions.
   pub alternative: Option<Vec<InstrDesc>>,
-  /// `Br`/`BrIf`: the relative label depth of the branch target
+  /// `Br`/`BrIf`/`BrOnNull`/`BrOnNonNull`/`BrOnCast`/`BrOnCastFail`: the
+  /// relative label depth of the branch target
   /// (`0` = the innermost enclosing block/loop/if).
   pub label: Option<u32>,
   /// `BrTable`: the relative label depths of the table's targets, in order.
@@ -640,7 +642,11 @@ pub struct InstrDesc {
   /// `CallIndirect` and `ReturnCallIndirect` (named `typeIndex`, matching
   /// `BlockType::MultiValue`).
   pub type_index: Option<u32>,
-  /// `RefNull`: the reference type of the null being produced (`(ref null $t)`).
+  /// The reference-type payload: for `RefNull` the type of the null being
+  /// produced (`(ref null $t)`); for `RefTest`/`RefCast` the tested/cast-to
+  /// type; for `BrOnCast`/`BrOnCastFail` the SOURCE/input pair of the cast
+  /// (walrus' `from_nullable` + `from_heap_type` — the target pair is
+  /// `toRefType`).
   pub ref_type: Option<RefType>,
   /// `AtomicRmw`: the read/modify/write operation.
   pub atomic_op: Option<AtomicOp>,
@@ -665,6 +671,9 @@ pub struct InstrDesc {
   /// `ArrayCopy`: the SOURCE array type's stable index (the DESTINATION array
   /// type uses `type_index`), mirroring walrus' `ArrayCopy { dst_ty, src_ty }`.
   pub src_type_index: Option<u32>,
+  /// `BrOnCast`/`BrOnCastFail`: the TARGET pair of the cast (walrus'
+  /// `to_nullable` + `to_heap_type`); the source/input pair uses `refType`.
+  pub to_ref_type: Option<RefType>,
 }
 
 impl InstrDesc {
@@ -705,6 +714,7 @@ impl InstrDesc {
       field: None,
       len: None,
       src_type_index: None,
+      to_ref_type: None,
     }
   }
 }
@@ -1457,6 +1467,7 @@ fn emit_one(
     field,
     len,
     src_type_index,
+    to_ref_type,
   } = d;
 
   match r#type.as_str() {
@@ -1813,6 +1824,26 @@ fn emit_one(
     | "RefCast" | "AnyConvertExtern" | "ExternConvertAny" | "RefEq" => {
       emit_gc_ref(fb, module, seq_id, r#type.as_str(), type_index, ref_type)?;
     }
+    // GC branch instructions (C7c) — the label-carrying subset. Delegated to
+    // `emit_br_on` (an `#[inline(never)]` helper) for the SAME frame-size reason
+    // as `emit_gc_ref`: a `BrOnCast` arm is multi-statement (two required-field
+    // checks, two heap conversions, a five-field struct), so its locals must NOT
+    // inflate this recursive walker's frame (see `MAX_NESTING_DEPTH`). All four
+    // resolve their branch `label` via `label_target` exactly like `Br`;
+    // `BrOnCast`/`BrOnCastFail` also convert their `refType` (FROM) and
+    // `toRefType` (TO) heaps via the module-aware `heap_type_to_walrus_in`.
+    "BrOnNull" | "BrOnNonNull" | "BrOnCast" | "BrOnCastFail" => {
+      emit_br_on(
+        fb,
+        module,
+        seq_id,
+        r#type.as_str(),
+        label,
+        ref_type,
+        to_ref_type,
+        label_stack,
+      )?;
+    }
     // GC struct instructions (C7a). Delegated to `emit_struct` (an
     // `#[inline(never)]` helper) SO THAT the six arms' locals do NOT inflate this
     // recursive walker's frame — the same stack-frame discipline as `emit_atomic`
@@ -1844,7 +1875,7 @@ fn emit_one(
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
          C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
-         atomic, table, reference/tail-call, and GC struct/array/reference subset)"
+         atomic, table, reference/tail-call, and GC struct/array/reference/branch subset)"
       )));
     }
   }
@@ -2290,6 +2321,95 @@ fn emit_gc_ref(
   Ok(())
 }
 
+/// Emit one label-carrying GC branch instruction (C7c). Split out of
+/// [`emit_one`] and marked `#[inline(never)]` for the same frame-size reason as
+/// [`emit_gc_ref`]: a `BrOnCast` arm is multi-statement (two required-field
+/// checks, two heap conversions, a five-field struct), and even
+/// individually-thin arms added in bulk INLINE to the recursive walker were
+/// MEASURED (C7b) to SIGSEGV the -O0 at-cap canary — so all four arms' locals
+/// live in this function's OWN frame.
+///
+/// All four resolve their branch `label` (relative depth, innermost = 0)
+/// through [`label_target`] — the abort guard for an out-of-range depth —
+/// exactly like `Br`. `BrOnCast`/`BrOnCastFail` additionally carry walrus'
+/// `from_*`/`to_*` cast pair: the FROM (source/input) pair reuses `refType` and
+/// the TO (target) pair uses `toRefType`, each heap routed through the
+/// MODULE-AWARE [`heap_type_to_walrus_in`] (the abort guard for a
+/// concrete/exact heap naming a foreign/deleted/entry `TypeId`).
+/// MIRROR-WALRUS: whether the cast is a legal subtype relation (or the target
+/// block's type is compatible) is NOT checked. The caller only routes the four
+/// br_on_* discriminants here, so the final arm is unreachable.
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn emit_br_on(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  seq_id: wir::InstrSeqId,
+  ty_str: &str,
+  label: Option<u32>,
+  ref_type: Option<RefType>,
+  to_ref_type: Option<RefType>,
+  label_stack: &[wir::InstrSeqId],
+) -> Result<()> {
+  match ty_str {
+    "BrOnNull" => {
+      let block = label_target(
+        label.ok_or_else(|| missing("BrOnNull", "label"))?,
+        label_stack,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::BrOnNull { block });
+    }
+    "BrOnNonNull" => {
+      let block = label_target(
+        label.ok_or_else(|| missing("BrOnNonNull", "label"))?,
+        label_stack,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::BrOnNonNull { block });
+    }
+    "BrOnCast" => {
+      let block = label_target(
+        label.ok_or_else(|| missing("BrOnCast", "label"))?,
+        label_stack,
+      )?;
+      let from = ref_type.ok_or_else(|| missing("BrOnCast", "refType"))?;
+      let to = to_ref_type.ok_or_else(|| missing("BrOnCast", "toRefType"))?;
+      let from_heap_type = heap_type_to_walrus_in(module, from.heap)?;
+      let to_heap_type = heap_type_to_walrus_in(module, to.heap)?;
+      fb.instr_seq(seq_id).instr(wir::BrOnCast {
+        block,
+        from_nullable: from.nullable,
+        from_heap_type,
+        to_nullable: to.nullable,
+        to_heap_type,
+      });
+    }
+    "BrOnCastFail" => {
+      let block = label_target(
+        label.ok_or_else(|| missing("BrOnCastFail", "label"))?,
+        label_stack,
+      )?;
+      let from = ref_type.ok_or_else(|| missing("BrOnCastFail", "refType"))?;
+      let to = to_ref_type.ok_or_else(|| missing("BrOnCastFail", "toRefType"))?;
+      let from_heap_type = heap_type_to_walrus_in(module, from.heap)?;
+      let to_heap_type = heap_type_to_walrus_in(module, to.heap)?;
+      fb.instr_seq(seq_id).instr(wir::BrOnCastFail {
+        block,
+        from_nullable: from.nullable,
+        from_heap_type,
+        to_nullable: to.nullable,
+        to_heap_type,
+      });
+    }
+    // Unreachable: `emit_one` only routes the four GC branch discriminants here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not a GC branch instruction"
+      )))
+    }
+  }
+  Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Preflight: a read-only mirror of the emit walk, run BEFORE any arena mutation.
 // ---------------------------------------------------------------------------
@@ -2664,6 +2784,17 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
     | "RefCast" | "AnyConvertExtern" | "ExternConvertAny" | "RefEq" => {
       validate_gc_ref(module, d)?;
     }
+    // GC branch instructions (C7c) — the label-carrying subset. Delegated to
+    // `validate_br_on` (`#[inline(never)]`) for the SAME frame-size reason as
+    // `validate_gc_ref` (keep its locals out of this recursive walker's frame).
+    // Mirrors `emit_br_on` arm-for-arm: all four range-check their `label` via
+    // `validate_label`, and `BrOnCast`/`BrOnCastFail` resolve BOTH their
+    // `refType` (FROM) and `toRefType` (TO) heaps via the module-aware
+    // `heap_type_to_walrus_in` (the abort guards) — a missing preflight
+    // resolution re-opens the emit-abort / partial-mutation defect.
+    "BrOnNull" | "BrOnNonNull" | "BrOnCast" | "BrOnCastFail" => {
+      validate_br_on(module, d, label_len)?;
+    }
     // GC struct/array instructions (C7a). Delegated to `validate_struct`/
     // `validate_array` (`#[inline(never)]`) for the SAME frame-size reason as
     // `validate_atomic` (keep their locals out of this recursive walker's frame).
@@ -2683,7 +2814,7 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
          C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
-         atomic, table, reference/tail-call, and GC struct/array/reference subset)"
+         atomic, table, reference/tail-call, and GC struct/array/reference/branch subset)"
       )));
     }
   }
@@ -3021,6 +3152,76 @@ fn validate_gc_ref(module: &Module, d: &InstrDesc) -> Result<()> {
     other => {
       return Err(Error::from_reason(format!(
         "`{other}` is not a GC reference instruction"
+      )))
+    }
+  }
+  Ok(())
+}
+
+/// Preflight one label-carrying GC branch descriptor (C7c). Split out of
+/// [`validate_one`] and marked `#[inline(never)]` for the same frame-size
+/// reason as [`validate_gc_ref`] (keep its locals out of the recursive walker's
+/// frame). Mirrors [`emit_br_on`] arm-for-arm and in the SAME check order: all
+/// four range-check their `label` via [`validate_label`] (the abort guard for
+/// an out-of-range depth), and `BrOnCast`/`BrOnCastFail` require BOTH `refType`
+/// (FROM) and `toRefType` (TO) and resolve BOTH heaps via the module-aware
+/// [`heap_type_to_walrus_in`] — a concrete/exact heap naming a
+/// foreign/deleted/entry `TypeId` reaching emit panics walrus into an
+/// uncatchable abort, so BOTH heaps must be preflighted, with the SAME
+/// missing-field errors as emit. The caller only routes the four br_on_*
+/// discriminants here, so the final arm is unreachable.
+#[inline(never)]
+fn validate_br_on(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> {
+  match d.r#type.as_str() {
+    "BrOnNull" => {
+      validate_label(
+        d.label.ok_or_else(|| missing("BrOnNull", "label"))?,
+        label_len,
+      )?;
+    }
+    "BrOnNonNull" => {
+      validate_label(
+        d.label.ok_or_else(|| missing("BrOnNonNull", "label"))?,
+        label_len,
+      )?;
+    }
+    "BrOnCast" => {
+      validate_label(
+        d.label.ok_or_else(|| missing("BrOnCast", "label"))?,
+        label_len,
+      )?;
+      let from = d
+        .ref_type
+        .as_ref()
+        .ok_or_else(|| missing("BrOnCast", "refType"))?;
+      let to = d
+        .to_ref_type
+        .as_ref()
+        .ok_or_else(|| missing("BrOnCast", "toRefType"))?;
+      heap_type_to_walrus_in(module, from.heap.clone())?;
+      heap_type_to_walrus_in(module, to.heap.clone())?;
+    }
+    "BrOnCastFail" => {
+      validate_label(
+        d.label.ok_or_else(|| missing("BrOnCastFail", "label"))?,
+        label_len,
+      )?;
+      let from = d
+        .ref_type
+        .as_ref()
+        .ok_or_else(|| missing("BrOnCastFail", "refType"))?;
+      let to = d
+        .to_ref_type
+        .as_ref()
+        .ok_or_else(|| missing("BrOnCastFail", "toRefType"))?;
+      heap_type_to_walrus_in(module, from.heap.clone())?;
+      heap_type_to_walrus_in(module, to.heap.clone())?;
+    }
+    // Unreachable: `validate_one` only routes the four GC branch discriminants
+    // here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not a GC branch instruction"
       )))
     }
   }
@@ -3483,6 +3684,50 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     wir::Instr::AnyConvertExtern(_) => InstrDesc::new("AnyConvertExtern"),
     wir::Instr::ExternConvertAny(_) => InstrDesc::new("ExternConvertAny"),
     wir::Instr::RefEq(_) => InstrDesc::new("RefEq"),
+    // GC branch instructions (C7c) — the label-carrying subset. These are
+    // LEAVES: each references an ENCLOSING block by label and carries NO child
+    // sequence, so they belong here (off the recursion path), built INLINE as
+    // tail expressions like every other leaf arm. Each inverts its absolute
+    // `block` target back to a relative depth via `label_depth` exactly like
+    // `Br`; `BrOnCast`/`BrOnCastFail` rebuild walrus' `from_*`/`to_*` cast pair
+    // as `refType` (FROM) + `toRefType` (TO) through the SAME fallible
+    // walrus -> napi heap conversion as `RefTest`/`RefCast`.
+    wir::Instr::BrOnNull(e) => {
+      let mut d = InstrDesc::new("BrOnNull");
+      d.label = Some(label_depth(e.block, label_stack)?);
+      d
+    }
+    wir::Instr::BrOnNonNull(e) => {
+      let mut d = InstrDesc::new("BrOnNonNull");
+      d.label = Some(label_depth(e.block, label_stack)?);
+      d
+    }
+    wir::Instr::BrOnCast(e) => {
+      let mut d = InstrDesc::new("BrOnCast");
+      d.label = Some(label_depth(e.block, label_stack)?);
+      d.ref_type = Some(RefType {
+        nullable: e.from_nullable,
+        heap: e.from_heap_type.try_into()?,
+      });
+      d.to_ref_type = Some(RefType {
+        nullable: e.to_nullable,
+        heap: e.to_heap_type.try_into()?,
+      });
+      d
+    }
+    wir::Instr::BrOnCastFail(e) => {
+      let mut d = InstrDesc::new("BrOnCastFail");
+      d.label = Some(label_depth(e.block, label_stack)?);
+      d.ref_type = Some(RefType {
+        nullable: e.from_nullable,
+        heap: e.from_heap_type.try_into()?,
+      });
+      d.to_ref_type = Some(RefType {
+        nullable: e.to_nullable,
+        heap: e.to_heap_type.try_into()?,
+      });
+      d
+    }
     // GC struct/array instructions (C7a). These arms build the descriptor INLINE
     // (each `let mut d = InstrDesc::new(..); ..; d` is the arm's tail expression),
     // exactly like every arm above — deliberately NOT via a by-value-returning
@@ -3616,7 +3861,7 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
       return Err(Error::from_reason(format!(
         "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2/C3/C4/C5 \
          core, control-flow, numeric-operator, memory/load-store, atomic, table, \
-         reference/tail-call, and GC struct/array/reference subset is)"
+         reference/tail-call, and GC struct/array/reference/branch subset is)"
       )));
     }
   })

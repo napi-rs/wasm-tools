@@ -3088,3 +3088,273 @@ test('C7b negative: a GC reference descriptor missing a required field throws ca
     message: /`RefCast` instruction is missing its `refType` field/,
   })
 })
+
+// ---------------------------------------------------------------------------
+// C7c: GC branch instructions — the 4 label-carrying ops (br_on_null /
+// br_on_non_null / br_on_cast / br_on_cast_fail), the final GC subset. ONE new
+// InstrDesc field: `toRefType` carries walrus' `to_nullable` + `to_heap_type`
+// TARGET pair of BrOnCast/BrOnCastFail, while the SOURCE/input pair (walrus'
+// `from_nullable` + `from_heap_type`) REUSES `refType`. The branch target
+// REUSES `label` (relative depth, innermost = 0) + the exact Br machinery
+// (label_target / validate_label / label_depth).
+//
+// Same walrus fact as C1b/C2/C7a/C7b: `strict_validate(false)` is a no-op in
+// 0.26.4, so the EXHAUSTIVE test uses the IN-MEMORY read path (buildFunction ->
+// instructions() on the same module). A separate WELL-TYPED body proves the ops
+// survive the emit -> bytes -> re-parse boundary (GC needs
+// onlyStableFeatures(false) on parse).
+//
+// MIRROR-WALRUS: buildFunction only guards process-aborting hazards (the label
+// depth is in range; both cast heaps resolve; required fields present). It does
+// NOT type-check — cast-target subtyping legality and block result-type
+// compatibility are walrus' non-concern and ours.
+// ---------------------------------------------------------------------------
+
+test('C7c EXHAUSTIVE: all 4 GC branch instrs round-trip in-memory', (t) => {
+  const m = empty()
+  const s = m.types.addStruct([...STRUCT_FIELDS]).index
+
+  // Two enclosing Blocks so the branches can name DISTINCT depths (0 = the
+  // inner block, 1 = the outer block) — distinct values catch label mixups.
+  // Each cast op mixes an ABSTRACT and a CONCRETE heap across its from/to pair
+  // with DISTINCT nullabilities on from vs to, so a from/to swap (heap OR
+  // nullability) cannot deep-equal.
+  const inner: InstrDesc[] = [
+    { type: 'BrOnNull', label: 0 },
+    { type: 'BrOnNonNull', label: 1 },
+    {
+      type: 'BrOnCast',
+      label: 0,
+      refType: { nullable: true, heap: { type: 'Abstract', kind: 'Any' } },
+      toRefType: { nullable: false, heap: { type: 'Concrete', typeIndex: s } },
+    },
+    {
+      type: 'BrOnCastFail',
+      label: 1,
+      refType: { nullable: false, heap: { type: 'Concrete', typeIndex: s } },
+      toRefType: { nullable: true, heap: { type: 'Abstract', kind: 'Eq' } },
+    },
+  ]
+  const body: InstrDesc[] = [
+    {
+      type: 'Block',
+      blockType: { type: 'Empty' },
+      seq: [{ type: 'Block', blockType: { type: 'Empty' }, seq: inner }],
+    },
+  ]
+
+  const idx = m.buildFunction([], [], [], body)
+  // Read back from the SAME in-memory module (no emit/re-parse; buildFunction is
+  // MIRROR-WALRUS, so this ill-typed-but-well-formed body builds directly).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+
+  // Targeted guards on top of the deep-equal: the labels came back at their
+  // DISTINCT depths and the from/to pairs were not swapped.
+  const readInner = read[0].seq![0].seq!
+  t.is(readInner.find((dd) => dd.type === 'BrOnNull')!.label, 0)
+  t.is(readInner.find((dd) => dd.type === 'BrOnNonNull')!.label, 1)
+  const cast = readInner.find((dd) => dd.type === 'BrOnCast')!
+  t.true(cast.refType!.nullable)
+  t.is(cast.refType!.heap.type, 'Abstract')
+  t.false(cast.toRefType!.nullable)
+  t.is(cast.toRefType!.heap.type, 'Concrete')
+  t.is((cast.toRefType!.heap as { type: 'Concrete'; typeIndex: number }).typeIndex, s)
+  const castFail = readInner.find((dd) => dd.type === 'BrOnCastFail')!
+  t.false(castFail.refType!.nullable)
+  t.is(castFail.refType!.heap.type, 'Concrete')
+  t.is((castFail.refType!.heap as { type: 'Concrete'; typeIndex: number }).typeIndex, s)
+  t.true(castFail.toRefType!.nullable)
+  t.is(castFail.toRefType!.heap.type, 'Abstract')
+})
+
+test('C7c: a well-typed br_on_null body emits valid GC wasm and round-trips through re-parse', (t) => {
+  const m = empty()
+  // WELL-TYPED: a null anyref feeds br_on_null 0 (targeting the empty-result
+  // enclosing block, which is what br_on_null's on-null branch needs); on
+  // fall-through the non-null (ref any) is dropped.
+  const body: InstrDesc[] = [
+    {
+      type: 'Block',
+      blockType: { type: 'Empty' },
+      seq: [
+        { type: 'RefNull', refType: { nullable: true, heap: { type: 'Abstract', kind: 'Any' } } },
+        { type: 'BrOnNull', label: 0 },
+        { type: 'Drop' },
+      ],
+    },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'gcbranch'
+  const bytes = m.emitWasm(false)
+
+  // Re-parse with GC enabled (onlyStableFeatures(false)); the abstract-heap-only
+  // body needs no index fixup, so the read must deep-equal what was built.
+  const reparsed = new ModuleConfig().onlyStableFeatures(false).strictValidate(false).parse(bytes)
+  const read = reparsed.functions.byName('gcbranch')!.instructions()
+  t.deepEqual(read, body)
+})
+
+test('C7c negative: an out-of-range br_on_* label throws the label-depth error catchably (no abort)', (t) => {
+  const m = empty()
+  // Top-level body => only 1 enclosing block (the function body itself), so
+  // depth 5 is out of range. The message must be label_target/validate_label's
+  // label-depth error — a catchable preflight rejection, not a panic.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnNull', label: 5 }]), {
+    message: /branch label depth 5 is out of range: only 1 enclosing block/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnNonNull', label: 5 }]), {
+    message: /branch label depth 5 is out of range: only 1 enclosing block/,
+  })
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [
+          {
+            type: 'BrOnCast',
+            label: 5,
+            refType: { nullable: true, heap: { type: 'Abstract', kind: 'Any' } },
+            toRefType: { nullable: false, heap: { type: 'Abstract', kind: 'Eq' } },
+          },
+        ],
+      ),
+    { message: /branch label depth 5 is out of range: only 1 enclosing block/ },
+  )
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [
+          {
+            type: 'BrOnCastFail',
+            label: 5,
+            refType: { nullable: true, heap: { type: 'Abstract', kind: 'Any' } },
+            toRefType: { nullable: false, heap: { type: 'Abstract', kind: 'Eq' } },
+          },
+        ],
+      ),
+    { message: /branch label depth 5 is out of range: only 1 enclosing block/ },
+  )
+  // Process survived and the all-or-nothing preflight left the module emittable.
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C7c negative: a br_on_cast(_fail) concrete/exact heap naming a bad type index throws catchably (no abort)', (t) => {
+  const m = empty()
+  // FROM heap nonexistent.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [
+          {
+            type: 'BrOnCast',
+            label: 0,
+            refType: { nullable: true, heap: { type: 'Concrete', typeIndex: 9999 } },
+            toRefType: { nullable: false, heap: { type: 'Abstract', kind: 'Eq' } },
+          },
+        ],
+      ),
+    { message: /no type at index 9999/ },
+  )
+  // TO heap nonexistent — proving the SECOND heap is preflighted too (an
+  // unresolved TypeId reaching emit would abort the process). The Exact path is
+  // guarded by the same resolution.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [
+          {
+            type: 'BrOnCast',
+            label: 0,
+            refType: { nullable: true, heap: { type: 'Abstract', kind: 'Any' } },
+            toRefType: { nullable: false, heap: { type: 'Exact', typeIndex: 9999 } },
+          },
+        ],
+      ),
+    { message: /no type at index 9999/ },
+  )
+  // A MULTI-VALUE result signature records an internal ENTRY type in the raw
+  // arena (the C7a trick): naming it on br_on_cast_fail must be rejected by
+  // resolve_type_id's entry filter too.
+  m.buildFunction(
+    [],
+    [I32, I32],
+    [],
+    [
+      { type: 'Const', value: { type: 'I32', value: 0 } },
+      { type: 'Const', value: { type: 'I32', value: 0 } },
+    ],
+  )
+  const s = m.types.addStruct([...STRUCT_FIELDS]).index
+  let entryIndex = -1
+  for (let i = 0; i < s; i++) {
+    if (m.types.getByIndex(i) === null) {
+      entryIndex = i
+      break
+    }
+  }
+  t.true(entryIndex >= 0, 'expected an internal entry type below the struct index')
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [
+          {
+            type: 'BrOnCastFail',
+            label: 0,
+            refType: { nullable: true, heap: { type: 'Concrete', typeIndex: entryIndex } },
+            toRefType: { nullable: false, heap: { type: 'Concrete', typeIndex: s } },
+          },
+        ],
+      ),
+    { message: new RegExp(`no type at index ${entryIndex}`) },
+  )
+  // Process survived and the failed builds left the module emittable.
+  t.is(1 + 1, 2)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('C7c negative: a GC branch descriptor missing a required field throws catchably', (t) => {
+  const m = empty()
+  // Missing label — all four ops.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnNull' }]), {
+    message: /`BrOnNull` instruction is missing its `label` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnNonNull' }]), {
+    message: /`BrOnNonNull` instruction is missing its `label` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnCast' }]), {
+    message: /`BrOnCast` instruction is missing its `label` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnCastFail' }]), {
+    message: /`BrOnCastFail` instruction is missing its `label` field/,
+  })
+  // Missing refType / toRefType on the cast branches (label valid).
+  const ANY = { nullable: true, heap: { type: 'Abstract', kind: 'Any' } } as const
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnCast', label: 0, toRefType: ANY }]), {
+    message: /`BrOnCast` instruction is missing its `refType` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnCast', label: 0, refType: ANY }]), {
+    message: /`BrOnCast` instruction is missing its `toRefType` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnCastFail', label: 0, toRefType: ANY }]), {
+    message: /`BrOnCastFail` instruction is missing its `refType` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'BrOnCastFail', label: 0, refType: ANY }]), {
+    message: /`BrOnCastFail` instruction is missing its `toRefType` field/,
+  })
+})
