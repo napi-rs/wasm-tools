@@ -568,13 +568,13 @@ pub struct CatchClause {
   pub kind: String,
   /// The caught exception tag's stable index. Required for the modern
   /// `"Catch"`/`"CatchRef"` and the legacy `"LegacyCatch"`; absent otherwise.
-  pub tag: Option<u32>,
+  pub tag: Option<f64>,
   /// The relative label depth of the block a MODERN clause branches to on a catch
   /// (`0` = the innermost block ENCLOSING the `try_table` — clause labels resolve
   /// against the OUTER scope, NOT the try body). Required for every modern kind;
   /// absent for every legacy kind (legacy handlers are child sequences, not
   /// branch targets).
-  pub label: Option<u32>,
+  pub label: Option<f64>,
   /// LEGACY `"LegacyCatch"`/`"LegacyCatchAll"`: the handler body instructions (a
   /// child `InstrSeq`, a SIBLING of the try body). Required for those two kinds,
   /// absent for every other kind. This is the nested edge driven by the iterative
@@ -583,7 +583,7 @@ pub struct CatchClause {
   /// LEGACY `"LegacyDelegate"`: the relative depth this clause delegates to — a
   /// RAW pass-through `u32` walrus never resolves (NOT a resolved `label`).
   /// Required for `"LegacyDelegate"`, absent otherwise.
-  pub relative_depth: Option<u32>,
+  pub relative_depth: Option<f64>,
   /// LEGACY `"LegacyCatch"`/`"LegacyCatchAll"`: the handler `InstrSeq`'s own type
   /// signature (each legacy handler carries its OWN `InstrSeqType`, distinct from
   /// the try's). Captured for a faithful in-memory round-trip; absent for every
@@ -652,12 +652,12 @@ pub struct InstrDesc {
   /// `Const`: the constant value.
   pub value: Option<ConstValue>,
   /// `LocalGet`/`LocalSet`/`LocalTee`: the referenced local's stable index.
-  pub local: Option<u32>,
+  pub local: Option<f64>,
   /// `GlobalGet`/`GlobalSet`: the referenced global's stable index.
-  pub global: Option<u32>,
+  pub global: Option<f64>,
   /// The referenced function's stable index, for `Call`, `RefFunc` (`ref.func`),
   /// and `ReturnCall` (`return_call`).
-  pub func: Option<u32>,
+  pub func: Option<f64>,
   /// `Select`: the optional result type of a typed `select` (absent => a plain,
   /// untyped `select`).
   pub select_type: Option<ValType>,
@@ -672,11 +672,11 @@ pub struct InstrDesc {
   /// `Br`/`BrIf`/`BrOnNull`/`BrOnNonNull`/`BrOnCast`/`BrOnCastFail`: the
   /// relative label depth of the branch target
   /// (`0` = the innermost enclosing block/loop/if).
-  pub label: Option<u32>,
+  pub label: Option<f64>,
   /// `BrTable`: the relative label depths of the table's targets, in order.
-  pub labels: Option<Vec<u32>>,
+  pub labels: Option<Vec<f64>>,
   /// `BrTable`: the relative label depth of the default (fallthrough) target.
-  pub default_label: Option<u32>,
+  pub default_label: Option<f64>,
   /// `Binop`/`Unop`/`TernOp`: the operator name (the walrus
   /// `BinaryOp`/`UnaryOp`/`TernaryOp` variant name, e.g. `"I32Add"`, `"I32Eqz"`,
   /// `"F32x4RelaxedMadd"`). The `type` discriminant selects which of the three
@@ -691,12 +691,12 @@ pub struct InstrDesc {
   /// The referenced memory's stable index, for
   /// `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`/
   /// `LoadSimd`, and the DESTINATION memory of `MemoryCopy`.
-  pub memory: Option<u32>,
+  pub memory: Option<f64>,
   /// `MemoryCopy`: the SOURCE memory's stable index (the destination uses
   /// `memory`).
-  pub src_memory: Option<u32>,
+  pub src_memory: Option<f64>,
   /// `MemoryInit`/`DataDrop`: the referenced data segment's stable index.
-  pub data: Option<u32>,
+  pub data: Option<f64>,
   /// `Load`/`Store`/`LoadSimd`: the alignment and offset immediate.
   pub mem_arg: Option<MemArg>,
   /// `Load`: the kind of load (width, atomicity, extension).
@@ -710,16 +710,16 @@ pub struct InstrDesc {
   /// `TableGet`/`TableSet`/`TableGrow`/`TableSize`/`TableFill`/`TableInit`, the
   /// DESTINATION table of `TableCopy`, and the table of `CallIndirect` /
   /// `ReturnCallIndirect`.
-  pub table: Option<u32>,
+  pub table: Option<f64>,
   /// `TableCopy`: the SOURCE table's stable index (the destination uses
   /// `table`).
-  pub src_table: Option<u32>,
+  pub src_table: Option<f64>,
   /// `TableInit`/`ElemDrop`: the referenced element segment's stable index.
-  pub elem: Option<u32>,
+  pub elem: Option<f64>,
   /// The stable index of the function type being called through the table, for
   /// `CallIndirect` and `ReturnCallIndirect` (named `typeIndex`, matching
   /// `BlockType::MultiValue`).
-  pub type_index: Option<u32>,
+  pub type_index: Option<f64>,
   /// The reference-type payload: for `RefNull` the type of the null being
   /// produced (`(ref null $t)`); for `RefTest`/`RefCast` the tested/cast-to
   /// type; for `BrOnCast`/`BrOnCastFail` the SOURCE/input pair of the cast
@@ -742,18 +742,18 @@ pub struct InstrDesc {
   /// `StructGet`/`StructGetS`/`StructGetU`/`StructSet`: the field index within
   /// the GC struct. MIRROR-WALRUS: a plain immediate, stored verbatim and NOT
   /// range-checked against the struct's field count.
-  pub field: Option<u32>,
+  pub field: Option<f64>,
   /// `ArrayNewFixed`: the number of elements taken from the stack (a statically
   /// known immediate). MIRROR-WALRUS: stored verbatim, not validated.
   pub len: Option<u32>,
   /// `ArrayCopy`: the SOURCE array type's stable index (the DESTINATION array
   /// type uses `type_index`), mirroring walrus' `ArrayCopy { dst_ty, src_ty }`.
-  pub src_type_index: Option<u32>,
+  pub src_type_index: Option<f64>,
   /// `BrOnCast`/`BrOnCastFail`: the TARGET pair of the cast (walrus'
   /// `to_nullable` + `to_heap_type`); the source/input pair uses `refType`.
   pub to_ref_type: Option<RefType>,
   /// `Throw`: the thrown exception tag's stable index.
-  pub tag: Option<u32>,
+  pub tag: Option<f64>,
   /// `TryTable` (modern) / `Try` (legacy): the catch clauses of the try block, in
   /// order. Absent (or empty) is a legal catch-less try. Both reuse `block_type` +
   /// `seq` (the try body) — each is a `Block` twin — so those are NOT re-declared
@@ -761,7 +761,7 @@ pub struct InstrDesc {
   pub catches: Option<Vec<CatchClause>>,
   /// `Rethrow` (legacy): the relative depth of the caught exception to rethrow — a
   /// RAW pass-through `u32` walrus never resolves (NOT a resolved branch `label`).
-  pub relative_depth: Option<u32>,
+  pub relative_depth: Option<f64>,
 }
 
 impl InstrDesc {
@@ -1731,33 +1731,51 @@ fn emit_leaf(
       fb.instr_seq(seq_id).instr(wir::Const { value: wv });
     }
     "LocalGet" => {
-      let id = local_id_at(module, local.ok_or_else(|| missing("LocalGet", "local"))?)?;
+      let id = local_id_at(
+        module,
+        checked_index(local.ok_or_else(|| missing("LocalGet", "local"))?, "local")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::LocalGet { local: id });
     }
     "LocalSet" => {
-      let id = local_id_at(module, local.ok_or_else(|| missing("LocalSet", "local"))?)?;
+      let id = local_id_at(
+        module,
+        checked_index(local.ok_or_else(|| missing("LocalSet", "local"))?, "local")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::LocalSet { local: id });
     }
     "LocalTee" => {
-      let id = local_id_at(module, local.ok_or_else(|| missing("LocalTee", "local"))?)?;
+      let id = local_id_at(
+        module,
+        checked_index(local.ok_or_else(|| missing("LocalTee", "local"))?, "local")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::LocalTee { local: id });
     }
     "GlobalGet" => {
       let id = global_id_at(
         module,
-        global.ok_or_else(|| missing("GlobalGet", "global"))?,
+        checked_index(
+          global.ok_or_else(|| missing("GlobalGet", "global"))?,
+          "global",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::GlobalGet { global: id });
     }
     "GlobalSet" => {
       let id = global_id_at(
         module,
-        global.ok_or_else(|| missing("GlobalSet", "global"))?,
+        checked_index(
+          global.ok_or_else(|| missing("GlobalSet", "global"))?,
+          "global",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::GlobalSet { global: id });
     }
     "Call" => {
-      let id = function_id_at(module, func.ok_or_else(|| missing("Call", "func"))?)?;
+      let id = function_id_at(
+        module,
+        checked_index(func.ok_or_else(|| missing("Call", "func"))?, "func")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::Call { func: id });
     }
     "Select" => {
@@ -1774,32 +1792,48 @@ fn emit_leaf(
     // this recursive walker's frame). `Throw` resolves its `tag` via `tag_id_at`
     // (the abort guard); `ThrowRef` is fieldless.
     "Throw" | "ThrowRef" => {
+      // Pass `tag` RAW: `emit_eh` narrows it INSIDE the `Throw` arm only, so the
+      // fieldless `ThrowRef` never `checked_index`es an irrelevant `tag` (which
+      // preflight's `validate_eh` also ignores) — keeps emit-checked ==
+      // preflight-checked == the fields the opcode consumes.
       emit_eh(fb, module, seq_id, r#type.as_str(), tag)?;
     }
     // Legacy EH leaf op (C8b): `Rethrow` carries a RAW `relativeDepth` `u32` walrus
     // never resolves (§A.3) — emitted verbatim, NO `label_target`/`label_stack`. A
     // missing depth is a catchable representation error, not an abort surface.
     "Rethrow" => {
-      let relative_depth = relative_depth.ok_or_else(|| missing("Rethrow", "relativeDepth"))?;
+      let relative_depth = checked_index(
+        relative_depth.ok_or_else(|| missing("Rethrow", "relativeDepth"))?,
+        "relativeDepth",
+      )?;
       fb.instr_seq(seq_id).instr(wir::Rethrow { relative_depth });
     }
     "Br" => {
-      let target = label_target(label.ok_or_else(|| missing("Br", "label"))?, label_stack)?;
+      let target = label_target(
+        checked_index(label.ok_or_else(|| missing("Br", "label"))?, "label")?,
+        label_stack,
+      )?;
       fb.instr_seq(seq_id).instr(wir::Br { block: target });
     }
     "BrIf" => {
-      let target = label_target(label.ok_or_else(|| missing("BrIf", "label"))?, label_stack)?;
+      let target = label_target(
+        checked_index(label.ok_or_else(|| missing("BrIf", "label"))?, "label")?,
+        label_stack,
+      )?;
       fb.instr_seq(seq_id).instr(wir::BrIf { block: target });
     }
     "BrTable" => {
       let labels = labels.ok_or_else(|| missing("BrTable", "labels"))?;
       let default = label_target(
-        default_label.ok_or_else(|| missing("BrTable", "defaultLabel"))?,
+        checked_index(
+          default_label.ok_or_else(|| missing("BrTable", "defaultLabel"))?,
+          "defaultLabel",
+        )?,
         label_stack,
       )?;
       let blocks = labels
         .into_iter()
-        .map(|d| label_target(d, label_stack))
+        .map(|d| label_target(checked_index(d, "labels")?, label_stack))
         .collect::<Result<Vec<_>>>()?;
       fb.instr_seq(seq_id).instr(wir::BrTable {
         blocks: blocks.into_boxed_slice(),
@@ -1840,56 +1874,86 @@ fn emit_leaf(
     "MemorySize" => {
       let memory = memory_id_at(
         module,
-        memory.ok_or_else(|| missing("MemorySize", "memory"))?,
+        checked_index(
+          memory.ok_or_else(|| missing("MemorySize", "memory"))?,
+          "memory",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::MemorySize { memory });
     }
     "MemoryGrow" => {
       let memory = memory_id_at(
         module,
-        memory.ok_or_else(|| missing("MemoryGrow", "memory"))?,
+        checked_index(
+          memory.ok_or_else(|| missing("MemoryGrow", "memory"))?,
+          "memory",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::MemoryGrow { memory });
     }
     "MemoryInit" => {
       let memory = memory_id_at(
         module,
-        memory.ok_or_else(|| missing("MemoryInit", "memory"))?,
+        checked_index(
+          memory.ok_or_else(|| missing("MemoryInit", "memory"))?,
+          "memory",
+        )?,
       )?;
-      let data = data_id_at(module, data.ok_or_else(|| missing("MemoryInit", "data"))?)?;
+      let data = data_id_at(
+        module,
+        checked_index(data.ok_or_else(|| missing("MemoryInit", "data"))?, "data")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::MemoryInit { memory, data });
     }
     "DataDrop" => {
-      let data = data_id_at(module, data.ok_or_else(|| missing("DataDrop", "data"))?)?;
+      let data = data_id_at(
+        module,
+        checked_index(data.ok_or_else(|| missing("DataDrop", "data"))?, "data")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::DataDrop { data });
     }
     "MemoryCopy" => {
       // `memory` is the DESTINATION, `srcMemory` the SOURCE (see `InstrDesc`).
       let dst = memory_id_at(
         module,
-        memory.ok_or_else(|| missing("MemoryCopy", "memory"))?,
+        checked_index(
+          memory.ok_or_else(|| missing("MemoryCopy", "memory"))?,
+          "memory",
+        )?,
       )?;
       let src = memory_id_at(
         module,
-        src_memory.ok_or_else(|| missing("MemoryCopy", "srcMemory"))?,
+        checked_index(
+          src_memory.ok_or_else(|| missing("MemoryCopy", "srcMemory"))?,
+          "srcMemory",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::MemoryCopy { src, dst });
     }
     "MemoryFill" => {
       let memory = memory_id_at(
         module,
-        memory.ok_or_else(|| missing("MemoryFill", "memory"))?,
+        checked_index(
+          memory.ok_or_else(|| missing("MemoryFill", "memory"))?,
+          "memory",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::MemoryFill { memory });
     }
     "Load" => {
-      let memory = memory_id_at(module, memory.ok_or_else(|| missing("Load", "memory"))?)?;
+      let memory = memory_id_at(
+        module,
+        checked_index(memory.ok_or_else(|| missing("Load", "memory"))?, "memory")?,
+      )?;
       let kind = load_kind_to_walrus(&load_kind.ok_or_else(|| missing("Load", "loadKind"))?);
       let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("Load", "memArg"))?)?;
       fb.instr_seq(seq_id).instr(wir::Load { memory, kind, arg });
     }
     "Store" => {
-      let memory = memory_id_at(module, memory.ok_or_else(|| missing("Store", "memory"))?)?;
+      let memory = memory_id_at(
+        module,
+        checked_index(memory.ok_or_else(|| missing("Store", "memory"))?, "memory")?,
+      )?;
       let kind = store_kind_to_walrus(&store_kind.ok_or_else(|| missing("Store", "storeKind"))?);
       let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("Store", "memArg"))?)?;
       fb.instr_seq(seq_id).instr(wir::Store { memory, kind, arg });
@@ -1900,6 +1964,8 @@ fn emit_leaf(
     // do NOT inflate this recursive walker's frame — the same stack-frame
     // discipline as `emit_atomic`/`emit_shuffle` (see `MAX_NESTING_DEPTH`).
     "LoadSimd" => {
+      // Pass `memory` RAW: `emit_load_simd` narrows it INSIDE (LoadSimd always
+      // consumes it, matching preflight).
       emit_load_simd(fb, module, seq_id, memory, load_simd_kind, mem_arg)?;
     }
     // Atomic (threads) instructions. Delegated to `emit_atomic` (a separate,
@@ -1910,6 +1976,10 @@ fn emit_leaf(
     // level. Keeping the atomic locals in their own frame preserves the
     // `MAX_NESTING_DEPTH` headroom the deep-nesting abort guard depends on.
     "AtomicRmw" | "Cmpxchg" | "AtomicNotify" | "AtomicWait" | "AtomicFence" => {
+      // Pass `memory` RAW: `emit_atomic` narrows it INSIDE the four
+      // memory-bearing arms only, so the fieldless `AtomicFence` never
+      // `checked_index`es an irrelevant `memory` (which preflight's
+      // `validate_atomic` also ignores).
       emit_atomic(
         fb,
         module,
@@ -1923,41 +1993,71 @@ fn emit_leaf(
       )?;
     }
     "TableGet" => {
-      let table = table_id_at(module, table.ok_or_else(|| missing("TableGet", "table"))?)?;
+      let table = table_id_at(
+        module,
+        checked_index(table.ok_or_else(|| missing("TableGet", "table"))?, "table")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::TableGet { table });
     }
     "TableSet" => {
-      let table = table_id_at(module, table.ok_or_else(|| missing("TableSet", "table"))?)?;
+      let table = table_id_at(
+        module,
+        checked_index(table.ok_or_else(|| missing("TableSet", "table"))?, "table")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::TableSet { table });
     }
     "TableGrow" => {
-      let table = table_id_at(module, table.ok_or_else(|| missing("TableGrow", "table"))?)?;
+      let table = table_id_at(
+        module,
+        checked_index(table.ok_or_else(|| missing("TableGrow", "table"))?, "table")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::TableGrow { table });
     }
     "TableSize" => {
-      let table = table_id_at(module, table.ok_or_else(|| missing("TableSize", "table"))?)?;
+      let table = table_id_at(
+        module,
+        checked_index(table.ok_or_else(|| missing("TableSize", "table"))?, "table")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::TableSize { table });
     }
     "TableFill" => {
-      let table = table_id_at(module, table.ok_or_else(|| missing("TableFill", "table"))?)?;
+      let table = table_id_at(
+        module,
+        checked_index(table.ok_or_else(|| missing("TableFill", "table"))?, "table")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::TableFill { table });
     }
     "TableInit" => {
-      let table = table_id_at(module, table.ok_or_else(|| missing("TableInit", "table"))?)?;
-      let elem = element_id_at(module, elem.ok_or_else(|| missing("TableInit", "elem"))?)?;
+      let table = table_id_at(
+        module,
+        checked_index(table.ok_or_else(|| missing("TableInit", "table"))?, "table")?,
+      )?;
+      let elem = element_id_at(
+        module,
+        checked_index(elem.ok_or_else(|| missing("TableInit", "elem"))?, "elem")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::TableInit { table, elem });
     }
     "TableCopy" => {
       // `table` is the DESTINATION, `srcTable` the SOURCE (see `InstrDesc`).
-      let dst = table_id_at(module, table.ok_or_else(|| missing("TableCopy", "table"))?)?;
+      let dst = table_id_at(
+        module,
+        checked_index(table.ok_or_else(|| missing("TableCopy", "table"))?, "table")?,
+      )?;
       let src = table_id_at(
         module,
-        src_table.ok_or_else(|| missing("TableCopy", "srcTable"))?,
+        checked_index(
+          src_table.ok_or_else(|| missing("TableCopy", "srcTable"))?,
+          "srcTable",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::TableCopy { src, dst });
     }
     "ElemDrop" => {
-      let elem = element_id_at(module, elem.ok_or_else(|| missing("ElemDrop", "elem"))?)?;
+      let elem = element_id_at(
+        module,
+        checked_index(elem.ok_or_else(|| missing("ElemDrop", "elem"))?, "elem")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::ElemDrop { elem });
     }
     "CallIndirect" => {
@@ -1967,11 +2067,17 @@ fn emit_leaf(
       // rather than an emit-time abort.
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("CallIndirect", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("CallIndirect", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       let table = table_id_at(
         module,
-        table.ok_or_else(|| missing("CallIndirect", "table"))?,
+        checked_index(
+          table.ok_or_else(|| missing("CallIndirect", "table"))?,
+          "table",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::CallIndirect { ty, table });
     }
@@ -1998,11 +2104,17 @@ fn emit_leaf(
     "RefFunc" => {
       // Reuse `function_id_at` (the abort guard). MIRROR-WALRUS: whether the func
       // is "declared" for `ref.func` is NOT our concern.
-      let func = function_id_at(module, func.ok_or_else(|| missing("RefFunc", "func"))?)?;
+      let func = function_id_at(
+        module,
+        checked_index(func.ok_or_else(|| missing("RefFunc", "func"))?, "func")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::RefFunc { func });
     }
     "ReturnCall" => {
-      let func = function_id_at(module, func.ok_or_else(|| missing("ReturnCall", "func"))?)?;
+      let func = function_id_at(
+        module,
+        checked_index(func.ok_or_else(|| missing("ReturnCall", "func"))?, "func")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::ReturnCall { func });
     }
     "ReturnCallIndirect" => {
@@ -2012,11 +2124,17 @@ fn emit_leaf(
       // NOT checked.
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ReturnCallIndirect", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ReturnCallIndirect", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       let table = table_id_at(
         module,
-        table.ok_or_else(|| missing("ReturnCallIndirect", "table"))?,
+        checked_index(
+          table.ok_or_else(|| missing("ReturnCallIndirect", "table"))?,
+          "table",
+        )?,
       )?;
       fb.instr_seq(seq_id)
         .instr(wir::ReturnCallIndirect { ty, table });
@@ -2029,6 +2147,10 @@ fn emit_leaf(
     // canary SIGSEGV'd), so their locals live in the helper's own frame instead.
     "RefAsNonNull" | "CallRef" | "ReturnCallRef" | "RefI31" | "I31GetS" | "I31GetU" | "RefTest"
     | "RefCast" | "AnyConvertExtern" | "ExternConvertAny" | "RefEq" => {
+      // Pass `type_index` RAW: `emit_gc_ref` narrows it INSIDE the
+      // `CallRef`/`ReturnCallRef` arms only, so the nine fieldless / ref-type
+      // ops never `checked_index` an irrelevant `type_index` (which preflight's
+      // `validate_gc_ref` also ignores).
       emit_gc_ref(fb, module, seq_id, r#type.as_str(), type_index, ref_type)?;
     }
     // GC branch instructions (C7c) — the label-carrying subset. Delegated to
@@ -2040,6 +2162,8 @@ fn emit_leaf(
     // `BrOnCast`/`BrOnCastFail` also convert their `refType` (FROM) and
     // `toRefType` (TO) heaps via the module-aware `heap_type_to_walrus_in`.
     "BrOnNull" | "BrOnNonNull" | "BrOnCast" | "BrOnCastFail" => {
+      // Pass `label` RAW: `emit_br_on` narrows it INSIDE (all four br_on ops
+      // consume it, matching preflight's `validate_br_on`).
       emit_br_on(
         fb,
         module,
@@ -2057,6 +2181,10 @@ fn emit_leaf(
     // (see `MAX_NESTING_DEPTH`). Each resolves its `TypeId` via `resolve_type_id`
     // (the abort guard) exactly like `CallIndirect`.
     "StructNew" | "StructNewDefault" | "StructGet" | "StructGetS" | "StructGetU" | "StructSet" => {
+      // Pass `type_index`/`field` RAW: `emit_struct` narrows each INSIDE the arm
+      // that consumes it, so `StructNew`/`StructNewDefault` never
+      // `checked_index` an irrelevant `field` (which preflight's
+      // `validate_struct` also ignores for those two).
       emit_struct(fb, module, seq_id, r#type.as_str(), type_index, field)?;
     }
     // GC array instructions (C7a). Delegated to `emit_array` (an
@@ -2066,6 +2194,10 @@ fn emit_leaf(
     "ArrayNew" | "ArrayNewDefault" | "ArrayNewFixed" | "ArrayNewData" | "ArrayNewElem"
     | "ArrayGet" | "ArrayGetS" | "ArrayGetU" | "ArraySet" | "ArrayLen" | "ArrayFill"
     | "ArrayCopy" | "ArrayInitData" | "ArrayInitElem" => {
+      // Pass every index field RAW: `emit_array` narrows each INSIDE the arm(s)
+      // that consume it, so e.g. the fieldless `ArrayLen` never `checked_index`es
+      // an irrelevant `type_index`/`data`/`elem`, and only `ArrayCopy` checks
+      // `src_type_index` (matching preflight's `validate_array` arm-for-arm).
       emit_array(
         fb,
         module,
@@ -2145,28 +2277,43 @@ fn try_table_catches_to_walrus(
   for c in catches {
     let clause = match c.kind.as_str() {
       "Catch" => wir::TryTableCatch::Catch {
-        tag: tag_id_at(module, c.tag.ok_or_else(|| missing("Catch", "tag"))?)?,
+        tag: tag_id_at(
+          module,
+          checked_index(c.tag.ok_or_else(|| missing("Catch", "tag"))?, "tag")?,
+        )?,
         label: label_target(
-          c.label.ok_or_else(|| missing("Catch", "label"))?,
+          checked_index(c.label.ok_or_else(|| missing("Catch", "label"))?, "label")?,
           label_stack,
         )?,
       },
       "CatchRef" => wir::TryTableCatch::CatchRef {
-        tag: tag_id_at(module, c.tag.ok_or_else(|| missing("CatchRef", "tag"))?)?,
+        tag: tag_id_at(
+          module,
+          checked_index(c.tag.ok_or_else(|| missing("CatchRef", "tag"))?, "tag")?,
+        )?,
         label: label_target(
-          c.label.ok_or_else(|| missing("CatchRef", "label"))?,
+          checked_index(
+            c.label.ok_or_else(|| missing("CatchRef", "label"))?,
+            "label",
+          )?,
           label_stack,
         )?,
       },
       "CatchAll" => wir::TryTableCatch::CatchAll {
         label: label_target(
-          c.label.ok_or_else(|| missing("CatchAll", "label"))?,
+          checked_index(
+            c.label.ok_or_else(|| missing("CatchAll", "label"))?,
+            "label",
+          )?,
           label_stack,
         )?,
       },
       "CatchAllRef" => wir::TryTableCatch::CatchAllRef {
         label: label_target(
-          c.label.ok_or_else(|| missing("CatchAllRef", "label"))?,
+          checked_index(
+            c.label.ok_or_else(|| missing("CatchAllRef", "label"))?,
+            "label",
+          )?,
           label_stack,
         )?,
       },
@@ -2188,11 +2335,17 @@ fn emit_eh(
   module: &Module,
   seq_id: wir::InstrSeqId,
   ty: &str,
-  tag: Option<u32>,
+  // RAW carrier: narrowed via `checked_index` ONLY in the `Throw` arm — the
+  // fieldless `ThrowRef` never touches it, so an irrelevant poisoned `tag` is
+  // ignored by BOTH emit and preflight (`validate_eh`).
+  tag: Option<f64>,
 ) -> Result<()> {
   match ty {
     "Throw" => {
-      let id = tag_id_at(module, tag.ok_or_else(|| missing("Throw", "tag"))?)?;
+      let id = tag_id_at(
+        module,
+        checked_index(tag.ok_or_else(|| missing("Throw", "tag"))?, "tag")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::Throw { tag: id });
     }
     "ThrowRef" => {
@@ -2266,7 +2419,10 @@ fn legacy_catches_to_walrus(
   for c in catches {
     let clause = match c.kind.as_str() {
       "LegacyCatch" => {
-        let tag = tag_id_at(module, c.tag.ok_or_else(|| missing("LegacyCatch", "tag"))?)?;
+        let tag = tag_id_at(
+          module,
+          checked_index(c.tag.ok_or_else(|| missing("LegacyCatch", "tag"))?, "tag")?,
+        )?;
         let ty = to_instr_seq_type(module, c.block_type)?;
         let handler = fb.dangling_instr_seq(ty).id();
         emit_desc(
@@ -2291,9 +2447,11 @@ fn legacy_catches_to_walrus(
         wir::LegacyCatch::CatchAll { handler }
       }
       "LegacyDelegate" => wir::LegacyCatch::Delegate {
-        relative_depth: c
-          .relative_depth
-          .ok_or_else(|| missing("LegacyDelegate", "relativeDepth"))?,
+        relative_depth: checked_index(
+          c.relative_depth
+            .ok_or_else(|| missing("LegacyDelegate", "relativeDepth"))?,
+          "relativeDepth",
+        )?,
       },
       other => return Err(unknown_legacy_catch_kind(other)),
     };
@@ -2317,7 +2475,10 @@ fn emit_atomic(
   module: &Module,
   seq_id: wir::InstrSeqId,
   ty: &str,
-  memory: Option<u32>,
+  // RAW carrier: narrowed via `checked_index` ONLY in the four memory-bearing
+  // arms — the fieldless `AtomicFence` never touches it, so an irrelevant
+  // poisoned `memory` is ignored by BOTH emit and preflight (`validate_atomic`).
+  memory: Option<f64>,
   atomic_op: Option<AtomicOp>,
   atomic_width: Option<AtomicWidth>,
   mem_arg: Option<MemArg>,
@@ -2327,7 +2488,10 @@ fn emit_atomic(
     "AtomicRmw" => {
       let memory = memory_id_at(
         module,
-        memory.ok_or_else(|| missing("AtomicRmw", "memory"))?,
+        checked_index(
+          memory.ok_or_else(|| missing("AtomicRmw", "memory"))?,
+          "memory",
+        )?,
       )?;
       let op = atomic_op_to_walrus(&atomic_op.ok_or_else(|| missing("AtomicRmw", "atomicOp"))?);
       let width =
@@ -2341,7 +2505,13 @@ fn emit_atomic(
       });
     }
     "Cmpxchg" => {
-      let memory = memory_id_at(module, memory.ok_or_else(|| missing("Cmpxchg", "memory"))?)?;
+      let memory = memory_id_at(
+        module,
+        checked_index(
+          memory.ok_or_else(|| missing("Cmpxchg", "memory"))?,
+          "memory",
+        )?,
+      )?;
       let width =
         atomic_width_to_walrus(&atomic_width.ok_or_else(|| missing("Cmpxchg", "atomicWidth"))?);
       let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("Cmpxchg", "memArg"))?)?;
@@ -2351,7 +2521,10 @@ fn emit_atomic(
     "AtomicNotify" => {
       let memory = memory_id_at(
         module,
-        memory.ok_or_else(|| missing("AtomicNotify", "memory"))?,
+        checked_index(
+          memory.ok_or_else(|| missing("AtomicNotify", "memory"))?,
+          "memory",
+        )?,
       )?;
       let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("AtomicNotify", "memArg"))?)?;
       fb.instr_seq(seq_id)
@@ -2360,7 +2533,10 @@ fn emit_atomic(
     "AtomicWait" => {
       let memory = memory_id_at(
         module,
-        memory.ok_or_else(|| missing("AtomicWait", "memory"))?,
+        checked_index(
+          memory.ok_or_else(|| missing("AtomicWait", "memory"))?,
+          "memory",
+        )?,
       )?;
       let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("AtomicWait", "memArg"))?)?;
       let sixty_four = sixty_four.ok_or_else(|| missing("AtomicWait", "sixtyFour"))?;
@@ -2412,11 +2588,19 @@ fn emit_load_simd(
   fb: &mut FunctionBuilder,
   module: &Module,
   seq_id: wir::InstrSeqId,
-  memory: Option<u32>,
+  // RAW carrier: narrowed via `checked_index` inline (LoadSimd always consumes
+  // it, matching preflight).
+  memory: Option<f64>,
   load_simd_kind: Option<LoadSimdKind>,
   mem_arg: Option<MemArg>,
 ) -> Result<()> {
-  let memory = memory_id_at(module, memory.ok_or_else(|| missing("LoadSimd", "memory"))?)?;
+  let memory = memory_id_at(
+    module,
+    checked_index(
+      memory.ok_or_else(|| missing("LoadSimd", "memory"))?,
+      "memory",
+    )?,
+  )?;
   let kind =
     load_simd_kind_to_walrus(&load_simd_kind.ok_or_else(|| missing("LoadSimd", "loadSimdKind"))?);
   let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("LoadSimd", "memArg"))?)?;
@@ -2440,54 +2624,82 @@ fn emit_struct(
   module: &Module,
   seq_id: wir::InstrSeqId,
   ty_str: &str,
-  type_index: Option<u32>,
-  field: Option<u32>,
+  // RAW carriers: each narrowed via `checked_index` ONLY in the arm that
+  // consumes it. `type_index` is consumed by all six; `field` ONLY by the
+  // get/set ops — so `StructNew`/`StructNewDefault` never touch an irrelevant
+  // `field` (which preflight's `validate_struct` also ignores for those two).
+  type_index: Option<f64>,
+  field: Option<f64>,
 ) -> Result<()> {
   match ty_str {
     "StructNew" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("StructNew", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("StructNew", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::StructNew { ty });
     }
     "StructNewDefault" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("StructNewDefault", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("StructNewDefault", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::StructNewDefault { ty });
     }
     "StructGet" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("StructGet", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("StructGet", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      let field = field.ok_or_else(|| missing("StructGet", "field"))?;
+      let field = checked_index(field.ok_or_else(|| missing("StructGet", "field"))?, "field")?;
       fb.instr_seq(seq_id).instr(wir::StructGet { ty, field });
     }
     "StructGetS" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("StructGetS", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("StructGetS", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      let field = field.ok_or_else(|| missing("StructGetS", "field"))?;
+      let field = checked_index(
+        field.ok_or_else(|| missing("StructGetS", "field"))?,
+        "field",
+      )?;
       fb.instr_seq(seq_id).instr(wir::StructGetS { ty, field });
     }
     "StructGetU" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("StructGetU", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("StructGetU", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      let field = field.ok_or_else(|| missing("StructGetU", "field"))?;
+      let field = checked_index(
+        field.ok_or_else(|| missing("StructGetU", "field"))?,
+        "field",
+      )?;
       fb.instr_seq(seq_id).instr(wir::StructGetU { ty, field });
     }
     "StructSet" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("StructSet", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("StructSet", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      let field = field.ok_or_else(|| missing("StructSet", "field"))?;
+      let field = checked_index(field.ok_or_else(|| missing("StructSet", "field"))?, "field")?;
       fb.instr_seq(seq_id).instr(wir::StructSet { ty, field });
     }
     // Unreachable: `emit_one` only routes the six struct discriminants here.
@@ -2516,31 +2728,47 @@ fn emit_array(
   module: &Module,
   seq_id: wir::InstrSeqId,
   ty_str: &str,
-  type_index: Option<u32>,
-  src_type_index: Option<u32>,
+  // RAW carriers: each narrowed via `checked_index` ONLY in the arm(s) that
+  // consume it — `type_index` in every type-bearing arm (NOT the fieldless
+  // `ArrayLen`), `src_type_index` ONLY in `ArrayCopy`, `data` ONLY in the
+  // data ops, `elem` ONLY in the elem ops — so an irrelevant poisoned index
+  // (e.g. `ArrayLen.typeIndex`, `ArrayGet.data`) is ignored by BOTH emit and
+  // preflight (`validate_array`). `len` is a plain immediate (never an arena
+  // index), left as `Option<u32>` and emitted verbatim.
+  type_index: Option<f64>,
+  src_type_index: Option<f64>,
   len: Option<u32>,
-  data: Option<u32>,
-  elem: Option<u32>,
+  data: Option<f64>,
+  elem: Option<f64>,
 ) -> Result<()> {
   match ty_str {
     "ArrayNew" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayNew", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayNew", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ArrayNew { ty });
     }
     "ArrayNewDefault" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayNewDefault", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayNewDefault", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ArrayNewDefault { ty });
     }
     "ArrayNewFixed" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayNewFixed", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayNewFixed", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       let len = len.ok_or_else(|| missing("ArrayNewFixed", "len"))?;
       fb.instr_seq(seq_id).instr(wir::ArrayNewFixed { ty, len });
@@ -2548,44 +2776,68 @@ fn emit_array(
     "ArrayNewData" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayNewData", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayNewData", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      let data = data_id_at(module, data.ok_or_else(|| missing("ArrayNewData", "data"))?)?;
+      let data = data_id_at(
+        module,
+        checked_index(data.ok_or_else(|| missing("ArrayNewData", "data"))?, "data")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::ArrayNewData { ty, data });
     }
     "ArrayNewElem" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayNewElem", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayNewElem", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      let elem = element_id_at(module, elem.ok_or_else(|| missing("ArrayNewElem", "elem"))?)?;
+      let elem = element_id_at(
+        module,
+        checked_index(elem.ok_or_else(|| missing("ArrayNewElem", "elem"))?, "elem")?,
+      )?;
       fb.instr_seq(seq_id).instr(wir::ArrayNewElem { ty, elem });
     }
     "ArrayGet" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayGet", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayGet", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ArrayGet { ty });
     }
     "ArrayGetS" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayGetS", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayGetS", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ArrayGetS { ty });
     }
     "ArrayGetU" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayGetU", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayGetU", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ArrayGetU { ty });
     }
     "ArraySet" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArraySet", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArraySet", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ArraySet { ty });
     }
@@ -2595,7 +2847,10 @@ fn emit_array(
     "ArrayFill" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayFill", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayFill", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ArrayFill { ty });
     }
@@ -2605,11 +2860,17 @@ fn emit_array(
       // the same field emit would fail on.
       let dst_ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayCopy", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayCopy", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       let src_ty = resolve_type_id(
         module,
-        src_type_index.ok_or_else(|| missing("ArrayCopy", "srcTypeIndex"))?,
+        checked_index(
+          src_type_index.ok_or_else(|| missing("ArrayCopy", "srcTypeIndex"))?,
+          "srcTypeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id)
         .instr(wir::ArrayCopy { dst_ty, src_ty });
@@ -2617,22 +2878,34 @@ fn emit_array(
     "ArrayInitData" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayInitData", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayInitData", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       let data = data_id_at(
         module,
-        data.ok_or_else(|| missing("ArrayInitData", "data"))?,
+        checked_index(
+          data.ok_or_else(|| missing("ArrayInitData", "data"))?,
+          "data",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ArrayInitData { ty, data });
     }
     "ArrayInitElem" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ArrayInitElem", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ArrayInitElem", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       let elem = element_id_at(
         module,
-        elem.ok_or_else(|| missing("ArrayInitElem", "elem"))?,
+        checked_index(
+          elem.ok_or_else(|| missing("ArrayInitElem", "elem"))?,
+          "elem",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ArrayInitElem { ty, elem });
     }
@@ -2670,7 +2943,11 @@ fn emit_gc_ref(
   module: &Module,
   seq_id: wir::InstrSeqId,
   ty_str: &str,
-  type_index: Option<u32>,
+  // RAW carrier: narrowed via `checked_index` ONLY in the `CallRef`/
+  // `ReturnCallRef` arms — the nine fieldless / `refType`-only ops never touch
+  // it, so an irrelevant poisoned `type_index` is ignored by BOTH emit and
+  // preflight (`validate_gc_ref`).
+  type_index: Option<f64>,
   ref_type: Option<RefType>,
 ) -> Result<()> {
   match ty_str {
@@ -2680,14 +2957,20 @@ fn emit_gc_ref(
     "CallRef" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("CallRef", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("CallRef", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::CallRef { ty });
     }
     "ReturnCallRef" => {
       let ty = resolve_type_id(
         module,
-        type_index.ok_or_else(|| missing("ReturnCallRef", "typeIndex"))?,
+        checked_index(
+          type_index.ok_or_else(|| missing("ReturnCallRef", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       fb.instr_seq(seq_id).instr(wir::ReturnCallRef { ty });
     }
@@ -2794,7 +3077,9 @@ fn emit_br_on(
   module: &Module,
   seq_id: wir::InstrSeqId,
   ty_str: &str,
-  label: Option<u32>,
+  // RAW carrier: narrowed via `checked_index` inline in each arm — all four
+  // br_on ops consume `label`, matching preflight's `validate_br_on`.
+  label: Option<f64>,
   ref_type: Option<RefType>,
   to_ref_type: Option<RefType>,
   label_stack: &[wir::InstrSeqId],
@@ -2802,21 +3087,24 @@ fn emit_br_on(
   match ty_str {
     "BrOnNull" => {
       let block = label_target(
-        label.ok_or_else(|| missing("BrOnNull", "label"))?,
+        checked_index(label.ok_or_else(|| missing("BrOnNull", "label"))?, "label")?,
         label_stack,
       )?;
       fb.instr_seq(seq_id).instr(wir::BrOnNull { block });
     }
     "BrOnNonNull" => {
       let block = label_target(
-        label.ok_or_else(|| missing("BrOnNonNull", "label"))?,
+        checked_index(
+          label.ok_or_else(|| missing("BrOnNonNull", "label"))?,
+          "label",
+        )?,
         label_stack,
       )?;
       fb.instr_seq(seq_id).instr(wir::BrOnNonNull { block });
     }
     "BrOnCast" => {
       let block = label_target(
-        label.ok_or_else(|| missing("BrOnCast", "label"))?,
+        checked_index(label.ok_or_else(|| missing("BrOnCast", "label"))?, "label")?,
         label_stack,
       )?;
       let from = ref_type.ok_or_else(|| missing("BrOnCast", "refType"))?;
@@ -2833,7 +3121,10 @@ fn emit_br_on(
     }
     "BrOnCastFail" => {
       let block = label_target(
-        label.ok_or_else(|| missing("BrOnCastFail", "label"))?,
+        checked_index(
+          label.ok_or_else(|| missing("BrOnCastFail", "label"))?,
+          "label",
+        )?,
         label_stack,
       )?;
       let from = ref_type.ok_or_else(|| missing("BrOnCastFail", "refType"))?;
@@ -2926,28 +3217,55 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
       }
     }
     "LocalGet" => {
-      local_id_at(module, d.local.ok_or_else(|| missing("LocalGet", "local"))?)?;
+      local_id_at(
+        module,
+        checked_index(
+          d.local.ok_or_else(|| missing("LocalGet", "local"))?,
+          "local",
+        )?,
+      )?;
     }
     "LocalSet" => {
-      local_id_at(module, d.local.ok_or_else(|| missing("LocalSet", "local"))?)?;
+      local_id_at(
+        module,
+        checked_index(
+          d.local.ok_or_else(|| missing("LocalSet", "local"))?,
+          "local",
+        )?,
+      )?;
     }
     "LocalTee" => {
-      local_id_at(module, d.local.ok_or_else(|| missing("LocalTee", "local"))?)?;
+      local_id_at(
+        module,
+        checked_index(
+          d.local.ok_or_else(|| missing("LocalTee", "local"))?,
+          "local",
+        )?,
+      )?;
     }
     "GlobalGet" => {
       global_id_at(
         module,
-        d.global.ok_or_else(|| missing("GlobalGet", "global"))?,
+        checked_index(
+          d.global.ok_or_else(|| missing("GlobalGet", "global"))?,
+          "global",
+        )?,
       )?;
     }
     "GlobalSet" => {
       global_id_at(
         module,
-        d.global.ok_or_else(|| missing("GlobalSet", "global"))?,
+        checked_index(
+          d.global.ok_or_else(|| missing("GlobalSet", "global"))?,
+          "global",
+        )?,
       )?;
     }
     "Call" => {
-      function_id_at(module, d.func.ok_or_else(|| missing("Call", "func"))?)?;
+      function_id_at(
+        module,
+        checked_index(d.func.ok_or_else(|| missing("Call", "func"))?, "func")?,
+      )?;
     }
     "Select" => {
       if let Some(vt) = d.select_type.as_ref() {
@@ -3005,10 +3323,16 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
       validate_eh(module, d)?;
     }
     "Br" => {
-      validate_label(d.label.ok_or_else(|| missing("Br", "label"))?, label_len)?;
+      validate_label(
+        checked_index(d.label.ok_or_else(|| missing("Br", "label"))?, "label")?,
+        label_len,
+      )?;
     }
     "BrIf" => {
-      validate_label(d.label.ok_or_else(|| missing("BrIf", "label"))?, label_len)?;
+      validate_label(
+        checked_index(d.label.ok_or_else(|| missing("BrIf", "label"))?, "label")?,
+        label_len,
+      )?;
     }
     "BrTable" => {
       // Same field/ordering as emit: labels present, then default in range, then
@@ -3018,12 +3342,15 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
         .as_ref()
         .ok_or_else(|| missing("BrTable", "labels"))?;
       validate_label(
-        d.default_label
-          .ok_or_else(|| missing("BrTable", "defaultLabel"))?,
+        checked_index(
+          d.default_label
+            .ok_or_else(|| missing("BrTable", "defaultLabel"))?,
+          "defaultLabel",
+        )?,
         label_len,
       )?;
       for &l in labels {
-        validate_label(l, label_len)?;
+        validate_label(checked_index(l, "labels")?, label_len)?;
       }
     }
     // The fallible steps for an operator are the op-string decode AND (for a lane
@@ -3061,46 +3388,73 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
     "MemorySize" => {
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("MemorySize", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("MemorySize", "memory"))?,
+          "memory",
+        )?,
       )?;
     }
     "MemoryGrow" => {
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("MemoryGrow", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("MemoryGrow", "memory"))?,
+          "memory",
+        )?,
       )?;
     }
     "MemoryInit" => {
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("MemoryInit", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("MemoryInit", "memory"))?,
+          "memory",
+        )?,
       )?;
-      data_id_at(module, d.data.ok_or_else(|| missing("MemoryInit", "data"))?)?;
+      data_id_at(
+        module,
+        checked_index(d.data.ok_or_else(|| missing("MemoryInit", "data"))?, "data")?,
+      )?;
     }
     "DataDrop" => {
-      data_id_at(module, d.data.ok_or_else(|| missing("DataDrop", "data"))?)?;
+      data_id_at(
+        module,
+        checked_index(d.data.ok_or_else(|| missing("DataDrop", "data"))?, "data")?,
+      )?;
     }
     "MemoryCopy" => {
       // Same fields/ordering as emit: destination (`memory`) then source
       // (`srcMemory`).
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("MemoryCopy", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("MemoryCopy", "memory"))?,
+          "memory",
+        )?,
       )?;
       memory_id_at(
         module,
-        d.src_memory
-          .ok_or_else(|| missing("MemoryCopy", "srcMemory"))?,
+        checked_index(
+          d.src_memory
+            .ok_or_else(|| missing("MemoryCopy", "srcMemory"))?,
+          "srcMemory",
+        )?,
       )?;
     }
     "MemoryFill" => {
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("MemoryFill", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("MemoryFill", "memory"))?,
+          "memory",
+        )?,
       )?;
     }
     "Load" => {
-      memory_id_at(module, d.memory.ok_or_else(|| missing("Load", "memory"))?)?;
+      memory_id_at(
+        module,
+        checked_index(d.memory.ok_or_else(|| missing("Load", "memory"))?, "memory")?,
+      )?;
       d.load_kind
         .as_ref()
         .ok_or_else(|| missing("Load", "loadKind"))?;
@@ -3111,7 +3465,13 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
       )?;
     }
     "Store" => {
-      memory_id_at(module, d.memory.ok_or_else(|| missing("Store", "memory"))?)?;
+      memory_id_at(
+        module,
+        checked_index(
+          d.memory.ok_or_else(|| missing("Store", "memory"))?,
+          "memory",
+        )?,
+      )?;
       d.store_kind
         .as_ref()
         .ok_or_else(|| missing("Store", "storeKind"))?;
@@ -3130,7 +3490,10 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
     "LoadSimd" => {
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("LoadSimd", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("LoadSimd", "memory"))?,
+          "memory",
+        )?,
       )?;
       d.load_simd_kind
         .as_ref()
@@ -3155,63 +3518,105 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
     // missing preflight resolution re-opens the emit-abort / partial-mutation
     // defect. Nothing else needs resolving.
     "TableGet" => {
-      table_id_at(module, d.table.ok_or_else(|| missing("TableGet", "table"))?)?;
+      table_id_at(
+        module,
+        checked_index(
+          d.table.ok_or_else(|| missing("TableGet", "table"))?,
+          "table",
+        )?,
+      )?;
     }
     "TableSet" => {
-      table_id_at(module, d.table.ok_or_else(|| missing("TableSet", "table"))?)?;
+      table_id_at(
+        module,
+        checked_index(
+          d.table.ok_or_else(|| missing("TableSet", "table"))?,
+          "table",
+        )?,
+      )?;
     }
     "TableGrow" => {
       table_id_at(
         module,
-        d.table.ok_or_else(|| missing("TableGrow", "table"))?,
+        checked_index(
+          d.table.ok_or_else(|| missing("TableGrow", "table"))?,
+          "table",
+        )?,
       )?;
     }
     "TableSize" => {
       table_id_at(
         module,
-        d.table.ok_or_else(|| missing("TableSize", "table"))?,
+        checked_index(
+          d.table.ok_or_else(|| missing("TableSize", "table"))?,
+          "table",
+        )?,
       )?;
     }
     "TableFill" => {
       table_id_at(
         module,
-        d.table.ok_or_else(|| missing("TableFill", "table"))?,
+        checked_index(
+          d.table.ok_or_else(|| missing("TableFill", "table"))?,
+          "table",
+        )?,
       )?;
     }
     "TableInit" => {
       table_id_at(
         module,
-        d.table.ok_or_else(|| missing("TableInit", "table"))?,
+        checked_index(
+          d.table.ok_or_else(|| missing("TableInit", "table"))?,
+          "table",
+        )?,
       )?;
-      element_id_at(module, d.elem.ok_or_else(|| missing("TableInit", "elem"))?)?;
+      element_id_at(
+        module,
+        checked_index(d.elem.ok_or_else(|| missing("TableInit", "elem"))?, "elem")?,
+      )?;
     }
     "TableCopy" => {
       // Same fields/ordering as emit: destination (`table`) then source
       // (`srcTable`).
       table_id_at(
         module,
-        d.table.ok_or_else(|| missing("TableCopy", "table"))?,
+        checked_index(
+          d.table.ok_or_else(|| missing("TableCopy", "table"))?,
+          "table",
+        )?,
       )?;
       table_id_at(
         module,
-        d.src_table
-          .ok_or_else(|| missing("TableCopy", "srcTable"))?,
+        checked_index(
+          d.src_table
+            .ok_or_else(|| missing("TableCopy", "srcTable"))?,
+          "srcTable",
+        )?,
       )?;
     }
     "ElemDrop" => {
-      element_id_at(module, d.elem.ok_or_else(|| missing("ElemDrop", "elem"))?)?;
+      element_id_at(
+        module,
+        checked_index(d.elem.ok_or_else(|| missing("ElemDrop", "elem"))?, "elem")?,
+      )?;
     }
     "CallIndirect" => {
       // Same fields/ordering as emit: the callee type (via `resolve_type_id`)
       // then the table.
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("CallIndirect", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("CallIndirect", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       table_id_at(
         module,
-        d.table.ok_or_else(|| missing("CallIndirect", "table"))?,
+        checked_index(
+          d.table.ok_or_else(|| missing("CallIndirect", "table"))?,
+          "table",
+        )?,
       )?;
     }
     // Reference + tail-call instructions. The fallible steps mirror emit exactly
@@ -3231,23 +3636,35 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
       heap_type_to_walrus_in(module, rt.heap.clone())?;
     }
     "RefFunc" => {
-      function_id_at(module, d.func.ok_or_else(|| missing("RefFunc", "func"))?)?;
+      function_id_at(
+        module,
+        checked_index(d.func.ok_or_else(|| missing("RefFunc", "func"))?, "func")?,
+      )?;
     }
     "ReturnCall" => {
-      function_id_at(module, d.func.ok_or_else(|| missing("ReturnCall", "func"))?)?;
+      function_id_at(
+        module,
+        checked_index(d.func.ok_or_else(|| missing("ReturnCall", "func"))?, "func")?,
+      )?;
     }
     "ReturnCallIndirect" => {
       // Same fields/ordering as emit: the callee type (via `resolve_type_id`)
       // then the table.
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ReturnCallIndirect", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ReturnCallIndirect", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       table_id_at(
         module,
-        d.table
-          .ok_or_else(|| missing("ReturnCallIndirect", "table"))?,
+        checked_index(
+          d.table
+            .ok_or_else(|| missing("ReturnCallIndirect", "table"))?,
+          "table",
+        )?,
       )?;
     }
     // GC reference instructions (C7b) — the label-free subset. Delegated to
@@ -3326,25 +3743,43 @@ fn validate_try_table_catches(
   for c in catches {
     match c.kind.as_str() {
       "Catch" => {
-        tag_id_at(module, c.tag.ok_or_else(|| missing("Catch", "tag"))?)?;
-        validate_label(c.label.ok_or_else(|| missing("Catch", "label"))?, label_len)?;
+        tag_id_at(
+          module,
+          checked_index(c.tag.ok_or_else(|| missing("Catch", "tag"))?, "tag")?,
+        )?;
+        validate_label(
+          checked_index(c.label.ok_or_else(|| missing("Catch", "label"))?, "label")?,
+          label_len,
+        )?;
       }
       "CatchRef" => {
-        tag_id_at(module, c.tag.ok_or_else(|| missing("CatchRef", "tag"))?)?;
+        tag_id_at(
+          module,
+          checked_index(c.tag.ok_or_else(|| missing("CatchRef", "tag"))?, "tag")?,
+        )?;
         validate_label(
-          c.label.ok_or_else(|| missing("CatchRef", "label"))?,
+          checked_index(
+            c.label.ok_or_else(|| missing("CatchRef", "label"))?,
+            "label",
+          )?,
           label_len,
         )?;
       }
       "CatchAll" => {
         validate_label(
-          c.label.ok_or_else(|| missing("CatchAll", "label"))?,
+          checked_index(
+            c.label.ok_or_else(|| missing("CatchAll", "label"))?,
+            "label",
+          )?,
           label_len,
         )?;
       }
       "CatchAllRef" => {
         validate_label(
-          c.label.ok_or_else(|| missing("CatchAllRef", "label"))?,
+          checked_index(
+            c.label.ok_or_else(|| missing("CatchAllRef", "label"))?,
+            "label",
+          )?,
           label_len,
         )?;
       }
@@ -3363,15 +3798,21 @@ fn validate_try_table_catches(
 fn validate_eh(module: &Module, d: &InstrDesc) -> Result<()> {
   match d.r#type.as_str() {
     "Throw" => {
-      tag_id_at(module, d.tag.ok_or_else(|| missing("Throw", "tag"))?)?;
+      tag_id_at(
+        module,
+        checked_index(d.tag.ok_or_else(|| missing("Throw", "tag"))?, "tag")?,
+      )?;
     }
     "ThrowRef" => {}
     // Legacy `Rethrow` (C8b): its `relativeDepth` is a raw pass-through walrus never
     // resolves (cannot abort), but its PRESENCE is still required so preflight
     // rejects a missing field pre-mutation exactly as `emit_leaf` does.
     "Rethrow" => {
-      d.relative_depth
-        .ok_or_else(|| missing("Rethrow", "relativeDepth"))?;
+      checked_index(
+        d.relative_depth
+          .ok_or_else(|| missing("Rethrow", "relativeDepth"))?,
+        "relativeDepth",
+      )?;
     }
     other => {
       return Err(Error::from_reason(format!(
@@ -3399,7 +3840,10 @@ fn validate_legacy_catches(
   for c in catches {
     match c.kind.as_str() {
       "LegacyCatch" => {
-        tag_id_at(module, c.tag.ok_or_else(|| missing("LegacyCatch", "tag"))?)?;
+        tag_id_at(
+          module,
+          checked_index(c.tag.ok_or_else(|| missing("LegacyCatch", "tag"))?, "tag")?,
+        )?;
         validate_block_type(module, &c.block_type)?;
         validate_body(
           module,
@@ -3420,8 +3864,11 @@ fn validate_legacy_catches(
         )?;
       }
       "LegacyDelegate" => {
-        c.relative_depth
-          .ok_or_else(|| missing("LegacyDelegate", "relativeDepth"))?;
+        checked_index(
+          c.relative_depth
+            .ok_or_else(|| missing("LegacyDelegate", "relativeDepth"))?,
+          "relativeDepth",
+        )?;
       }
       other => return Err(unknown_legacy_catch_kind(other)),
     }
@@ -3445,7 +3892,10 @@ fn validate_atomic(module: &Module, d: &InstrDesc) -> Result<()> {
     "AtomicRmw" => {
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("AtomicRmw", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("AtomicRmw", "memory"))?,
+          "memory",
+        )?,
       )?;
       d.atomic_op
         .as_ref()
@@ -3462,7 +3912,10 @@ fn validate_atomic(module: &Module, d: &InstrDesc) -> Result<()> {
     "Cmpxchg" => {
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("Cmpxchg", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("Cmpxchg", "memory"))?,
+          "memory",
+        )?,
       )?;
       d.atomic_width
         .as_ref()
@@ -3476,7 +3929,10 @@ fn validate_atomic(module: &Module, d: &InstrDesc) -> Result<()> {
     "AtomicNotify" => {
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("AtomicNotify", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("AtomicNotify", "memory"))?,
+          "memory",
+        )?,
       )?;
       mem_arg_to_walrus(
         d.mem_arg
@@ -3487,7 +3943,10 @@ fn validate_atomic(module: &Module, d: &InstrDesc) -> Result<()> {
     "AtomicWait" => {
       memory_id_at(
         module,
-        d.memory.ok_or_else(|| missing("AtomicWait", "memory"))?,
+        checked_index(
+          d.memory.ok_or_else(|| missing("AtomicWait", "memory"))?,
+          "memory",
+        )?,
       )?;
       mem_arg_to_walrus(
         d.mem_arg
@@ -3522,48 +3981,78 @@ fn validate_struct(module: &Module, d: &InstrDesc) -> Result<()> {
     "StructNew" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("StructNew", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("StructNew", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "StructNewDefault" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("StructNewDefault", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("StructNewDefault", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "StructGet" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("StructGet", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("StructGet", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      d.field.ok_or_else(|| missing("StructGet", "field"))?;
+      checked_index(
+        d.field.ok_or_else(|| missing("StructGet", "field"))?,
+        "field",
+      )?;
     }
     "StructGetS" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("StructGetS", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("StructGetS", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      d.field.ok_or_else(|| missing("StructGetS", "field"))?;
+      checked_index(
+        d.field.ok_or_else(|| missing("StructGetS", "field"))?,
+        "field",
+      )?;
     }
     "StructGetU" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("StructGetU", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("StructGetU", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      d.field.ok_or_else(|| missing("StructGetU", "field"))?;
+      checked_index(
+        d.field.ok_or_else(|| missing("StructGetU", "field"))?,
+        "field",
+      )?;
     }
     "StructSet" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("StructSet", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("StructSet", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
-      d.field.ok_or_else(|| missing("StructSet", "field"))?;
+      checked_index(
+        d.field.ok_or_else(|| missing("StructSet", "field"))?,
+        "field",
+      )?;
     }
     // Unreachable: `validate_one` only routes the six struct discriminants here.
     other => {
@@ -3591,115 +4080,169 @@ fn validate_array(module: &Module, d: &InstrDesc) -> Result<()> {
     "ArrayNew" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayNew", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayNew", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "ArrayNewDefault" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayNewDefault", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayNewDefault", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "ArrayNewFixed" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayNewFixed", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayNewFixed", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       d.len.ok_or_else(|| missing("ArrayNewFixed", "len"))?;
     }
     "ArrayNewData" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayNewData", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayNewData", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       data_id_at(
         module,
-        d.data.ok_or_else(|| missing("ArrayNewData", "data"))?,
+        checked_index(
+          d.data.ok_or_else(|| missing("ArrayNewData", "data"))?,
+          "data",
+        )?,
       )?;
     }
     "ArrayNewElem" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayNewElem", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayNewElem", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       element_id_at(
         module,
-        d.elem.ok_or_else(|| missing("ArrayNewElem", "elem"))?,
+        checked_index(
+          d.elem.ok_or_else(|| missing("ArrayNewElem", "elem"))?,
+          "elem",
+        )?,
       )?;
     }
     "ArrayGet" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayGet", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayGet", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "ArrayGetS" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayGetS", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayGetS", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "ArrayGetU" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayGetU", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayGetU", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "ArraySet" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArraySet", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArraySet", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "ArrayLen" => {}
     "ArrayFill" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayFill", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayFill", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "ArrayCopy" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayCopy", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayCopy", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       resolve_type_id(
         module,
-        d.src_type_index
-          .ok_or_else(|| missing("ArrayCopy", "srcTypeIndex"))?,
+        checked_index(
+          d.src_type_index
+            .ok_or_else(|| missing("ArrayCopy", "srcTypeIndex"))?,
+          "srcTypeIndex",
+        )?,
       )?;
     }
     "ArrayInitData" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayInitData", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayInitData", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       data_id_at(
         module,
-        d.data.ok_or_else(|| missing("ArrayInitData", "data"))?,
+        checked_index(
+          d.data.ok_or_else(|| missing("ArrayInitData", "data"))?,
+          "data",
+        )?,
       )?;
     }
     "ArrayInitElem" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ArrayInitElem", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ArrayInitElem", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
       element_id_at(
         module,
-        d.elem.ok_or_else(|| missing("ArrayInitElem", "elem"))?,
+        checked_index(
+          d.elem.ok_or_else(|| missing("ArrayInitElem", "elem"))?,
+          "elem",
+        )?,
       )?;
     }
     // Unreachable: `validate_one` only routes the fourteen array discriminants
@@ -3730,15 +4273,21 @@ fn validate_gc_ref(module: &Module, d: &InstrDesc) -> Result<()> {
     "CallRef" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("CallRef", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("CallRef", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "ReturnCallRef" => {
       resolve_type_id(
         module,
-        d.type_index
-          .ok_or_else(|| missing("ReturnCallRef", "typeIndex"))?,
+        checked_index(
+          d.type_index
+            .ok_or_else(|| missing("ReturnCallRef", "typeIndex"))?,
+          "typeIndex",
+        )?,
       )?;
     }
     "RefTest" => {
@@ -3805,19 +4354,28 @@ fn validate_br_on(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()
   match d.r#type.as_str() {
     "BrOnNull" => {
       validate_label(
-        d.label.ok_or_else(|| missing("BrOnNull", "label"))?,
+        checked_index(
+          d.label.ok_or_else(|| missing("BrOnNull", "label"))?,
+          "label",
+        )?,
         label_len,
       )?;
     }
     "BrOnNonNull" => {
       validate_label(
-        d.label.ok_or_else(|| missing("BrOnNonNull", "label"))?,
+        checked_index(
+          d.label.ok_or_else(|| missing("BrOnNonNull", "label"))?,
+          "label",
+        )?,
         label_len,
       )?;
     }
     "BrOnCast" => {
       validate_label(
-        d.label.ok_or_else(|| missing("BrOnCast", "label"))?,
+        checked_index(
+          d.label.ok_or_else(|| missing("BrOnCast", "label"))?,
+          "label",
+        )?,
         label_len,
       )?;
       let from = d
@@ -3833,7 +4391,10 @@ fn validate_br_on(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()
     }
     "BrOnCastFail" => {
       validate_label(
-        d.label.ok_or_else(|| missing("BrOnCastFail", "label"))?,
+        checked_index(
+          d.label.ok_or_else(|| missing("BrOnCastFail", "label"))?,
+          "label",
+        )?,
         label_len,
       )?;
       let from = d
@@ -4035,16 +4596,16 @@ fn read_try_table_catches(
     let clause = match c {
       wir::TryTableCatch::Catch { tag, label } => CatchClause {
         kind: "Catch".to_string(),
-        tag: Some(tag.index() as u32),
-        label: Some(label_depth(*label, label_stack)?),
+        tag: Some(tag.index() as f64),
+        label: Some(label_depth(*label, label_stack)? as f64),
         seq: None,
         relative_depth: None,
         block_type: None,
       },
       wir::TryTableCatch::CatchRef { tag, label } => CatchClause {
         kind: "CatchRef".to_string(),
-        tag: Some(tag.index() as u32),
-        label: Some(label_depth(*label, label_stack)?),
+        tag: Some(tag.index() as f64),
+        label: Some(label_depth(*label, label_stack)? as f64),
         seq: None,
         relative_depth: None,
         block_type: None,
@@ -4052,7 +4613,7 @@ fn read_try_table_catches(
       wir::TryTableCatch::CatchAll { label } => CatchClause {
         kind: "CatchAll".to_string(),
         tag: None,
-        label: Some(label_depth(*label, label_stack)?),
+        label: Some(label_depth(*label, label_stack)? as f64),
         seq: None,
         relative_depth: None,
         block_type: None,
@@ -4060,7 +4621,7 @@ fn read_try_table_catches(
       wir::TryTableCatch::CatchAllRef { label } => CatchClause {
         kind: "CatchAllRef".to_string(),
         tag: None,
-        label: Some(label_depth(*label, label_stack)?),
+        label: Some(label_depth(*label, label_stack)? as f64),
         seq: None,
         relative_depth: None,
         block_type: None,
@@ -4095,7 +4656,7 @@ fn read_legacy_catches(
         let seq = read_instr_seq(lf, *handler, label_stack)?;
         CatchClause {
           kind: "LegacyCatch".to_string(),
-          tag: Some(tag.index() as u32),
+          tag: Some(tag.index() as f64),
           label: None,
           seq: Some(seq),
           relative_depth: None,
@@ -4118,7 +4679,7 @@ fn read_legacy_catches(
         tag: None,
         label: None,
         seq: None,
-        relative_depth: Some(*relative_depth),
+        relative_depth: Some(*relative_depth as f64),
         block_type: None,
       },
     };
@@ -4160,32 +4721,32 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     }
     wir::Instr::LocalGet(e) => {
       let mut d = InstrDesc::new("LocalGet");
-      d.local = Some(e.local.index() as u32);
+      d.local = Some(e.local.index() as f64);
       d
     }
     wir::Instr::LocalSet(e) => {
       let mut d = InstrDesc::new("LocalSet");
-      d.local = Some(e.local.index() as u32);
+      d.local = Some(e.local.index() as f64);
       d
     }
     wir::Instr::LocalTee(e) => {
       let mut d = InstrDesc::new("LocalTee");
-      d.local = Some(e.local.index() as u32);
+      d.local = Some(e.local.index() as f64);
       d
     }
     wir::Instr::GlobalGet(e) => {
       let mut d = InstrDesc::new("GlobalGet");
-      d.global = Some(e.global.index() as u32);
+      d.global = Some(e.global.index() as f64);
       d
     }
     wir::Instr::GlobalSet(e) => {
       let mut d = InstrDesc::new("GlobalSet");
-      d.global = Some(e.global.index() as u32);
+      d.global = Some(e.global.index() as f64);
       d
     }
     wir::Instr::Call(c) => {
       let mut d = InstrDesc::new("Call");
-      d.func = Some(c.func.index() as u32);
+      d.func = Some(c.func.index() as f64);
       d
     }
     wir::Instr::Select(s) => {
@@ -4198,23 +4759,23 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     }
     wir::Instr::Br(br) => {
       let mut d = InstrDesc::new("Br");
-      d.label = Some(label_depth(br.block, label_stack)?);
+      d.label = Some(label_depth(br.block, label_stack)? as f64);
       d
     }
     wir::Instr::BrIf(br) => {
       let mut d = InstrDesc::new("BrIf");
-      d.label = Some(label_depth(br.block, label_stack)?);
+      d.label = Some(label_depth(br.block, label_stack)? as f64);
       d
     }
     wir::Instr::BrTable(bt) => {
       let labels = bt
         .blocks
         .iter()
-        .map(|b| label_depth(*b, label_stack))
+        .map(|b| label_depth(*b, label_stack).map(|l| l as f64))
         .collect::<Result<Vec<_>>>()?;
       let mut d = InstrDesc::new("BrTable");
       d.labels = Some(labels);
-      d.default_label = Some(label_depth(bt.default, label_stack)?);
+      d.default_label = Some(label_depth(bt.default, label_stack)? as f64);
       d
     }
     // `Binop`/`Unop` read BOTH fieldless and lane-carrying ops: `to_str` yields
@@ -4255,47 +4816,47 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     }
     wir::Instr::MemorySize(e) => {
       let mut d = InstrDesc::new("MemorySize");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d
     }
     wir::Instr::MemoryGrow(e) => {
       let mut d = InstrDesc::new("MemoryGrow");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d
     }
     wir::Instr::MemoryInit(e) => {
       let mut d = InstrDesc::new("MemoryInit");
-      d.memory = Some(e.memory.index() as u32);
-      d.data = Some(e.data.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
+      d.data = Some(e.data.index() as f64);
       d
     }
     wir::Instr::DataDrop(e) => {
       let mut d = InstrDesc::new("DataDrop");
-      d.data = Some(e.data.index() as u32);
+      d.data = Some(e.data.index() as f64);
       d
     }
     wir::Instr::MemoryCopy(e) => {
       // `memory` carries the DESTINATION, `srcMemory` the SOURCE (see `emit_one`).
       let mut d = InstrDesc::new("MemoryCopy");
-      d.memory = Some(e.dst.index() as u32);
-      d.src_memory = Some(e.src.index() as u32);
+      d.memory = Some(e.dst.index() as f64);
+      d.src_memory = Some(e.src.index() as f64);
       d
     }
     wir::Instr::MemoryFill(e) => {
       let mut d = InstrDesc::new("MemoryFill");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d
     }
     wir::Instr::Load(e) => {
       let mut d = InstrDesc::new("Load");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d.load_kind = Some(load_kind_from_walrus(e.kind));
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
       d
     }
     wir::Instr::Store(e) => {
       let mut d = InstrDesc::new("Store");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d.store_kind = Some(store_kind_from_walrus(e.kind));
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
       d
@@ -4305,14 +4866,14 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
       // (an `#[inline(never)]` helper) so its match stays out of this recursive
       // walker's frame — mirrors the `Binop`/`Unop` `*_to_str` split.
       let mut d = InstrDesc::new("LoadSimd");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d.load_simd_kind = Some(load_simd_kind_from_walrus(e.kind));
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
       d
     }
     wir::Instr::AtomicRmw(e) => {
       let mut d = InstrDesc::new("AtomicRmw");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d.atomic_op = Some(atomic_op_from_walrus(e.op));
       d.atomic_width = Some(atomic_width_from_walrus(e.width));
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
@@ -4320,20 +4881,20 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     }
     wir::Instr::Cmpxchg(e) => {
       let mut d = InstrDesc::new("Cmpxchg");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d.atomic_width = Some(atomic_width_from_walrus(e.width));
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
       d
     }
     wir::Instr::AtomicNotify(e) => {
       let mut d = InstrDesc::new("AtomicNotify");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
       d
     }
     wir::Instr::AtomicWait(e) => {
       let mut d = InstrDesc::new("AtomicWait");
-      d.memory = Some(e.memory.index() as u32);
+      d.memory = Some(e.memory.index() as f64);
       d.mem_arg = Some(mem_arg_from_walrus(&e.arg));
       d.sixty_four = Some(e.sixty_four);
       d
@@ -4341,51 +4902,51 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     wir::Instr::AtomicFence(_) => InstrDesc::new("AtomicFence"),
     wir::Instr::TableGet(e) => {
       let mut d = InstrDesc::new("TableGet");
-      d.table = Some(e.table.index() as u32);
+      d.table = Some(e.table.index() as f64);
       d
     }
     wir::Instr::TableSet(e) => {
       let mut d = InstrDesc::new("TableSet");
-      d.table = Some(e.table.index() as u32);
+      d.table = Some(e.table.index() as f64);
       d
     }
     wir::Instr::TableGrow(e) => {
       let mut d = InstrDesc::new("TableGrow");
-      d.table = Some(e.table.index() as u32);
+      d.table = Some(e.table.index() as f64);
       d
     }
     wir::Instr::TableSize(e) => {
       let mut d = InstrDesc::new("TableSize");
-      d.table = Some(e.table.index() as u32);
+      d.table = Some(e.table.index() as f64);
       d
     }
     wir::Instr::TableFill(e) => {
       let mut d = InstrDesc::new("TableFill");
-      d.table = Some(e.table.index() as u32);
+      d.table = Some(e.table.index() as f64);
       d
     }
     wir::Instr::TableInit(e) => {
       let mut d = InstrDesc::new("TableInit");
-      d.table = Some(e.table.index() as u32);
-      d.elem = Some(e.elem.index() as u32);
+      d.table = Some(e.table.index() as f64);
+      d.elem = Some(e.elem.index() as f64);
       d
     }
     wir::Instr::TableCopy(e) => {
       // `table` carries the DESTINATION, `srcTable` the SOURCE (see `emit_one`).
       let mut d = InstrDesc::new("TableCopy");
-      d.table = Some(e.dst.index() as u32);
-      d.src_table = Some(e.src.index() as u32);
+      d.table = Some(e.dst.index() as f64);
+      d.src_table = Some(e.src.index() as f64);
       d
     }
     wir::Instr::ElemDrop(e) => {
       let mut d = InstrDesc::new("ElemDrop");
-      d.elem = Some(e.elem.index() as u32);
+      d.elem = Some(e.elem.index() as f64);
       d
     }
     wir::Instr::CallIndirect(e) => {
       let mut d = InstrDesc::new("CallIndirect");
-      d.type_index = Some(e.ty.index() as u32);
-      d.table = Some(e.table.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
+      d.table = Some(e.table.index() as f64);
       d
     }
     wir::Instr::RefNull(e) => {
@@ -4402,18 +4963,18 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     wir::Instr::RefIsNull(_) => InstrDesc::new("RefIsNull"),
     wir::Instr::RefFunc(e) => {
       let mut d = InstrDesc::new("RefFunc");
-      d.func = Some(e.func.index() as u32);
+      d.func = Some(e.func.index() as f64);
       d
     }
     wir::Instr::ReturnCall(e) => {
       let mut d = InstrDesc::new("ReturnCall");
-      d.func = Some(e.func.index() as u32);
+      d.func = Some(e.func.index() as f64);
       d
     }
     wir::Instr::ReturnCallIndirect(e) => {
       let mut d = InstrDesc::new("ReturnCallIndirect");
-      d.type_index = Some(e.ty.index() as u32);
-      d.table = Some(e.table.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
+      d.table = Some(e.table.index() as f64);
       d
     }
     // GC reference instructions (C7b) — the label-free subset. Built INLINE as
@@ -4426,12 +4987,12 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     wir::Instr::RefAsNonNull(_) => InstrDesc::new("RefAsNonNull"),
     wir::Instr::CallRef(e) => {
       let mut d = InstrDesc::new("CallRef");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::ReturnCallRef(e) => {
       let mut d = InstrDesc::new("ReturnCallRef");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::RefI31(_) => InstrDesc::new("RefI31"),
@@ -4466,17 +5027,17 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     // walrus -> napi heap conversion as `RefTest`/`RefCast`.
     wir::Instr::BrOnNull(e) => {
       let mut d = InstrDesc::new("BrOnNull");
-      d.label = Some(label_depth(e.block, label_stack)?);
+      d.label = Some(label_depth(e.block, label_stack)? as f64);
       d
     }
     wir::Instr::BrOnNonNull(e) => {
       let mut d = InstrDesc::new("BrOnNonNull");
-      d.label = Some(label_depth(e.block, label_stack)?);
+      d.label = Some(label_depth(e.block, label_stack)? as f64);
       d
     }
     wir::Instr::BrOnCast(e) => {
       let mut d = InstrDesc::new("BrOnCast");
-      d.label = Some(label_depth(e.block, label_stack)?);
+      d.label = Some(label_depth(e.block, label_stack)? as f64);
       d.ref_type = Some(RefType {
         nullable: e.from_nullable,
         heap: e.from_heap_type.try_into()?,
@@ -4489,7 +5050,7 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     }
     wir::Instr::BrOnCastFail(e) => {
       let mut d = InstrDesc::new("BrOnCastFail");
-      d.label = Some(label_depth(e.block, label_stack)?);
+      d.label = Some(label_depth(e.block, label_stack)? as f64);
       d.ref_type = Some(RefType {
         nullable: e.from_nullable,
         heap: e.from_heap_type.try_into()?,
@@ -4520,108 +5081,108 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     // `src_type_index` (the inverse of `emit_array`).
     wir::Instr::StructNew(e) => {
       let mut d = InstrDesc::new("StructNew");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::StructNewDefault(e) => {
       let mut d = InstrDesc::new("StructNewDefault");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::StructGet(e) => {
       let mut d = InstrDesc::new("StructGet");
-      d.type_index = Some(e.ty.index() as u32);
-      d.field = Some(e.field);
+      d.type_index = Some(e.ty.index() as f64);
+      d.field = Some(e.field as f64);
       d
     }
     wir::Instr::StructGetS(e) => {
       let mut d = InstrDesc::new("StructGetS");
-      d.type_index = Some(e.ty.index() as u32);
-      d.field = Some(e.field);
+      d.type_index = Some(e.ty.index() as f64);
+      d.field = Some(e.field as f64);
       d
     }
     wir::Instr::StructGetU(e) => {
       let mut d = InstrDesc::new("StructGetU");
-      d.type_index = Some(e.ty.index() as u32);
-      d.field = Some(e.field);
+      d.type_index = Some(e.ty.index() as f64);
+      d.field = Some(e.field as f64);
       d
     }
     wir::Instr::StructSet(e) => {
       let mut d = InstrDesc::new("StructSet");
-      d.type_index = Some(e.ty.index() as u32);
-      d.field = Some(e.field);
+      d.type_index = Some(e.ty.index() as f64);
+      d.field = Some(e.field as f64);
       d
     }
     wir::Instr::ArrayNew(e) => {
       let mut d = InstrDesc::new("ArrayNew");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::ArrayNewDefault(e) => {
       let mut d = InstrDesc::new("ArrayNewDefault");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::ArrayNewFixed(e) => {
       let mut d = InstrDesc::new("ArrayNewFixed");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d.len = Some(e.len);
       d
     }
     wir::Instr::ArrayNewData(e) => {
       let mut d = InstrDesc::new("ArrayNewData");
-      d.type_index = Some(e.ty.index() as u32);
-      d.data = Some(e.data.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
+      d.data = Some(e.data.index() as f64);
       d
     }
     wir::Instr::ArrayNewElem(e) => {
       let mut d = InstrDesc::new("ArrayNewElem");
-      d.type_index = Some(e.ty.index() as u32);
-      d.elem = Some(e.elem.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
+      d.elem = Some(e.elem.index() as f64);
       d
     }
     wir::Instr::ArrayGet(e) => {
       let mut d = InstrDesc::new("ArrayGet");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::ArrayGetS(e) => {
       let mut d = InstrDesc::new("ArrayGetS");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::ArrayGetU(e) => {
       let mut d = InstrDesc::new("ArrayGetU");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::ArraySet(e) => {
       let mut d = InstrDesc::new("ArraySet");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::ArrayLen(_) => InstrDesc::new("ArrayLen"),
     wir::Instr::ArrayFill(e) => {
       let mut d = InstrDesc::new("ArrayFill");
-      d.type_index = Some(e.ty.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
       d
     }
     wir::Instr::ArrayCopy(e) => {
       let mut d = InstrDesc::new("ArrayCopy");
-      d.type_index = Some(e.dst_ty.index() as u32);
-      d.src_type_index = Some(e.src_ty.index() as u32);
+      d.type_index = Some(e.dst_ty.index() as f64);
+      d.src_type_index = Some(e.src_ty.index() as f64);
       d
     }
     wir::Instr::ArrayInitData(e) => {
       let mut d = InstrDesc::new("ArrayInitData");
-      d.type_index = Some(e.ty.index() as u32);
-      d.data = Some(e.data.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
+      d.data = Some(e.data.index() as f64);
       d
     }
     wir::Instr::ArrayInitElem(e) => {
       let mut d = InstrDesc::new("ArrayInitElem");
-      d.type_index = Some(e.ty.index() as u32);
-      d.elem = Some(e.elem.index() as u32);
+      d.type_index = Some(e.ty.index() as f64);
+      d.elem = Some(e.elem.index() as f64);
       d
     }
     // Modern exception handling (C8a) leaf ops. `TryTable` is NOT here — it is a
@@ -4629,7 +5190,7 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     // stable `.index()`; `ThrowRef` is fieldless.
     wir::Instr::Throw(t) => {
       let mut d = InstrDesc::new("Throw");
-      d.tag = Some(t.tag.index() as u32);
+      d.tag = Some(t.tag.index() as f64);
       d
     }
     wir::Instr::ThrowRef(_) => InstrDesc::new("ThrowRef"),
@@ -4638,7 +5199,7 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     // VERBATIM (walrus never resolved it — §A.3), NOT via the `label_stack`.
     wir::Instr::Rethrow(r) => {
       let mut d = InstrDesc::new("Rethrow");
-      d.relative_depth = Some(r.relative_depth);
+      d.relative_depth = Some(r.relative_depth as f64);
       d
     }
     // Wide-arithmetic instructions (C9) — the four fieldless leaves. Built INLINE

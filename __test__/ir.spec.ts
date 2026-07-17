@@ -964,9 +964,7 @@ test('CH (edge fidelity): `seq: []` and absent seq stay distinct through the rou
   // derived decode had), not an abort.
   t.throws(
     () =>
-      m.buildFunction([], [], [], [
-        { type: 'Block', blockType: { type: 'Empty' }, seq: 42 as unknown as InstrDesc[] },
-      ]),
+      m.buildFunction([], [], [], [{ type: 'Block', blockType: { type: 'Empty' }, seq: 42 as unknown as InstrDesc[] }]),
     { message: /Failed to get Array length on InstrDesc\.seq/ },
   )
 })
@@ -2424,10 +2422,7 @@ test('C5 EXHAUSTIVE: all 5 atomics + every AtomicOp/AtomicWidth round-trip in-me
   t.is(widths.size, ALL_ATOMIC_WIDTHS.length)
   // AtomicWait's sixtyFour round-trips for BOTH values.
   const waits = read.filter((d) => d.type === 'AtomicWait')
-  t.deepEqual(
-    waits.map((d) => d.sixtyFour).sort(),
-    [false, true],
-  )
+  t.deepEqual(waits.map((d) => d.sixtyFour).sort(), [false, true])
   // A u64::MAX MemArg offset survived exactly (the reused bigint path is lossless
   // at the full width).
   t.true(
@@ -2497,14 +2492,26 @@ test('C5 negative: an out-of-range/foreign memory index throws catchably (no abo
   t.throws(() => m.buildFunction([], [], [], [rmw as InstrDesc]), { message: /no memory at index 5/ })
   // The guard covers every memory-bearing atomic, not just AtomicRmw.
   t.throws(
-    () => m.buildFunction([], [], [], [{ type: 'Cmpxchg', memory: 8, atomicWidth: 'I32', memArg: { align: 4, offset: 0n } }]),
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [{ type: 'Cmpxchg', memory: 8, atomicWidth: 'I32', memArg: { align: 4, offset: 0n } }],
+      ),
     { message: /no memory at index 8/ },
   )
   t.throws(() => m.buildFunction([], [], [], [{ type: 'AtomicNotify', memory: 6, memArg: { align: 4, offset: 0n } }]), {
     message: /no memory at index 6/,
   })
   t.throws(
-    () => m.buildFunction([], [], [], [{ type: 'AtomicWait', memory: 7, memArg: { align: 4, offset: 0n }, sixtyFour: false }]),
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [{ type: 'AtomicWait', memory: 7, memArg: { align: 4, offset: 0n }, sixtyFour: false }],
+      ),
     { message: /no memory at index 7/ },
   )
   // Process is still alive and the module was never mutated (a real abort would
@@ -2542,9 +2549,12 @@ test('C5 negative: an atomic descriptor missing a required field throws catchabl
     message: /`AtomicWait` instruction is missing its `sixtyFour` field/,
   })
   // A missing memory is guarded for every atomic too.
-  t.throws(() => m.buildFunction([], [], [], [{ type: 'AtomicRmw', atomicOp: 'Add', atomicWidth: 'I32', memArg: arg }]), {
-    message: /`AtomicRmw` instruction is missing its `memory` field/,
-  })
+  t.throws(
+    () => m.buildFunction([], [], [], [{ type: 'AtomicRmw', atomicOp: 'Add', atomicWidth: 'I32', memArg: arg }]),
+    {
+      message: /`AtomicRmw` instruction is missing its `memory` field/,
+    },
+  )
 })
 
 test('C5 negative: a non-lossless MemArg offset on an atomic throws catchably', (t) => {
@@ -2589,7 +2599,9 @@ test('C5 negative: a non-lossless MemArg offset on an atomic throws catchably', 
 
 // A distinctive 16-byte v128 pattern: asymmetric so a byte-order or off-by-one
 // error in the round-trip is visible.
-const V128_PATTERN = new Uint8Array([0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb])
+const V128_PATTERN = new Uint8Array([
+  0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb,
+])
 
 // The 6 BinaryOp `*ReplaceLane` and 8 UnaryOp `*ExtractLane*` lane-carriers, each
 // with a representative lane index (distinct values catch any op/lane mixup).
@@ -2820,12 +2832,22 @@ test('C6b: a well-typed LoadSimd body (splat/load-lane/store-lane) emits valid w
     // i32.const 0 ; v128.const A ; v128.load8_lane 0 ; drop
     { type: 'Const', value: { type: 'I32', value: 0 } },
     { type: 'Const', value: { type: 'V128', value: V128_A } },
-    { type: 'LoadSimd', memory: mem, loadSimdKind: { type: 'V128Load8Lane', lane: 0 }, memArg: { align: 1, offset: 0n } },
+    {
+      type: 'LoadSimd',
+      memory: mem,
+      loadSimdKind: { type: 'V128Load8Lane', lane: 0 },
+      memArg: { align: 1, offset: 0n },
+    },
     { type: 'Drop' },
     // i32.const 0 ; v128.const A ; v128.store8_lane 3  (pops address + vector)
     { type: 'Const', value: { type: 'I32', value: 0 } },
     { type: 'Const', value: { type: 'V128', value: V128_A } },
-    { type: 'LoadSimd', memory: mem, loadSimdKind: { type: 'V128Store8Lane', lane: 3 }, memArg: { align: 1, offset: 0n } },
+    {
+      type: 'LoadSimd',
+      memory: mem,
+      loadSimdKind: { type: 'V128Store8Lane', lane: 3 },
+      memArg: { align: 1, offset: 0n },
+    },
   ]
   const idx = m.buildFunction([], [], [], body)
   m.functions.getByIndex(idx)!.name = 'simd6b'
@@ -2865,9 +2887,12 @@ test('C6b negative: an out-of-range/foreign memory index on a LoadSimd throws ca
   m.memories.addLocal(false, false, 1n, null, null) // memory 0 exists; 5 does not
   t.throws(
     () =>
-      m.buildFunction([], [], [], [
-        { type: 'LoadSimd', memory: 5, loadSimdKind: { type: 'Splat8' }, memArg: { align: 1, offset: 0n } },
-      ]),
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [{ type: 'LoadSimd', memory: 5, loadSimdKind: { type: 'Splat8' }, memArg: { align: 1, offset: 0n } }],
+      ),
     { message: /no memory at index 5/ },
   )
   // Process is still alive and the module was never mutated (the proof under WASI
@@ -2882,20 +2907,21 @@ test('C6b negative: a LoadSimd descriptor missing a required field throws catcha
   // memory is resolved first.
   t.throws(
     () =>
-      m.buildFunction([], [], [], [
-        { type: 'LoadSimd', loadSimdKind: { type: 'Splat8' }, memArg: { align: 1, offset: 0n } },
-      ]),
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [{ type: 'LoadSimd', loadSimdKind: { type: 'Splat8' }, memArg: { align: 1, offset: 0n } }],
+      ),
     { message: /`LoadSimd` instruction is missing its `memory` field/ },
   )
   // loadSimdKind is checked before memArg (matching emit's order).
-  t.throws(
-    () => m.buildFunction([], [], [], [{ type: 'LoadSimd', memory: 0, memArg: { align: 1, offset: 0n } }]),
-    { message: /`LoadSimd` instruction is missing its `loadSimdKind` field/ },
-  )
-  t.throws(
-    () => m.buildFunction([], [], [], [{ type: 'LoadSimd', memory: 0, loadSimdKind: { type: 'Splat8' } }]),
-    { message: /`LoadSimd` instruction is missing its `memArg` field/ },
-  )
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'LoadSimd', memory: 0, memArg: { align: 1, offset: 0n } }]), {
+    message: /`LoadSimd` instruction is missing its `loadSimdKind` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'LoadSimd', memory: 0, loadSimdKind: { type: 'Splat8' } }]), {
+    message: /`LoadSimd` instruction is missing its `memArg` field/,
+  })
 })
 
 test('C6b negative: a non-lossless MemArg offset on a LoadSimd throws catchably', (t) => {
@@ -4198,4 +4224,264 @@ test('C9: a well-typed wide-arithmetic body emits valid wasm and round-trips thr
   const reparsed = new ModuleConfig().onlyStableFeatures(false).strictValidate(false).parse(bytes)
   const read = reparsed.functions.byName('wide')!.instructions()
   t.deepEqual(read, body)
+})
+
+// ---------------------------------------------------------------------------
+// H2: lossless index validation for the InstrDesc + CatchClause numeric INDEX
+// fields (the wide ir.rs / ir_marshal.rs surface). Under the old u32/ToUint32
+// decode an out-of-domain numeric index (2**32 -> 0, -1 -> u32::MAX, NaN -> 0,
+// a fraction truncates) silently ALIASED a valid index and emitted wrong wasm.
+// Carrying each field as `f64` + `checked_index` (reused from H1) rejects it
+// CATCHABLY, before any arena mutation. index.d.ts stays byte-identical (both
+// `u32` and `f64` render TS `number`; `Array<number>` for the label table).
+// ---------------------------------------------------------------------------
+
+// The four coercion classes the old decode swallowed: 2**32 (wrap to 0), -1
+// (wrap to u32::MAX), 1.5 (truncate), NaN (to 0). Each must throw, not alias.
+const H2_BAD = [2 ** 32, -1, 1.5, NaN] as const
+
+test('H2 coercion guard: InstrDesc arena-index fields reject a coerced value instead of aliasing index 0', (t) => {
+  // A module where index 0 is VALID for every probed arena space, so a coerced
+  // 2**32 (-> 0) would silently ALIAS a real item under the old decode.
+  const build = () => {
+    const m = empty()
+    m.locals.add(I32) // local 0
+    m.globals.addLocal(I32, true, false, ConstExpr.i32(0)) // global 0
+    m.imports.addFunction('env', 'callee', m.types.add([], [])) // func 0 (stable)
+    m.memories.addLocal(false, false, 1n, null, null) // memory 0
+    m.data.addPassive(new Uint8Array([1, 2])) // data 0
+    m.tables.addLocal(false, 1n, null, FUNCREF) // table 0
+    m.types.addStruct([...STRUCT_FIELDS]) // a valid struct typeIndex
+    return m
+  }
+  const probes: Array<[string, (v: number) => InstrDesc]> = [
+    ['local', (v) => ({ type: 'LocalGet', local: v })],
+    ['global', (v) => ({ type: 'GlobalGet', global: v })],
+    ['func', (v) => ({ type: 'Call', func: v })],
+    ['memory', (v) => ({ type: 'MemorySize', memory: v })],
+    ['data', (v) => ({ type: 'DataDrop', data: v })],
+    ['table', (v) => ({ type: 'TableGet', table: v })],
+    ['typeIndex', (v) => ({ type: 'StructNew', typeIndex: v })],
+  ]
+  for (const [name, mk] of probes) {
+    for (const bad of H2_BAD) {
+      const m = build()
+      t.throws(() => m.buildFunction([], [], [], [mk(bad)]), {
+        message: new RegExp(`${name} must be an integer in 0\\.\\.=4294967295`),
+      })
+      // Preflight rejected it BEFORE `FunctionBuilder::new` mutated the arena:
+      // the module is pristine and still serializes (no partial mutation).
+      t.notThrows(() => m.emitWasm(false))
+    }
+  }
+})
+
+test('H2 coercion guard: label-space fields (label / labels leaf / defaultLabel) reject a coerced depth', (t) => {
+  // `label` (a relative branch depth) with a real enclosing block at depth 0: a
+  // coerced 2**32 would land on the in-range wrong (aliased) depth 0.
+  const brBody = (label: number): InstrDesc[] => [
+    { type: 'Block', blockType: { type: 'Empty' }, seq: [{ type: 'Br', label }] },
+  ]
+  for (const bad of H2_BAD) {
+    t.throws(() => empty().buildFunction([], [], [], brBody(bad)), {
+      message: /label must be an integer in 0\.\.=4294967295/,
+    })
+  }
+  // `labels` is decoded by the hand-written leaf reader in ir_marshal.rs, which
+  // now reads each element as f64 + checked_index; a 2**32 entry throws there.
+  const brTable = (labels: number[], defaultLabel: number): InstrDesc[] => [
+    { type: 'Block', blockType: { type: 'Empty' }, seq: [{ type: 'BrTable', labels, defaultLabel }] },
+  ]
+  t.throws(() => empty().buildFunction([], [], [], brTable([2 ** 32], 0)), {
+    message: /labels must be an integer in 0\.\.=4294967295/,
+  })
+  // `defaultLabel` on its own consume path.
+  t.throws(() => empty().buildFunction([], [], [], brTable([0], 1.5)), {
+    message: /defaultLabel must be an integer in 0\.\.=4294967295/,
+  })
+  // Happy path: small in-range depths pass the guard (the f64 carrier is exact
+  // for small integers) — buildFunction accepts them, no coercion rejection.
+  t.notThrows(() => empty().buildFunction([], [], [], brTable([0, 0], 0)))
+})
+
+test('H2 coercion guard: the GC struct `field` immediate (verbatim, no resolver) rejects a coerced value', (t) => {
+  const m = empty()
+  const s = m.types.addStruct([...STRUCT_FIELDS]).index
+  for (const bad of H2_BAD) {
+    t.throws(() => m.buildFunction([], [], [], [{ type: 'StructGet', typeIndex: s, field: bad }]), {
+      message: /field must be an integer in 0\.\.=4294967295/,
+    })
+    // Rejected at PREFLIGHT (the mirror `checked_index` guard), so the module is
+    // never partially mutated — it still emits.
+    t.notThrows(() => m.emitWasm(false))
+  }
+  // Happy path: a small field index passes the guard (the C7a EXHAUSTIVE test
+  // round-trips struct field 0/1 end-to-end; here we confirm the guard accepts
+  // a good value rather than rejecting it).
+  t.notThrows(() => m.buildFunction([], [], [], [{ type: 'StructGet', typeIndex: s, field: 0 }]))
+})
+
+test('H2 happy path: a small in-range index round-trips unchanged through the f64 carrier', (t) => {
+  // Small integers are exact in f64, so `x as u32 as f64` is the identical JS
+  // number and no accepted body changes. A plain LocalGet round-trips.
+  const m = empty()
+  const p0 = m.locals.add(I32)
+  const idx = m.buildFunction([I32], [I32], [p0.index], [{ type: 'LocalGet', local: p0.index }])
+  m.functions.getByIndex(idx)!.name = 'lg'
+  const read = new ModuleConfig().parse(m.emitWasm(false)).functions.byName('lg')!.instructions()
+  t.deepEqual(read, [{ type: 'LocalGet', local: 0 }])
+})
+
+test('H2 coercion guard: verbatim relativeDepth (Rethrow / legacy Delegate) and legacy CatchClause tag reject a coerced value', (t) => {
+  // Rethrow's `relativeDepth` is a RAW pass-through walrus never resolves; the
+  // f64 carrier + checked_index still rejects a fractional value.
+  t.throws(() => empty().buildFunction([], [], [], [{ type: 'Rethrow', relativeDepth: 1.5 }]), {
+    message: /relativeDepth must be an integer in 0\.\.=4294967295/,
+  })
+  // A legacy `LegacyCatch` clause tag (CatchClause.tag) resolved via tag_id_at.
+  const withTag = empty()
+  withTag.tags.add(withTag.types.add([], [])) // tag 0 exists; 2**32 must not alias it
+  const tryWith = (catches: unknown[]): InstrDesc[] =>
+    [{ type: 'Try', blockType: { type: 'Empty' }, seq: [], catches }] as unknown as InstrDesc[]
+  t.throws(() => withTag.buildFunction([], [], [], tryWith([{ kind: 'LegacyCatch', tag: 2 ** 32, seq: [] }])), {
+    message: /tag must be an integer in 0\.\.=4294967295/,
+  })
+  // A legacy `LegacyDelegate` clause relativeDepth (verbatim), rejected with NaN.
+  t.throws(() => empty().buildFunction([], [], [], tryWith([{ kind: 'LegacyDelegate', relativeDepth: NaN }])), {
+    message: /relativeDepth must be an integer in 0\.\.=4294967295/,
+  })
+  // Process is still alive after every catchable throw.
+  t.is(1 + 1, 2)
+})
+
+// ---------------------------------------------------------------------------
+// H2 review-fix: emit-side `checked_index` is now OPCODE-SPECIFIC (matching
+// preflight), not eagerly narrowed at the grouped dispatcher. The invariant is:
+// for every opcode, {fields emit checks} == {fields preflight checks} == {fields
+// the opcode consumes}. Two consequences, tested below:
+//   (1) an IRRELEVANT poisoned field (one the opcode does NOT consume) is ignored
+//       by BOTH emit and preflight -> the call SUCCEEDS (field dropped). Pre-fix
+//       the grouped dispatcher narrowed it EAGERLY and threw at emit AFTER
+//       `FunctionBuilder::new` had already interned the signature = an orphan type.
+//   (2) a RELEVANT poisoned field is caught in PREFLIGHT (before any mutation) ->
+//       the call THROWS with the arena UNCHANGED (all-or-nothing).
+// ---------------------------------------------------------------------------
+
+test('H2 review-fix: an IRRELEVANT poisoned index field is ignored (dropped) — buildFunction SUCCEEDS, no orphan, opcode round-trips plain', (t) => {
+  // Each opcode below does NOT consume the poisoned field. Pre-fix the grouped
+  // emit dispatcher `checked_index`ed it anyway and failed at emit (after the
+  // arena was mutated); now emit narrows opcode-specifically, so the bad value is
+  // ignored by BOTH emit and preflight and the read-back is the plain opcode.
+  const mkModule = () => {
+    const m = empty()
+    const s = m.types.addStruct([...STRUCT_FIELDS]).index // struct type
+    const a = m.types.addArray({ ...ARRAY_ELEMENT }).index // array type
+    return { m, s, a }
+  }
+  const cases: Array<[string, (c: { s: number; a: number }) => InstrDesc, (c: { s: number; a: number }) => InstrDesc]> =
+    [
+      // `emit_eh`: ThrowRef is fieldless; `tag` is consumed only by Throw.
+      ['ThrowRef.tag', () => ({ type: 'ThrowRef', tag: NaN }), () => ({ type: 'ThrowRef' })],
+      // `emit_atomic`: AtomicFence is fieldless; `memory` is consumed by the four
+      // memory-bearing atomics only.
+      ['AtomicFence.memory', () => ({ type: 'AtomicFence', memory: NaN }), () => ({ type: 'AtomicFence' })],
+      // `emit_struct`: StructNew consumes only `typeIndex`; `field` is consumed by
+      // the get/set ops only.
+      [
+        'StructNew.field',
+        ({ s }) => ({ type: 'StructNew', typeIndex: s, field: NaN }),
+        ({ s }) => ({ type: 'StructNew', typeIndex: s }),
+      ],
+      // `emit_array`: ArrayLen is fieldless; neither `typeIndex` nor `data` is
+      // consumed by it (both poisoned here).
+      ['ArrayLen.data', ({ a }) => ({ type: 'ArrayLen', typeIndex: a, data: NaN }), () => ({ type: 'ArrayLen' })],
+    ]
+  for (const [name, mkPoison, mkExpected] of cases) {
+    const { m, s, a } = mkModule()
+    let idx = -1
+    t.notThrows(() => {
+      idx = m.buildFunction([], [], [], [mkPoison({ s, a })])
+    }, `${name}: an irrelevant poisoned field must not fail emit`)
+    // Read back from the SAME in-memory module (MIRROR-WALRUS): the irrelevant
+    // field was never emitted, so the round-trip is the plain opcode.
+    t.deepEqual(m.functions.getByIndex(idx)!.instructions(), [mkExpected({ s, a })], name)
+    // The module still serializes (nothing was left half-mutated).
+    t.notThrows(() => m.emitWasm(false), `${name}: module still emits`)
+  }
+})
+
+test('H2 review-fix: a RELEVANT poisoned index field throws in PREFLIGHT with the arena UNCHANGED (all-or-nothing)', (t) => {
+  const mk = () => {
+    const m = empty()
+    const s = m.types.addStruct([...STRUCT_FIELDS]).index
+    const a = m.types.addArray({ ...ARRAY_ELEMENT }).index
+    return { m, s, a }
+  }
+  const probes: Array<[string, (c: { s: number; a: number }) => InstrDesc, RegExp]> = [
+    // `tag` IS consumed by Throw -> caught by validate_eh before mutation.
+    ['Throw.tag', () => ({ type: 'Throw', tag: NaN }), /tag must be an integer in 0\.\.=4294967295/],
+    // `field` IS consumed by StructGet -> caught by validate_struct.
+    [
+      'StructGet.field',
+      ({ s }) => ({ type: 'StructGet', typeIndex: s, field: NaN }),
+      /field must be an integer in 0\.\.=4294967295/,
+    ],
+    // `typeIndex` IS consumed by ArrayGet -> caught by validate_array.
+    ['ArrayGet.typeIndex', () => ({ type: 'ArrayGet', typeIndex: NaN }), /typeIndex must be an integer in 0\.\.=4294967295/],
+    // `memory` IS consumed by AtomicRmw -> caught by validate_atomic (memory is
+    // checked FIRST, before the atomicOp/atomicWidth/memArg presence checks).
+    ['AtomicRmw.memory', () => ({ type: 'AtomicRmw', memory: 2 ** 32 }), /memory must be an integer in 0\.\.=4294967295/],
+  ]
+  for (const [name, mkPoison, re] of probes) {
+    const { m, s, a } = mk()
+    const before = m.types.length
+    t.throws(() => m.buildFunction([], [], [], [mkPoison({ s, a })]), { message: re }, name)
+    // Threw in PREFLIGHT, before `FunctionBuilder::new` interned the function's
+    // signature/entry types -> no orphan type leaked into the arena.
+    t.is(m.types.length, before, `${name}: types.length unchanged after the throw`)
+    // The still-pristine module serializes.
+    t.notThrows(() => m.emitWasm(false), `${name}: module still emits`)
+  }
+})
+
+test('H2 review-fix (replace): a poisoned RELEVANT body index is caught in preflight — replace* leaves the target + types.length unchanged', (t) => {
+  // Exported path: the replacement body carries a coerced RELEVANT `field` on a
+  // grouped-emit StructGet. `replace_exported_func` runs the SAME validate_body
+  // preflight BEFORE `FunctionBuilder::new` mints the replacement, so it throws
+  // pre-mutation: no new func, no orphan signature type, export still original.
+  {
+    const { m, fIdx } = exportedLocalFixture()
+    const s = m.types.addStruct([...STRUCT_FIELDS]).index
+    const funcsBefore = m.functions.length
+    const typesBefore = m.types.length
+    const a0 = m.locals.add(I32)
+    t.throws(() => m.replaceExportedFunc(fIdx, [a0.index], [{ type: 'StructGet', typeIndex: s, field: NaN }]), {
+      message: /field must be an integer in 0\.\.=4294967295/,
+    })
+    t.is(m.functions.length, funcsBefore)
+    t.is(m.types.length, typesBefore)
+    const rm = WasmModule.fromBuffer(m.emitWasm(false))
+    t.deepEqual(rm.exports.byName('f')!.func()!.instructions(), [{ type: 'LocalGet', local: 0 }])
+  }
+  // Imported path: a coerced RELEVANT `tag` on a grouped-emit Throw. Same
+  // guarantee: the import kind is untouched and no orphan signature type interned.
+  {
+    const m = empty()
+    const sig = m.types.add([I32], [I32])
+    const g = m.imports.addFunction('env', 'g', sig)
+    const gIdx = g.index
+    const importsBefore = m.imports.length
+    const funcsBefore = m.functions.length
+    const typesBefore = m.types.length
+    const a0 = m.locals.add(I32)
+    t.throws(() => m.replaceImportedFunc(gIdx, [a0.index], [{ type: 'Throw', tag: 2 ** 32 }]), {
+      message: /tag must be an integer in 0\.\.=4294967295/,
+    })
+    t.is(m.imports.length, importsBefore)
+    t.is(m.functions.length, funcsBefore)
+    t.is(m.types.length, typesBefore)
+    t.not(m.imports.find('env', 'g'), null)
+    t.is(m.functions.getByIndex(gIdx)!.kind, FunctionKindTag.Import)
+    t.notThrows(() => m.emitWasm(false))
+  }
 })

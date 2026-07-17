@@ -96,6 +96,7 @@ use napi::bindgen_prelude::{
 };
 use napi::{check_status, sys, Error, Result, Status, ValueType};
 
+use crate::convert::checked_index;
 use crate::ir::{nesting_too_deep, CatchClause, ConstValue, InstrDesc, MAX_NESTING_DEPTH};
 
 /// The self-referential edge fields of [`InstrDesc`], in DECLARATION order (the
@@ -631,10 +632,16 @@ unsafe fn decode_element_shallow(
   // derived path. Absent/`undefined` own `labels` leaves `desc.labels` at `None`.
   if let Some(arr) = unsafe { get_own_named_property(env, elem, c"labels")? } {
     let len = unsafe { array_length(env, arr) }.map_err(|e| decorate(e, "labels"))?;
-    let mut labels: Vec<u32> = Vec::new();
+    let mut labels: Vec<f64> = Vec::new();
     for i in 0..len {
       let el = unsafe { get_element(env, arr, i) }.map_err(|e| decorate(e, "labels"))?;
-      let n = unsafe { u32::from_napi_value(env, el) }.map_err(|e| decorate(e, "labels"))?;
+      // Read the raw IEEE double LOSSLESSLY (no ToUint32 coercion), then reject an
+      // out-of-domain index catchably via `checked_index` — the same domain check
+      // the derived `Option<u32>` decode of every other InstrDesc field now gets by
+      // carrying `f64`. The validated value is stored as `f64` (the field type);
+      // the emit/preflight BrTable consume sites re-narrow it through `checked_index`.
+      let n = unsafe { f64::from_napi_value(env, el) }.map_err(|e| decorate(e, "labels"))?;
+      checked_index(n, "labels").map_err(|e| decorate(e, "labels"))?;
       // FALLIBLE growth: `len` is the untrusted `Array.length` of `arr`, which a
       // `Proxy` returning a valid `u32` for EVERY numeric index (no hole to fail
       // on) can report as ~`2**32`. `try_reserve` maps that exhaustion to a
