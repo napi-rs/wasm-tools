@@ -58,6 +58,19 @@ test('getByIndex finds by stable index and returns null for a miss', (t) => {
   t.is(m.functions.getByIndex(9999), null)
 })
 
+test('getByIndex rejects a non-u32-integer index instead of silently coercing/aliasing', (t) => {
+  const m = load()
+  // Before hardening these were decoded via ToUint32: 2**32 -> 0, -1 -> u32::MAX,
+  // NaN -> 0, a fraction truncated — each SILENTLY aliasing a wrong (often valid)
+  // index. They must now throw a catchable error, never return an item.
+  for (const bad of [2 ** 32, -1, 1.5, NaN]) {
+    t.throws(() => m.functions.getByIndex(bad), { message: /index must be an integer in 0\.\.=4294967295/ })
+  }
+  // The happy path (a real, in-range integer) is unaffected.
+  t.is(m.functions.getByIndex(1)!.index, 1)
+  t.is(1 + 1, 2) // process still alive after the catchable throws
+})
+
 test('byName finds a named function and returns null for a miss', (t) => {
   const m = load()
   // Names survive because the fixture was built with --debug-names.

@@ -3,7 +3,7 @@ use napi::{Env, Error};
 use napi_derive::napi;
 use walrus::{ExportItem, FunctionBuilder, FunctionKind, Module, RawCustomSection};
 
-use crate::convert::val_type_to_walrus_in;
+use crate::convert::{checked_index, val_type_to_walrus_in};
 use crate::ir::{emit_desc, function_id_at, local_id_at, validate_body};
 use crate::ir_marshal::InstrBody;
 use crate::valtype::ValType;
@@ -120,7 +120,7 @@ impl WasmModule {
     &mut self,
     params: Vec<ValType>,
     results: Vec<ValType>,
-    arg_local_indices: Vec<u32>,
+    arg_local_indices: Vec<f64>,
     // `InstrBody` decodes ITERATIVELY with the nesting guard integrated (see
     // `src/ir_marshal.rs`); `ts_arg_type` keeps the generated `.d.ts` reading
     // `Array<InstrDesc>` exactly as before.
@@ -139,7 +139,7 @@ impl WasmModule {
       .collect::<Result<Vec<_>>>()?;
     let arg_ids = arg_local_indices
       .into_iter()
-      .map(|i| local_id_at(&self.inner, i))
+      .map(|i| local_id_at(&self.inner, checked_index(i, "argLocalIndex")?))
       .collect::<Result<Vec<_>>>()?;
 
     // Unwrap the iteratively-decoded body (same `Vec<InstrDesc>` as before; the
@@ -209,10 +209,11 @@ impl WasmModule {
   /// non-function type, so both are caller-reachable and must not abort.
   pub fn replace_exported_func(
     &mut self,
-    func_index: u32,
-    arg_local_indices: Vec<u32>,
+    func_index: f64,
+    arg_local_indices: Vec<f64>,
     #[napi(ts_arg_type = "Array<InstrDesc>")] body: InstrBody,
   ) -> Result<u32> {
+    let func_index = checked_index(func_index, "funcIndex")?;
     // Resolve the target against the LIVE arena first: a returned id can never be
     // tombstoned/foreign, so the later `funcs.get(fid)` cannot panic.
     let fid = function_id_at(&self.inner, func_index)?;
@@ -274,7 +275,7 @@ impl WasmModule {
     // Resolve the argument locals against the live arena.
     let arg_ids = arg_local_indices
       .into_iter()
-      .map(|i| local_id_at(&self.inner, i))
+      .map(|i| local_id_at(&self.inner, checked_index(i, "argLocalIndex")?))
       .collect::<Result<Vec<_>>>()?;
 
     let body = body.0;
@@ -323,10 +324,11 @@ impl WasmModule {
   /// non-function type — both caller-reachable here).
   pub fn replace_imported_func(
     &mut self,
-    func_index: u32,
-    arg_local_indices: Vec<u32>,
+    func_index: f64,
+    arg_local_indices: Vec<f64>,
     #[napi(ts_arg_type = "Array<InstrDesc>")] body: InstrBody,
   ) -> Result<u32> {
+    let func_index = checked_index(func_index, "funcIndex")?;
     // Resolve the target against the LIVE arena first (abort guard, as above).
     let fid = function_id_at(&self.inner, func_index)?;
 
@@ -385,7 +387,7 @@ impl WasmModule {
     // Resolve the argument locals against the live arena.
     let arg_ids = arg_local_indices
       .into_iter()
-      .map(|i| local_id_at(&self.inner, i))
+      .map(|i| local_id_at(&self.inner, checked_index(i, "argLocalIndex")?))
       .collect::<Result<Vec<_>>>()?;
 
     let body = body.0;

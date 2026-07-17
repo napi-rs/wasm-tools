@@ -81,7 +81,8 @@ impl WasmElements {
   #[napi]
   /// The element segment whose stable `.index` equals `index`, or `null` if none
   /// exists.
-  pub fn get_by_index(&self, env: Env, index: u32) -> Result<Option<WasmElement>> {
+  pub fn get_by_index(&self, env: Env, index: f64) -> Result<Option<WasmElement>> {
+    let index = crate::convert::checked_index(index, "index")?;
     let id = self
       .module
       .inner

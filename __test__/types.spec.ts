@@ -66,6 +66,17 @@ test('getByIndex finds by stable index and returns null for a miss', (t) => {
   t.is(m.types.getByIndex(9999), null)
 })
 
+test('getByIndex rejects a non-u32-integer index instead of silently coercing/aliasing', (t) => {
+  const m = load()
+  const fn = m.types.items().find((x) => x.kind === 'Function')!
+  // 2**32 -> 0, -1 -> u32::MAX, NaN -> 0, 1.5 truncates under the old ToUint32
+  // decode; each must now throw catchably rather than aliasing a wrong type.
+  for (const bad of [2 ** 32, -1, 1.5, NaN]) {
+    t.throws(() => m.types.getByIndex(bad), { message: /index must be an integer in 0\.\.=4294967295/ })
+  }
+  t.is(m.types.getByIndex(fn.index)!.index, fn.index) // happy path intact
+})
+
 test('byName returns null for a freshly parsed type (walrus drops WAT names) but finds a named type', (t) => {
   const m = load()
   // walrus' ModuleTypes::by_name always returns None for a newly parsed

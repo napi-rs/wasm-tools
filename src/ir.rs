@@ -50,7 +50,9 @@ use walrus::{
   Module, TableId, TagId,
 };
 
-use crate::convert::{heap_type_to_walrus_in, resolve_type_id, val_type_to_walrus_in};
+use crate::convert::{
+  checked_index, heap_type_to_walrus_in, resolve_type_id, val_type_to_walrus_in,
+};
 use crate::handle::bigint_to_u64;
 use crate::valtype::{HeapType, ValType};
 
@@ -186,7 +188,7 @@ pub enum BlockType {
   /// (`InstrSeqType::MultiValue`).
   MultiValue {
     /// The stable index of the function type describing this block's signature.
-    type_index: u32,
+    type_index: f64,
   },
 }
 
@@ -940,9 +942,10 @@ fn to_instr_seq_type(module: &Module, bt: Option<BlockType>) -> Result<wir::Inst
     Some(BlockType::Value { value }) => {
       wir::InstrSeqType::Simple(Some(val_type_to_walrus_in(module, value)?))
     }
-    Some(BlockType::MultiValue { type_index }) => {
-      wir::InstrSeqType::MultiValue(resolve_type_id(module, type_index)?)
-    }
+    Some(BlockType::MultiValue { type_index }) => wir::InstrSeqType::MultiValue(resolve_type_id(
+      module,
+      checked_index(type_index, "typeIndex")?,
+    )?),
   })
 }
 
@@ -956,7 +959,7 @@ fn from_instr_seq_type(ty: wir::InstrSeqType) -> Result<BlockType> {
       value: vt.try_into()?,
     },
     wir::InstrSeqType::MultiValue(id) => BlockType::MultiValue {
-      type_index: id.index() as u32,
+      type_index: id.index() as f64,
     },
   })
 }
@@ -3881,7 +3884,7 @@ fn validate_block_type(module: &Module, bt: &Option<BlockType>) -> Result<()> {
       val_type_to_walrus_in(module, value.clone())?;
     }
     Some(BlockType::MultiValue { type_index }) => {
-      resolve_type_id(module, *type_index)?;
+      resolve_type_id(module, checked_index(*type_index, "typeIndex")?)?;
     }
   }
   Ok(())

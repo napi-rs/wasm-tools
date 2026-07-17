@@ -53,7 +53,8 @@ impl WasmTags {
 
   #[napi]
   /// The tag whose stable `.index` equals `index`, or `null` if none exists.
-  pub fn get_by_index(&self, env: Env, index: u32) -> Result<Option<WasmTag>> {
+  pub fn get_by_index(&self, env: Env, index: f64) -> Result<Option<WasmTag>> {
+    let index = crate::convert::checked_index(index, "index")?;
     let id = self
       .module
       .inner

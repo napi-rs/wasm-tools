@@ -123,7 +123,8 @@ impl WasmTypes {
 
   #[napi]
   /// The type whose stable `.index` equals `index`, or `null` if none exists.
-  pub fn get_by_index(&self, env: Env, index: u32) -> Result<Option<WasmType>> {
+  pub fn get_by_index(&self, env: Env, index: f64) -> Result<Option<WasmType>> {
+    let index = crate::convert::checked_index(index, "index")?;
     let entry_ids = entry_type_ids(&self.module.inner);
     let id = self
       .module

@@ -60,15 +60,15 @@ pub enum HeapType {
   Abstract { kind: AbstractHeapType },
   /// A concrete (indexed) heap type: `(ref $t)`, referencing a defined type by
   /// its stable index.
-  Concrete { type_index: u32 },
+  Concrete { type_index: f64 },
   /// An exact heap type: `(ref exact $t)` (custom-descriptors proposal),
   /// referencing a defined type by its stable index.
-  Exact { type_index: u32 },
+  Exact { type_index: f64 },
   /// An intra-rec-group reference: `(ref $sibling)` to the `rec_index`-th
   /// member of the rec group currently being built. Valid ONLY inside an
   /// `addRecGroup` member descriptor (a sibling has no stable arena index yet);
   /// every other converter rejects it with a catchable error.
-  RecGroup { rec_index: u32 },
+  RecGroup { rec_index: f64 },
 }
 
 /// An abstract heap type, mirroring `walrus::AbstractHeapType` 1:1.
@@ -179,12 +179,12 @@ pub enum RecGroupRef {
   /// A sibling member of the rec group currently being built, by position.
   RecGroup {
     /// The position of the referenced member in the `members` array.
-    rec_index: u32,
+    rec_index: f64,
   },
   /// An existing type in the module, by its stable arena index.
   Existing {
     /// The stable `.index()` of the referenced existing type.
-    type_index: u32,
+    type_index: f64,
   },
 }
 

@@ -236,6 +236,54 @@ test('PART2 neg: a member ref to a nonexistent existing type index throws catcha
   t.is(m.types.length, 0)
 })
 
+test('PART2 coercion: a member field recIndex of 2**32 throws instead of aliasing sibling 0', (t) => {
+  const m = empty()
+  // count == 1, so recIndex 0 is IN range. Old ToUint32 decode mapped 2**32 -> 0,
+  // silently aliasing the group's own sibling 0 and SUCCEEDING; it must now throw
+  // losslessly BEFORE the range check.
+  const err = t.throws(() => m.types.addRecGroup([structOf(recGroupRef(2 ** 32))]))
+  t.regex(err!.message, /recIndex must be an integer in 0\.\.=4294967295/)
+  t.is(m.types.length, 0)
+})
+
+test('PART2 coercion: a supertype recIndex of 1.5 and an Existing typeIndex of 2**32 throw catchably', (t) => {
+  const m = empty()
+  // A fractional sibling supertype recIndex would truncate under the old decode.
+  const err1 = t.throws(() =>
+    m.types.addRecGroup([
+      {
+        composite: { type: 'Struct', fields: [{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: false }] },
+        isFinal: false,
+        supertype: { type: 'RecGroup', recIndex: 1.5 },
+      },
+    ]),
+  )
+  t.regex(err1!.message, /recIndex must be an integer in 0\.\.=4294967295/)
+
+  // An existing-type supertype typeIndex of 2**32 would alias type 0.
+  const err2 = t.throws(() =>
+    m.types.addRecGroup([
+      {
+        composite: { type: 'Struct', fields: [{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: false }] },
+        isFinal: false,
+        supertype: { type: 'Existing', typeIndex: 2 ** 32 },
+      },
+    ]),
+  )
+  t.regex(err2!.message, /typeIndex must be an integer in 0\.\.=4294967295/)
+  t.is(m.types.length, 0)
+})
+
+test('PART2 coercion: a concrete-ref typeIndex of 2**32 throws at the rerouted types.add write site', (t) => {
+  const m = empty()
+  m.types.addStruct([{ storage: { type: 'Val', value: { type: 'I32' } }, mutable: true }])
+  // types.add reroutes the concrete ref through the module-aware converter, which
+  // now validates the typeIndex losslessly before resolve_type_id.
+  t.throws(() => m.types.add([concreteRef(2 ** 32)], []), {
+    message: /typeIndex must be an integer in 0\.\.=4294967295/,
+  })
+})
+
 test('PART2: an empty members array returns [] (mirror-walrus), module unchanged', (t) => {
   const m = empty()
   const handles = m.types.addRecGroup([])

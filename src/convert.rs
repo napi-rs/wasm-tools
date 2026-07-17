@@ -59,10 +59,10 @@ impl TryFrom<walrus::HeapType> for HeapType {
         kind: abstract_type.try_into()?,
       },
       walrus::HeapType::Concrete(id) => HeapType::Concrete {
-        type_index: id.index() as u32,
+        type_index: id.index() as f64,
       },
       walrus::HeapType::Exact(id) => HeapType::Exact {
-        type_index: id.index() as u32,
+        type_index: id.index() as f64,
       },
       // `walrus::HeapType` is `#[non_exhaustive]` and `Cargo.lock` is
       // untracked, so a fresh build can pull a later 0.26.x with a new variant.
@@ -250,6 +250,24 @@ pub(crate) fn resolve_type_id(
     })
 }
 
+/// Validate a JS number that must be a `u32` index, losslessly.
+///
+/// A numeric index param/field is decoded by napi from JS via `napi_get_value_double`
+/// when its Rust type is `f64` (the exact IEEE double, no coercion). Had it been a
+/// `u32`, napi would apply ECMAScript ToUint32 FIRST (`2**32`->0, `-1`->`u32::MAX`,
+/// `NaN`/`Infinity`->0, a fraction truncates), silently ALIASING a wrong index before
+/// any Rust range check runs. Carrying the value as `f64` and validating here rejects
+/// an out-of-domain index catchably (a normal JS exception) instead.
+pub(crate) fn checked_index(n: f64, what: &str) -> napi::Result<u32> {
+  if n.is_finite() && n.fract() == 0.0 && n >= 0.0 && n <= u32::MAX as f64 {
+    Ok(n as u32)
+  } else {
+    Err(napi::Error::from_reason(format!(
+      "{what} must be an integer in 0..=4294967295, got {n}"
+    )))
+  }
+}
+
 /// Module-aware `HeapType` -> `walrus::HeapType`: like the pure `TryFrom`, but
 /// resolves a concrete/exact `type_index` against the live arena instead of
 /// rejecting it.
@@ -261,10 +279,12 @@ pub(crate) fn heap_type_to_walrus_in(
   match heap {
     HeapType::Abstract { kind } => Ok(walrus::HeapType::Abstract(kind.into())),
     HeapType::Concrete { type_index } => Ok(walrus::HeapType::Concrete(resolve_type_id(
-      module, type_index,
+      module,
+      checked_index(type_index, "typeIndex")?,
     )?)),
     HeapType::Exact { type_index } => Ok(walrus::HeapType::Exact(resolve_type_id(
-      module, type_index,
+      module,
+      checked_index(type_index, "typeIndex")?,
     )?)),
     // A rec-group sibling reference has no arena index yet; it is resolved only
     // by `addRecGroup`'s bespoke two-phase converter, never here.
@@ -442,6 +462,7 @@ fn plan_val(module: &walrus::Module, ty: ValType, count: usize) -> napi::Result<
       nullable,
       heap: HeapType::RecGroup { rec_index },
     } => {
+      let rec_index = checked_index(rec_index, "recIndex")?;
       if rec_index as usize >= count {
         return Err(napi::Error::from_reason(format!(
           "rec-group reference recIndex {rec_index} is out of range for a group of {count} member(s)"
@@ -506,6 +527,7 @@ fn plan_composite(
 fn plan_super(module: &walrus::Module, sup: RecGroupRef, count: usize) -> napi::Result<PlanSuper> {
   match sup {
     RecGroupRef::RecGroup { rec_index } => {
+      let rec_index = checked_index(rec_index, "recIndex")?;
       if rec_index as usize >= count {
         return Err(napi::Error::from_reason(format!(
           "rec-group supertype recIndex {rec_index} is out of range for a group of {count} member(s)"
@@ -513,9 +535,10 @@ fn plan_super(module: &walrus::Module, sup: RecGroupRef, count: usize) -> napi::
       }
       Ok(PlanSuper::Sibling(rec_index))
     }
-    RecGroupRef::Existing { type_index } => {
-      Ok(PlanSuper::Existing(resolve_type_id(module, type_index)?))
-    }
+    RecGroupRef::Existing { type_index } => Ok(PlanSuper::Existing(resolve_type_id(
+      module,
+      checked_index(type_index, "typeIndex")?,
+    )?)),
   }
 }
 

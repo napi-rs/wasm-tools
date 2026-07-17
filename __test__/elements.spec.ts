@@ -57,6 +57,16 @@ test('getByIndex finds by stable index and returns null for a miss', (t) => {
   t.is(m.elements.getByIndex(99), null)
 })
 
+test('getByIndex rejects a non-u32-integer index instead of silently coercing/aliasing', (t) => {
+  const m = load()
+  // 2**32 -> 0, -1 -> u32::MAX, NaN -> 0, 1.5 truncates under the old ToUint32
+  // decode; each must now throw catchably rather than aliasing a wrong segment.
+  for (const bad of [2 ** 32, -1, 1.5, NaN]) {
+    t.throws(() => m.elements.getByIndex(bad), { message: /index must be an integer in 0\.\.=4294967295/ })
+  }
+  t.is(m.elements.getByIndex(1)!.index, 1) // happy path intact
+})
+
 test('active segment exposes its table and offset; passive returns null for both', (t) => {
   const m = load()
   const [active, passive] = m.elements.items()

@@ -310,6 +310,65 @@ test('guard: a bad argLocalIndices index and a bad multi-value block type index 
   )
 })
 
+test('coercion guard: buildFunction rejects a non-u32-integer argLocalIndex instead of aliasing', (t) => {
+  // Old ToUint32 decode would map 2**32 -> local 0 and 1.5 -> local 1, silently
+  // wiring the function to the WRONG argument local; each must now throw.
+  const m = empty()
+  m.locals.add(I32)
+  m.locals.add(I32)
+  for (const bad of [2 ** 32, -1, 1.5, NaN]) {
+    t.throws(() => m.buildFunction([I32], [], [bad], []), {
+      message: /argLocalIndex must be an integer in 0\.\.=4294967295/,
+    })
+  }
+})
+
+test('coercion guard: a multi-value block typeIndex of 2**32 throws instead of aliasing type 0', (t) => {
+  const m = empty()
+  const t0 = m.types.add([I32], [I32]) // a real function type at some index
+  // 2**32 would coerce to 0 under the old decode and silently pick whatever type
+  // sits at index 0; it must now throw catchably.
+  t.throws(
+    () =>
+      m.buildFunction([], [], [], [{ type: 'Block', blockType: { type: 'MultiValue', typeIndex: 2 ** 32 }, seq: [] }]),
+    { message: /typeIndex must be an integer in 0\.\.=4294967295/ },
+  )
+  // The happy path with the real index still works.
+  t.notThrows(() =>
+    m.buildFunction([], [], [], [{ type: 'Block', blockType: { type: 'MultiValue', typeIndex: t0.index }, seq: [] }]),
+  )
+})
+
+test('coercion guard: a concrete-ref typeIndex of 2**32 throws at the rerouted write site (was aliasing type 0)', (t) => {
+  const m = empty()
+  const concrete2p32: ValType = { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: 2 ** 32 } }
+  // buildFunction's param signature conversion reroutes the concrete ref through
+  // heap_type_to_walrus_in -> checked_index BEFORE resolve_type_id, so a coerced
+  // typeIndex can no longer alias type 0.
+  t.throws(() => m.buildFunction([concrete2p32], [], [], []), {
+    message: /typeIndex must be an integer in 0\.\.=4294967295/,
+  })
+  const concreteFrac: ValType = { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: 1.5 } }
+  t.throws(() => m.buildFunction([concreteFrac], [], [], []), {
+    message: /typeIndex must be an integer in 0\.\.=4294967295/,
+  })
+})
+
+test('coercion guard: replaceExportedFunc rejects a coerced funcIndex and argLocalIndex instead of aliasing', (t) => {
+  const { m, fIdx } = exportedLocalFixture()
+  const a0 = m.locals.add(I32)
+  const newBody: InstrDesc[] = [{ type: 'Const', value: { type: 'I32', value: 42 } }]
+  // funcIndex 2**32 would coerce to func 0 (the wrong function) under the old
+  // decode; it must now throw.
+  t.throws(() => m.replaceExportedFunc(2 ** 32, [a0.index], newBody), {
+    message: /funcIndex must be an integer in 0\.\.=4294967295/,
+  })
+  // A fractional argLocalIndex would truncate to a wrong local; it must now throw.
+  t.throws(() => m.replaceExportedFunc(fIdx, [1.5], newBody), {
+    message: /argLocalIndex must be an integer in 0\.\.=4294967295/,
+  })
+})
+
 test('guard: a branch label deeper than the enclosing blocks throws catchably (no abort)', (t) => {
   // No enclosing block at all: only the function entry frame exists (depth 0), so
   // label 5 is out of range.
