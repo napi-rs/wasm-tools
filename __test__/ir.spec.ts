@@ -995,11 +995,12 @@ test('CH-fix3 (already-detached at snapshot, V128): a buffer detached DURING the
   let trapRan = false
   // `detachTrap` is an own getter enumerated by the copy loop, which runs it
   // (invoking `transfer()`) BEFORE the derived decode reads `value.value`. So the
-  // derived decode captures an ALREADY-detached (length-0) view. The snapshot
-  // re-queries the LIVE typed-array info — sees length 0 — and copies nothing,
-  // NEVER dereferencing the freed pointer; a downstream 16-byte check then rejects
-  // it CATCHABLY ("got 0"). Property order (`type`, `value`, `detachTrap`) makes
-  // the trap fire after `value` is shallow-copied.
+  // derived decode captures an ALREADY-detached view. The snapshot reads the bytes
+  // by integer index (`napi_get_element`), NEVER dereferencing the freed pointer —
+  // a detached view reads `undefined` at index 0, so it rejects CATCHABLY with the
+  // generic "expected exactly 16 bytes" (decorated `on InstrDesc.value`). Property
+  // order (`type`, `value`, `detachTrap`) makes the trap fire after `value` is
+  // shallow-copied.
   const desc = {
     type: 'Const',
     value: { type: 'V128', value: new Uint8Array(buf) },
@@ -1011,7 +1012,7 @@ test('CH-fix3 (already-detached at snapshot, V128): a buffer detached DURING the
   }
   const m = empty()
   t.throws(() => m.buildFunction([], [], [], [desc] as unknown as InstrDesc[]), {
-    message: /v128 const requires exactly 16 bytes, got 0/,
+    message: /expected exactly 16 bytes/,
   })
   t.true(trapRan)
   t.is(buf.byteLength, 0)
@@ -1030,6 +1031,80 @@ test('CH-fix3 (snapshot transparency): a NORMAL shuffle + V128 const round-trip 
   const idx = m.buildFunction([], [], [], body)
   const read = m.functions.getByIndex(idx)!.instructions()
   t.deepEqual(read, body) // owned-copy bytes are identical to the input bytes
+})
+
+// ---------------------------------------------------------------------------
+// CH-fix4: the round-4 [critical] typed-array-SPOOF OOB. On the published emnapi
+// 1.9.2 (WASI) `napi_get_typedarray_info` reads the typed array's ordinary,
+// JS-SHADOWABLE `length`/`byteOffset` properties. So a real `Uint8Array` over a
+// SHORT buffer, with an own `length` shadowed to >=16, made the OLD snapshot's
+// `from_raw_parts(data, length).to_vec()` read PAST the real backing store — a
+// bounded (<=16-byte) OOB heap read that leaked adjacent heap into the emitted
+// V128/shuffle immediate (silent corruption) or faulted at a page edge. Fix:
+// `snapshot_uint8array` reads the 16 bytes THROUGH the typed array's integer-indexed
+// `[[Get]]` (`napi_get_element`) — bounded by the REAL `[[ArrayLength]]` internal
+// slot and impossible to spoof with an own `length`/`byteOffset`, on native AND
+// emnapi/WASI. The WASI run is the real proof: on the OLD code the spoof there
+// OOB-reads 16 bytes from a 1-byte buffer; post-fix it rejects catchably.
+// ---------------------------------------------------------------------------
+
+// A real `Uint8Array` over a 1-byte buffer whose OWN `length` is shadowed to 16
+// (a data-property variant and an accessor variant). `napi_get_typedarray_info`
+// (emnapi) trusts this shadowed length; the exotic integer-index `[[Get]]` used by
+// `napi_get_element` does NOT — it stays bounded by the real 1-element length.
+function spoofLen16Data(): Uint8Array {
+  const a = new Uint8Array(1)
+  Object.defineProperty(a, 'length', { value: 16 })
+  return a
+}
+function spoofLen16Getter(): Uint8Array {
+  const a = new Uint8Array(1)
+  Object.defineProperty(a, 'length', {
+    get() {
+      return 16
+    },
+  })
+  return a
+}
+
+test('CH-fix4 (spoof regression, shuffle): a short Uint8Array with an own `length` shadowed to 16 rejects catchably — no OOB read (native + WASI)', (t) => {
+  for (const spoof of [spoofLen16Data(), spoofLen16Getter()]) {
+    const desc = { type: 'I8x16Shuffle', shuffleIndices: spoof } as unknown as InstrDesc
+    // OLD WASI code: OOB-reads 16 bytes from the 1-byte buffer (leaking heap into
+    // the shuffle immediate, or faulting). Post-fix: the real length-1 access reads
+    // `undefined` at index 1 → catchable reject, never an OOB read.
+    t.throws(() => empty().buildFunction([], [], [], [desc]), {
+      message: /expected exactly 16 bytes/,
+    })
+  }
+  // The process SURVIVES: a subsequent normal build still works.
+  t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
+})
+
+test('CH-fix4 (spoof regression, V128 const): a short Uint8Array with an own `length` shadowed to 16 rejects catchably — no OOB read (native + WASI)', (t) => {
+  for (const spoof of [spoofLen16Data(), spoofLen16Getter()]) {
+    const desc = { type: 'Const', value: { type: 'V128', value: spoof } } as unknown as InstrDesc
+    t.throws(() => empty().buildFunction([], [], [], [desc]), {
+      message: /expected exactly 16 bytes/,
+    })
+  }
+  t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
+})
+
+test('CH-fix4 (no silent truncation): a 20-byte or 8-byte shuffle / V128 throws (never truncated to 16) — native + WASI', (t) => {
+  for (const len of [20, 8]) {
+    // A `> 16` array has a present index 16; a `< 16` array reads `undefined` early —
+    // both catchable rejects, so a 20-byte value is NEVER silently truncated to 16.
+    const shuf = { type: 'I8x16Shuffle', shuffleIndices: new Uint8Array(len) } as unknown as InstrDesc
+    t.throws(() => empty().buildFunction([], [], [], [shuf]), {
+      message: /expected exactly 16 bytes/,
+    })
+    const v128 = { type: 'Const', value: { type: 'V128', value: new Uint8Array(len) } } as unknown as InstrDesc
+    t.throws(() => empty().buildFunction([], [], [], [v128]), {
+      message: /expected exactly 16 bytes/,
+    })
+  }
+  t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
 })
 
 // Finding B: a Proxy whose `length` trap reports a large HOLE-FREE count. On WASI
@@ -2254,20 +2329,27 @@ test('C6a negative: a lane op missing its `lane` throws catchably (both Binop an
 })
 
 test('C6a negative: a v128 const whose byte length != 16 throws catchably', (t) => {
+  // CH-fix4: a wrong-length V128 is now rejected INSIDE the typed-array snapshot
+  // (index-read: a `< 16` array reads `undefined` early, a `> 16` array has a
+  // present index 16) with the generic "expected exactly 16 bytes" (decorated
+  // `on InstrDesc.value`), instead of later by `v128_bytes_to_u128` ("got N").
   const short = { type: 'Const', value: { type: 'V128', value: new Uint8Array(15) } } as InstrDesc
   t.throws(() => empty().buildFunction([], [], [], [short]), {
-    message: /v128 const requires exactly 16 bytes, got 15/,
+    message: /expected exactly 16 bytes/,
   })
   const long = { type: 'Const', value: { type: 'V128', value: new Uint8Array(17) } } as InstrDesc
   t.throws(() => empty().buildFunction([], [], [], [long]), {
-    message: /v128 const requires exactly 16 bytes, got 17/,
+    message: /expected exactly 16 bytes/,
   })
 })
 
 test('C6a negative: an I8x16Shuffle whose indices length != 16 (or absent) throws catchably', (t) => {
+  // CH-fix4: a wrong-length shuffle is now rejected INSIDE the snapshot (same
+  // index-read mechanism) as "expected exactly 16 bytes" (decorated
+  // `on InstrDesc.shuffleIndices`), instead of later by `to_shuffle_indices`.
   const short = { type: 'I8x16Shuffle', shuffleIndices: new Uint8Array([1, 2, 3]) } as InstrDesc
   t.throws(() => empty().buildFunction([], [], [], [short]), {
-    message: /i8x16.shuffle requires exactly 16 lane indices, got 3/,
+    message: /expected exactly 16 bytes/,
   })
   // Absent shuffleIndices is a missing-field error.
   t.throws(() => empty().buildFunction([], [], [], [{ type: 'I8x16Shuffle' }]), {

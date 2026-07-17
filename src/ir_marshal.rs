@@ -274,68 +274,91 @@ fn too_large(what: &str) -> Error {
   )
 }
 
-/// Copy a decoded typed-array field into Rust-OWNED bytes, defusing a
-/// retained-JS-pointer use-after-free.
-///
-/// napi 3.10.5's `Uint8Array::from_napi_value` CACHES the backing ArrayBuffer's
-/// data pointer + length at decode time (arraybuffer.rs:762), and its
-/// `as_ref`/`Deref`/`to_vec` rebuild a slice from that STORED pointer with NO
-/// live detach re-check (arraybuffer.rs:692). So if any user JS that runs AFTER
-/// this element's derived decode — a `labels`/edge/sibling-field getter, or a
-/// child `Proxy` trap — detaches the buffer (e.g. `ArrayBuffer.prototype
-/// .transfer()`), that cached pointer DANGLES, and a later `validate_shuffle` /
-/// v128 emit that reads `shuffle_indices` / `value` (ir.rs:3037, 1348) would read
-/// freed memory (UAF/UB). We therefore copy the bytes NOW — through a FRESH
-/// `napi_get_typedarray_info` handle, NEVER the cached pointer — and rebuild an
-/// OWNED `Uint8Array` (`raw: None`, its own `Vec`), so no JS-backed typed-array
-/// pointer survives past `decode_element_shallow` and any later detach is
-/// irrelevant.
-///
-/// Already-detached safety: we NEVER dereference the struct's cached pointer.
-/// `to_napi_value` returns the ORIGINAL typed array's `napi_value` from its
-/// stored reference and runs NO user JS (no `[[Get]]`, no getter/`Proxy` trap);
-/// a fresh `napi_get_typedarray_info` on a detached view reports `length == 0`
-/// and `data == null` (V8 AND emnapi both null a detached view's info), so the
-/// copy takes the empty branch — a downstream 16-byte length check
-/// (`to_shuffle_indices` / `v128_bytes_to_u128`) then rejects it CATCHABLY. Uses
-/// only napi6 calls (`napi_is_detached_arraybuffer` is napi7, not enabled here);
-/// re-querying the live info makes an explicit detach check unnecessary for
-/// safety.
-unsafe fn snapshot_uint8array(env: sys::napi_env, u: Uint8Array) -> Result<Uint8Array> {
-  // A decoded (`raw: Some`) `Uint8Array` hands back the ORIGINAL typed array's
-  // `napi_value` via its stored reference — no `[[Get]]` runs — and consuming `u`
-  // here guarantees its cached pointer is never dereferenced (its `Drop`
-  // early-returns on the null ref `to_napi_value` leaves behind).
-  let napi_val = unsafe { Uint8Array::to_napi_value(env, u)? };
-  let mut ta_type = 0;
-  let mut length = 0usize;
-  let mut data = std::ptr::null_mut();
-  let mut arraybuffer = std::ptr::null_mut();
-  let mut byte_offset = 0usize;
+/// `napi_typeof(val) == napi_undefined`. Used by [`snapshot_uint8array`] to detect
+/// an out-of-range typed-array index read — a real `[[ArrayLength]]` shorter than
+/// the 16 bytes we require (including a detached view, where EVERY integer index
+/// reads `undefined`), and the presence of a 17th element (index 16 in range).
+unsafe fn is_undefined(env: sys::napi_env, val: sys::napi_value) -> Result<bool> {
+  let mut ty = 0;
   check_status!(
-    unsafe {
-      sys::napi_get_typedarray_info(
-        env,
-        napi_val,
-        &mut ta_type,
-        &mut length,
-        &mut data,
-        &mut arraybuffer,
-        &mut byte_offset,
-      )
-    },
-    "Failed to get typedarray info"
+    unsafe { sys::napi_typeof(env, val, &mut ty) },
+    "Failed to get type of value"
   )?;
-  // Copy from the FRESH pointer (`napi_get_typedarray_info` returns `data`
-  // already adjusted by `byte_offset`, matching napi's own `as_ref`). A detached
-  // view reports `length == 0` / `data == null`, so this takes the empty branch
-  // and never dereferences a freed pointer — on native or WASI.
-  let bytes: Vec<u8> = if length == 0 || data.is_null() {
-    Vec::new()
-  } else {
-    unsafe { std::slice::from_raw_parts(data.cast::<u8>(), length) }.to_vec()
-  };
-  Ok(Uint8Array::from(bytes))
+  Ok(ty == sys::ValueType::napi_undefined)
+}
+
+/// Copy a decoded typed-array field into Rust-OWNED bytes by reading its 16 fixed
+/// bytes THROUGH the typed array's integer-indexed `[[Get]]` (`napi_get_element`),
+/// never through `napi_get_typedarray_info`'s reported `length`/`byteOffset` and
+/// never by dereferencing a raw backing-store pointer.
+///
+/// Both call sites pass an exactly-16-byte field — `shuffle_indices` (16 lane
+/// bytes, `I8x16Shuffle`) and the `V128` const's `value` (16 vector bytes) — so we
+/// read EXACTLY 16 elements and reject any other length. The fixed 16 is the only
+/// thing about size this function trusts; nothing here is sized from an untrusted,
+/// JS-reported length.
+///
+/// ## Why the index read, not the reported length — spoof-proof on native AND WASI
+/// napi's `Uint8Array::from_napi_value` / `napi_get_typedarray_info` read a typed
+/// array's `length`/`byteOffset`. On the published emnapi (WASI) those come from
+/// the ordinary, JS-SHADOWABLE `length`/`byteOffset` properties, so a caller can
+/// wrap a SHORT buffer in a real `Uint8Array` whose own `length` is shadowed to
+/// `>= 16`; trusting that reported length and copying via
+/// `from_raw_parts(data, length)` reads PAST the real backing store — a bounded OOB
+/// heap read (leaking adjacent heap into the emitted immediate, or faulting at a
+/// page edge). `napi_get_element(i)` is instead the typed array's EXOTIC
+/// integer-indexed access, bounded by the REAL `[[ArrayLength]]` internal slot and
+/// impossible to spoof with an own `length`/`byteOffset` (native reads V8 internal
+/// slots; emnapi/WASI dispatches to the host engine's genuine element `[[Get]]`):
+/// * legit 16-byte input: the 16 real bytes are read in-bounds; index 16 is out of
+///   range → `undefined` → accepted. Byte-identical to before for legit input.
+/// * real length `< 16` (any shadowed `length`): an in-range index reads out of the
+///   REAL bounds → `undefined` → catchable reject. NO OOB read.
+/// * real length `> 16`: index 16 is present → catchable reject. NO silent
+///   truncation of a longer array to its first 16 bytes.
+///
+/// ## Detach & UAF safety
+/// A detached view returns `undefined` for EVERY integer index → index 0 is
+/// `undefined` → catchable reject. No raw pointer is dereferenced at all, so the
+/// retained-cached-pointer use-after-free the old `from_raw_parts` version guarded
+/// against is eliminated at the source (strictly safer). No
+/// `napi_get_typedarray_info`, no `from_raw_parts`, no napi7 `is_detached`.
+///
+/// Consumes `u`: `Uint8Array::to_napi_value` hands back the ORIGINAL typed array's
+/// `napi_value` via its stored reference (no `[[Get]]`, no user JS runs), and taking
+/// ownership here guarantees the pointer napi cached at decode time is NEVER
+/// dereferenced (`u`'s `Drop` early-returns on the null ref `to_napi_value` leaves).
+unsafe fn snapshot_uint8array(env: sys::napi_env, u: Uint8Array) -> Result<Uint8Array> {
+  let napi_val = unsafe { Uint8Array::to_napi_value(env, u)? };
+  let mut bytes: Vec<u8> = Vec::with_capacity(16); // trusted fixed size, not untrusted
+  for i in 0..16u32 {
+    let el = unsafe { get_element(env, napi_val, i)? };
+    // An in-range index that reads `undefined` means the REAL `[[ArrayLength]]` is
+    // `< 16` (incl. a detached view: every index undefined) → catchable reject,
+    // NO OOB. A shadowed own `length` is irrelevant: the exotic `[[Get]]` is bounded
+    // by the internal slot, so it never lets this read past the real backing store.
+    if unsafe { is_undefined(env, el)? } {
+      return Err(Error::from_reason("expected exactly 16 bytes"));
+    }
+    // A genuine typed array yields a number in `0..=255`; the status check and range
+    // check are defense-in-depth (a non-number would be a catchable error, never UB).
+    let mut v = 0u32;
+    check_status!(
+      unsafe { sys::napi_get_value_uint32(env, el, &mut v) },
+      "expected a byte value"
+    )?;
+    if v > 0xff {
+      return Err(Error::from_reason("expected a byte value in 0..=255"));
+    }
+    bytes.push(v as u8);
+  }
+  // Reject arrays LONGER than 16: index 16 must be OUT of range (`undefined`).
+  // Prevents silently truncating a `> 16` typed array to its first 16 bytes.
+  let el16 = unsafe { get_element(env, napi_val, 16)? };
+  if !unsafe { is_undefined(env, el16)? } {
+    return Err(Error::from_reason("expected exactly 16 bytes"));
+  }
+  Ok(Uint8Array::from(bytes)) // owned (`raw: None`), exactly 16 bytes
 }
 
 // ---------------------------------------------------------------------------
@@ -489,16 +512,15 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
 
   let mut desc = unsafe { InstrDesc::from_napi_value(env, copy)? };
 
-  // SNAPSHOT every JS-backed typed-array field of `desc` into Rust-OWNED bytes,
-  // RIGHT NOW — after the derived decode captured its pointers, but BEFORE the
-  // `labels` decode below (a `labels` getter is user JS) and before this returns
-  // into the caller's edge walk (the `seq`/`consequent`/`alternative` getters are
-  // user JS too) or any child `Proxy` trap. See `snapshot_uint8array`: napi caches
-  // the ArrayBuffer data pointer at decode time and derefs it later WITHOUT a
-  // detach re-check, so any of that later user JS could detach the buffer and
-  // dangle the pointer a subsequent `validate_shuffle` / v128 emit reads (UAF/UB).
-  // Copying the bytes here makes every later detach irrelevant, and an
-  // already-detached buffer degrades to a catchable length error, never UB.
+  // SNAPSHOT every JS-backed typed-array field of `desc` into Rust-OWNED bytes.
+  // `snapshot_uint8array` reads the 16 fixed bytes THROUGH the typed array's
+  // integer-indexed `[[Get]]` (`napi_get_element`) — bounded by the REAL
+  // `[[ArrayLength]]` internal slot, so it is spoof-proof against a shadowed own
+  // `length`/`byteOffset` (the round-4 OOB) on native AND emnapi/WASI, and it
+  // dereferences NO cached backing-store pointer, so the retained-pointer UAF a
+  // later `labels`/edge/sibling getter or child `Proxy` trap could cause (by
+  // detaching the buffer) is eliminated at the source — a detached view simply
+  // reads `undefined` at index 0 and degrades to a catchable length error.
   //
   // These two are the ONLY pointer-retaining fields: a decoded `InstrDesc` has
   // exactly two `Uint8Array` fields (`shuffle_indices` and the `V128` const's
