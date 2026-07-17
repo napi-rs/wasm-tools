@@ -1107,6 +1107,54 @@ test('CH-fix4 (no silent truncation): a 20-byte or 8-byte shuffle / V128 throws 
   t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
 })
 
+// ---------------------------------------------------------------------------
+// CH-emnapi-wire: the round-4 [high] typed-array TYPE-SPOOF. CH-fix4 closed the
+// LENGTH spoof (index-read snapshot), but the ELEMENT-KIND spoof is not closable
+// in binding Rust: napi's `Uint8Array::from_napi_value` trusts the element type
+// code returned by emnapi's `napi_get_typedarray_info`. On the PUBLISHED emnapi
+// 1.9.2 (WASI) that function identifies the kind with prototype-sensitive
+// `instanceof`, so a re-prototyped `Float64Array`
+// (`Object.setPrototypeOf(new Float64Array(16), Uint8Array.prototype)`) is
+// reported as a `Uint8Array` (type code 1) — napi ACCEPTS it and the 16 float
+// lanes are silently coerced to a 16-byte all-zero immediate (no throw). Native
+// rejects it: V8's `napi_get_typedarray_info` reads the real `[[TypedArrayName]]`
+// internal slot → `Float64Array` → `Expected Uint8Array, got Float64Array`.
+// Fix: a committed `pnpm patch` pins a spoof-proof `napi_get_typedarray_info`
+// into `@emnapi/core@1.9.2` (intrinsic `%TypedArray%.prototype[Symbol.toStringTag]`
+// getter, captured at require-time) so WASI reports the real kind too. The WASI
+// run is the real proof: on UNPATCHED WASI these inputs are ACCEPTED (no throw)
+// and this test would FAIL; post-patch they reject catchably on native AND WASI.
+// ---------------------------------------------------------------------------
+
+// A real `Float64Array` (16 elements, real `[[TypedArrayName]] = Float64Array`)
+// whose prototype is swapped to `Uint8Array.prototype`. Prototype-sensitive
+// `instanceof Uint8Array` now answers true; the intrinsic tag getter does not —
+// it reads the internal slot and still answers `Float64Array`.
+function reprotoFloat64AsUint8(): Uint8Array {
+  const a = new Float64Array(16)
+  Object.setPrototypeOf(a, Uint8Array.prototype)
+  return a as unknown as Uint8Array
+}
+
+test('CH-emnapi-wire (type-spoof, shuffle): a re-prototyped Float64Array as shuffleIndices rejects catchably — never accepted as Uint8Array (native + WASI)', (t) => {
+  // napi's `Uint8Array::from_napi_value` (deriving `InstrDesc`) reads the real
+  // element kind (Float64) and rejects BEFORE the snapshot ever runs.
+  t.throws(() => {
+    const desc = { type: 'I8x16Shuffle', shuffleIndices: reprotoFloat64AsUint8() } as unknown as InstrDesc
+    empty().buildFunction([], [], [], [desc])
+  })
+  // The process SURVIVES: a subsequent normal build still works.
+  t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
+})
+
+test('CH-emnapi-wire (type-spoof, V128 const): a re-prototyped Float64Array as a V128 const value rejects catchably — never accepted as Uint8Array (native + WASI)', (t) => {
+  t.throws(() => {
+    const desc = { type: 'Const', value: { type: 'V128', value: reprotoFloat64AsUint8() } } as unknown as InstrDesc
+    empty().buildFunction([], [], [], [desc])
+  })
+  t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
+})
+
 // Finding B: a Proxy whose `length` trap reports a large HOLE-FREE count. On WASI
 // (emnapi) `napi_get_array_length` accepts a Proxy-of-array and reads that trap,
 // so the decode push-loops actually run — pre-fix an infallible grow toward the

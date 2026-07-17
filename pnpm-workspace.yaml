@@ -1,3 +1,5 @@
 packages:
   - '.'
   - 'crates/*'
+patchedDependencies:
+  '@emnapi/core@1.9.2': patches/@emnapi__core@1.9.2.patch
