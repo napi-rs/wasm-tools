@@ -2094,9 +2094,10 @@ export declare const enum ImportKindTag {
  * carrying a `catches` clause list, [`CatchClause`]), `Throw` (`tag`), and
  * `ThrowRef`, and the C8b LEGACY exception-handling subset — the `Try` control
  * construct (a `Block` twin whose `catches` clauses carry full child handler
- * bodies in `CatchClause.seq`) and `Rethrow` (`relativeDepth`). Exception
- * handling (modern + legacy) is now complete; any other instruction is rejected
- * catchably by both directions.
+ * bodies in `CatchClause.seq`) and `Rethrow` (`relativeDepth`), and the C9
+ * wide-arithmetic subset — the four fieldless leaves (`I64Add128`/`I64Sub128`/
+ * `I64MulWideS`/`I64MulWideU`). With C9 every walrus `Instr` variant is covered;
+ * any unknown discriminant is still rejected catchably by both directions.
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */

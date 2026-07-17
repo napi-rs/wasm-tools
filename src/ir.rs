@@ -627,9 +627,10 @@ pub struct CatchClause {
 /// carrying a `catches` clause list, [`CatchClause`]), `Throw` (`tag`), and
 /// `ThrowRef`, and the C8b LEGACY exception-handling subset — the `Try` control
 /// construct (a `Block` twin whose `catches` clauses carry full child handler
-/// bodies in `CatchClause.seq`) and `Rethrow` (`relativeDepth`). Exception
-/// handling (modern + legacy) is now complete; any other instruction is rejected
-/// catchably by both directions.
+/// bodies in `CatchClause.seq`) and `Rethrow` (`relativeDepth`), and the C9
+/// wide-arithmetic subset — the four fieldless leaves (`I64Add128`/`I64Sub128`/
+/// `I64MulWideS`/`I64MulWideU`). With C9 every walrus `Instr` variant is covered;
+/// any unknown discriminant is still rejected catchably by both directions.
 //
 // MAINTENANCE (plain comment so the generated .d.ts is unchanged): the three
 // self-referential edge fields (`seq`/`consequent`/`alternative`) do NOT cross
@@ -2074,6 +2075,15 @@ fn emit_leaf(
         elem,
       )?;
     }
+    // Wide-arithmetic instructions (C9) — the four fieldless leaves of the
+    // wide-arithmetic proposal. Delegated to `emit_wide_arith` (an
+    // `#[inline(never)]` helper) for the SAME frame-size reason as `emit_gc_ref`:
+    // even bare, fieldless arms added in bulk INLINE to this recursive walker were
+    // MEASURED (C7b) to erode the at-cap headroom, so their (empty) locals live in
+    // the helper's OWN frame. All four are fieldless — no payload, no resolver.
+    "I64Add128" | "I64Sub128" | "I64MulWideS" | "I64MulWideU" => {
+      emit_wide_arith(fb, seq_id, r#type.as_str())?;
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
@@ -2723,6 +2733,39 @@ fn emit_gc_ref(
   Ok(())
 }
 
+/// Emit one wide-arithmetic instruction (C9): the four fieldless leaves
+/// `i64.add128` / `i64.sub128` / `i64.mul_wide_s` / `i64.mul_wide_u`. Split out of
+/// [`emit_leaf`] and marked `#[inline(never)]` for the same frame-size reason as
+/// [`emit_gc_ref`] (keep even these empty-arm locals off the recursive walker's
+/// frame — see [`MAX_NESTING_DEPTH`]). All four are fieldless (no payload, no
+/// resolver, so no abort hazard). The caller only routes the four wide-arithmetic
+/// discriminants here, so the final arm is unreachable.
+#[inline(never)]
+fn emit_wide_arith(fb: &mut FunctionBuilder, seq_id: wir::InstrSeqId, ty_str: &str) -> Result<()> {
+  match ty_str {
+    "I64Add128" => {
+      fb.instr_seq(seq_id).instr(wir::I64Add128 {});
+    }
+    "I64Sub128" => {
+      fb.instr_seq(seq_id).instr(wir::I64Sub128 {});
+    }
+    "I64MulWideS" => {
+      fb.instr_seq(seq_id).instr(wir::I64MulWideS {});
+    }
+    "I64MulWideU" => {
+      fb.instr_seq(seq_id).instr(wir::I64MulWideU {});
+    }
+    // Unreachable: `emit_leaf` only routes the four wide-arithmetic discriminants
+    // here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not a wide-arithmetic instruction"
+      )))
+    }
+  }
+  Ok(())
+}
+
 /// Emit one label-carrying GC branch instruction (C7c). Split out of
 /// [`emit_one`] and marked `#[inline(never)]` for the same frame-size reason as
 /// [`emit_gc_ref`]: a `BrOnCast` arm is multi-statement (two required-field
@@ -3243,6 +3286,15 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
     | "ArrayCopy" | "ArrayInitData" | "ArrayInitElem" => {
       validate_array(module, d)?;
     }
+    // Wide-arithmetic instructions (C9). Delegated to `validate_wide_arith`
+    // (`#[inline(never)]`) for the SAME frame-size reason as `validate_gc_ref`
+    // (keep its locals out of this recursive walker's frame). Mirrors
+    // `emit_wide_arith`: all four are fieldless, so there is nothing to resolve —
+    // but the arms must EXIST so preflight ACCEPTS the discriminants (an
+    // unrouted `type` would be rejected here before emit ever runs).
+    "I64Add128" | "I64Sub128" | "I64MulWideS" | "I64MulWideU" => {
+      validate_wide_arith(d)?;
+    }
     other => {
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
@@ -3705,6 +3757,28 @@ fn validate_gc_ref(module: &Module, d: &InstrDesc) -> Result<()> {
     other => {
       return Err(Error::from_reason(format!(
         "`{other}` is not a GC reference instruction"
+      )))
+    }
+  }
+  Ok(())
+}
+
+/// Preflight one wide-arithmetic descriptor (C9). Split out of [`validate_one`]
+/// and marked `#[inline(never)]` for the same frame-size reason as
+/// [`validate_gc_ref`] (keep its locals out of the recursive walker's frame).
+/// Mirrors [`emit_wide_arith`]: all four ops are fieldless, so there is nothing to
+/// resolve and no abort hazard — the arms exist ONLY so preflight accepts the
+/// discriminants. The caller only routes the four wide-arithmetic discriminants
+/// here, so the final arm is unreachable.
+#[inline(never)]
+fn validate_wide_arith(d: &InstrDesc) -> Result<()> {
+  match d.r#type.as_str() {
+    "I64Add128" | "I64Sub128" | "I64MulWideS" | "I64MulWideU" => {}
+    // Unreachable: `validate_one` only routes the four wide-arithmetic
+    // discriminants here.
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not a wide-arithmetic instruction"
       )))
     }
   }
@@ -4564,6 +4638,14 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
       d.relative_depth = Some(r.relative_depth);
       d
     }
+    // Wide-arithmetic instructions (C9) — the four fieldless leaves. Built INLINE
+    // as tail expressions like every other fieldless leaf (see the C7a note above
+    // for why READ inlines where EMIT/VALIDATE delegate): each is a bare
+    // `InstrDesc::new` with no payload.
+    wir::Instr::I64Add128(_) => InstrDesc::new("I64Add128"),
+    wir::Instr::I64Sub128(_) => InstrDesc::new("I64Sub128"),
+    wir::Instr::I64MulWideS(_) => InstrDesc::new("I64MulWideS"),
+    wir::Instr::I64MulWideU(_) => InstrDesc::new("I64MulWideU"),
     other => {
       // MIRROR-WALRUS: never panic on an out-of-subset variant — surface a
       // catchable error naming it. Later C-tasks replace these arms with real

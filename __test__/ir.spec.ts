@@ -3796,3 +3796,85 @@ test('C8b (wide catch fan-out): a 2**32-reporting `catches` with a seq-bearing c
   // The process survived: the (untouched) module still emits valid wasm.
   t.true(WebAssembly.validate(m.emitWasm(false)))
 })
+
+// ---------------------------------------------------------------------------
+// C9: wide-arithmetic — the four fieldless leaves (`i64.add128`/`i64.sub128`/
+// `i64.mul_wide_s`/`i64.mul_wide_u`) of the wide-arithmetic proposal. NO new
+// InstrDesc field, no payload, no resolver: each is a bare discriminant, exactly
+// like C7b's `RefEq`. With C9 EVERY walrus `Instr` variant is covered.
+//
+// Same walrus fact as C1b/C7a/C7b: `strict_validate(false)` is a no-op in 0.26.4,
+// so the EXHAUSTIVE test uses the IN-MEMORY read path (buildFunction ->
+// instructions() on the same module — MIRROR-WALRUS, so a bare, operand-less body
+// builds directly). A separate WELL-TYPED body proves the ops survive the
+// emit -> bytes -> re-parse boundary; wide-arithmetic is UNSTABLE, so parse needs
+// onlyStableFeatures(false) (walrus gates WIDE_ARITHMETIC behind it), and the
+// oracle is the binding's OWN parse — Node's WebAssembly.validate rejects this
+// proposal.
+// ---------------------------------------------------------------------------
+
+test('C9 EXHAUSTIVE: all 4 wide-arithmetic instrs round-trip in-memory', (t) => {
+  const m = empty()
+  const body: InstrDesc[] = [
+    { type: 'I64Add128' },
+    { type: 'I64Sub128' },
+    { type: 'I64MulWideS' },
+    { type: 'I64MulWideU' },
+  ]
+
+  const idx = m.buildFunction([], [], [], body)
+  // Read back from the SAME in-memory module (no emit/re-parse; buildFunction is
+  // MIRROR-WALRUS, so this operand-less-but-well-formed body builds directly).
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+
+  // Sanity: all 4 instruction kinds are present.
+  const kinds = new Set(read.map((dd) => dd.type))
+  for (const k of ['I64Add128', 'I64Sub128', 'I64MulWideS', 'I64MulWideU']) {
+    t.true(kinds.has(k), `body should contain a ${k}`)
+  }
+})
+
+test('C9: a well-typed wide-arithmetic body emits valid wasm and round-trips through re-parse', (t) => {
+  const m = empty()
+  // WELL-TYPED throughout: add128/sub128 each pop four i64 and push two (lo, hi);
+  // mul_wide_s/mul_wide_u each pop two i64 and push two — every result popped by a
+  // matching pair of drops, so the function's stack balances (params [], results []).
+  const body: InstrDesc[] = [
+    { type: 'Const', value: { type: 'I64', value: 1n } },
+    { type: 'Const', value: { type: 'I64', value: 2n } },
+    { type: 'Const', value: { type: 'I64', value: 3n } },
+    { type: 'Const', value: { type: 'I64', value: 4n } },
+    { type: 'I64Add128' },
+    { type: 'Drop' },
+    { type: 'Drop' },
+    { type: 'Const', value: { type: 'I64', value: 5n } },
+    { type: 'Const', value: { type: 'I64', value: 6n } },
+    { type: 'Const', value: { type: 'I64', value: 7n } },
+    { type: 'Const', value: { type: 'I64', value: 8n } },
+    { type: 'I64Sub128' },
+    { type: 'Drop' },
+    { type: 'Drop' },
+    { type: 'Const', value: { type: 'I64', value: 9n } },
+    { type: 'Const', value: { type: 'I64', value: 10n } },
+    { type: 'I64MulWideS' },
+    { type: 'Drop' },
+    { type: 'Drop' },
+    { type: 'Const', value: { type: 'I64', value: 11n } },
+    { type: 'Const', value: { type: 'I64', value: 12n } },
+    { type: 'I64MulWideU' },
+    { type: 'Drop' },
+    { type: 'Drop' },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'wide'
+  const bytes = m.emitWasm(false)
+
+  // The oracle is the binding's OWN parse with wide-arithmetic enabled
+  // (onlyStableFeatures(false)); Node's WebAssembly.validate rejects this
+  // proposal. The emitted bytes re-parse to the SAME descriptors, proving all
+  // four ops survive a full byte round-trip.
+  const reparsed = new ModuleConfig().onlyStableFeatures(false).strictValidate(false).parse(bytes)
+  const read = reparsed.functions.byName('wide')!.instructions()
+  t.deepEqual(read, body)
+})
