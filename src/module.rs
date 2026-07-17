@@ -1,10 +1,10 @@
 use napi::bindgen_prelude::{Reference, Result, Uint8Array};
 use napi::{Env, Error};
 use napi_derive::napi;
-use walrus::{FunctionBuilder, Module, RawCustomSection};
+use walrus::{ExportItem, FunctionBuilder, FunctionKind, Module, RawCustomSection};
 
 use crate::convert::val_type_to_walrus_in;
-use crate::ir::{emit_desc, local_id_at, validate_body};
+use crate::ir::{emit_desc, function_id_at, local_id_at, validate_body};
 use crate::ir_marshal::InstrBody;
 use crate::valtype::ValType;
 use crate::{
@@ -169,6 +169,240 @@ impl WasmModule {
     emit_desc(&mut fb, &self.inner, entry, body, &mut label_stack)?;
     let id = fb.finish(arg_ids, &mut self.inner.funcs);
     Ok(id.index() as u32)
+  }
+
+  #[napi]
+  /// Replace an EXPORTED, locally-defined function's body with one built from an
+  /// instruction-descriptor array, returning the NEW function's stable index.
+  ///
+  /// This mirrors walrus' [`Module::replace_exported_func`] using its PUBLIC API
+  /// (we cannot call walrus' method directly: it fills the body inside a closure
+  /// that holds `&mut Module`, but our [`emit_desc`] needs `&Module` to resolve
+  /// indices — an unavoidable borrow conflict). The surgery is identical: mint a
+  /// new local function with the SAME signature as the target and repoint the
+  /// export at it. The old function is left in the arena (walrus does the same);
+  /// run [`Self::gc`] to reclaim it if nothing else references it.
+  ///
+  /// The signature is INHERITED from the target function — the caller supplies
+  /// only `funcIndex` (which function), `argLocalIndices` (the stable indices of
+  /// the pre-created parameter locals, in order), and `body` (see [`InstrDesc`]),
+  /// exactly like [`Self::build_function`].
+  ///
+  /// Errors (all catchable — nothing aborts): `funcIndex` names no function; the
+  /// function is not exported; the function is exported but not locally defined
+  /// (an export may point at an imported func); the inherited signature type was
+  /// deleted; the inherited signature type is not a function type (a GC
+  /// Struct/Array); an `argLocalIndex` names no local; or `body` fails the
+  /// [`crate::ir::validate_body`] preflight (an out-of-range index / label /
+  /// block-type). MIRROR-WALRUS: no arg-count- or arg-type-vs-signature check is
+  /// added — a mismatch builds a semantically invalid (but non-aborting) module
+  /// that `WebAssembly.validate` rejects.
+  ///
+  /// All-or-nothing: every fallible check runs BEFORE any arena mutation, so a
+  /// rejected call leaves the module completely unchanged (no repointed export,
+  /// no orphaned func/type). Resolving `funcIndex` through
+  /// [`crate::ir::function_id_at`] (a live-arena scan) neutralizes walrus'
+  /// `funcs.get`-on-a-tombstoned-id panic. The inherited signature is read via a
+  /// no-panic liveness scan + `Type::as_function()` (an `Option`), never
+  /// `types.get(ty_id)` / `Type::params()`, which panic on a deleted or
+  /// non-function type — a func's signature type is user-deletable and can be a
+  /// non-function type, so both are caller-reachable and must not abort.
+  pub fn replace_exported_func(
+    &mut self,
+    func_index: u32,
+    arg_local_indices: Vec<u32>,
+    #[napi(ts_arg_type = "Array<InstrDesc>")] body: InstrBody,
+  ) -> Result<u32> {
+    // Resolve the target against the LIVE arena first: a returned id can never be
+    // tombstoned/foreign, so the later `funcs.get(fid)` cannot panic.
+    let fid = function_id_at(&self.inner, func_index)?;
+
+    // Require an export that points at this function (walrus' first check).
+    let export_id = self
+      .inner
+      .exports
+      .get_exported_func(fid)
+      .map(|e| e.id())
+      .ok_or_else(|| {
+        Error::from_reason(format!(
+          "function at index {func_index} is not an exported function"
+        ))
+      })?;
+
+    // Require that function to be LOCAL (an export can point at an imported
+    // func). Extract only the signature `TypeId` inside the match — `TypeId` is
+    // `Copy`, so the shared `funcs` borrow (via `lf`) ends at the match, and we
+    // deliberately do NOT dereference the type here. Dereferencing an inherited
+    // type is the abort hole this method must avoid: `types.get(ty_id)` PANICS on
+    // a deleted id (a func's signature type is user-deletable) and
+    // `Type::params()`/`results()` PANIC on a non-function (Struct/Array) type.
+    let ty_id = match &self.inner.funcs.get(fid).kind {
+      FunctionKind::Local(lf) => lf.ty(),
+      _ => {
+        return Err(Error::from_reason(format!(
+          "cannot replace function at index {func_index}: it is exported but not a local function"
+        )))
+      }
+    };
+
+    // Resolve the signature type by a NO-PANIC liveness scan: `types.iter()`
+    // skips tombstoned entries, so a deleted `ty_id` yields `None` (a catchable
+    // error, not `types.get`'s arena-index panic). We must NOT filter entry types
+    // here — a function's signature type may itself be an entry type — so this is
+    // the direct id scan, not `resolve_type_id`. `as_function()` returns `Option`
+    // (walrus' `params()`/`results()` go through a panicking `unwrap_function()`),
+    // so a non-function signature type is a catchable error too. `.to_vec()`
+    // produces owned `Vec`s, ending the `&Type`/`&types` borrow before
+    // `FunctionBuilder::new` takes `&mut self.inner.types` below.
+    let sig_ty = self
+      .inner
+      .types
+      .iter()
+      .find(|t| t.id() == ty_id)
+      .ok_or_else(|| {
+        Error::from_reason(format!(
+          "cannot replace function at index {func_index}: its signature type was deleted"
+        ))
+      })?;
+    let fty = sig_ty.as_function().ok_or_else(|| {
+      Error::from_reason(format!(
+        "cannot replace function at index {func_index}: its signature type is not a function type"
+      ))
+    })?;
+    let (params_w, results_w) = (fty.params().to_vec(), fty.results().to_vec());
+
+    // Resolve the argument locals against the live arena.
+    let arg_ids = arg_local_indices
+      .into_iter()
+      .map(|i| local_id_at(&self.inner, i))
+      .collect::<Result<Vec<_>>>()?;
+
+    let body = body.0;
+
+    // Preflight the WHOLE body before any mutation — the same all-or-nothing
+    // guard as `build_function` (label stack starts at length 1).
+    validate_body(&self.inner, &body, 1)?;
+
+    // Build the replacement local function, then repoint the export at it.
+    let mut fb = FunctionBuilder::new(&mut self.inner.types, &params_w, &results_w);
+    let entry = fb.func_body_id();
+    let mut label_stack = Vec::new();
+    emit_desc(&mut fb, &self.inner, entry, body, &mut label_stack)?;
+    let new_fid = fb.finish(arg_ids, &mut self.inner.funcs);
+    self.inner.exports.get_mut(export_id).item = ExportItem::Function(new_fid);
+    Ok(new_fid.index() as u32)
+  }
+
+  #[napi]
+  /// Replace an IMPORTED function with a locally-defined body built from an
+  /// instruction-descriptor array, returning the SAME function index (the import
+  /// becomes a local function in place, so existing `Call` references stay
+  /// valid). The import record is removed.
+  ///
+  /// This mirrors walrus' [`Module::replace_imported_func`] using its PUBLIC API
+  /// (same borrow conflict as [`Self::replace_exported_func`]). The surgery is
+  /// identical EXCEPT for the argument locals: walrus allocates fresh parameter
+  /// locals inside its closure and hands them to it, but our `body` is
+  /// materialized BEFORE this call and references locals by index, so the caller
+  /// pre-allocates them (via `module.locals.add`) and passes their indices as
+  /// `argLocalIndices` — identical ergonomics to [`Self::build_function`].
+  ///
+  /// The signature is INHERITED from the imported function. Errors (all
+  /// catchable — nothing aborts): `funcIndex` names no function; the function is
+  /// not imported; the inherited signature type was deleted; the inherited
+  /// signature type is not a function type (a GC Struct/Array — `imports.addFunction`
+  /// does not check the type's kind); an `argLocalIndex` names no local; or `body`
+  /// fails the preflight. MIRROR-WALRUS: no arg-count/type-vs-signature check is
+  /// added.
+  ///
+  /// All-or-nothing / abort-safety: identical to [`Self::replace_exported_func`]
+  /// — every fallible check runs before any mutation, `function_id_at`
+  /// neutralizes the `funcs.get` panic surface, and the inherited signature is
+  /// read via a no-panic liveness scan + `Type::as_function()` (never
+  /// `types.get(ty_id)` / `Type::params()`, which panic on a deleted or
+  /// non-function type — both caller-reachable here).
+  pub fn replace_imported_func(
+    &mut self,
+    func_index: u32,
+    arg_local_indices: Vec<u32>,
+    #[napi(ts_arg_type = "Array<InstrDesc>")] body: InstrBody,
+  ) -> Result<u32> {
+    // Resolve the target against the LIVE arena first (abort guard, as above).
+    let fid = function_id_at(&self.inner, func_index)?;
+
+    // Require an import record for this function (walrus' first check).
+    let import_id = self
+      .inner
+      .imports
+      .get_imported_func(fid)
+      .map(|i| i.id())
+      .ok_or_else(|| {
+        Error::from_reason(format!(
+          "function at index {func_index} is not an imported function"
+        ))
+      })?;
+
+    // Confirm the kind is `Import` and extract only the signature `TypeId` (a
+    // `Copy`, so the `funcs` borrow ends at the match). We deliberately do NOT
+    // dereference the inherited type here — that is the abort hole:
+    // `types.get(ty_id)` PANICS on a deleted id (`imports.addFunction` takes a
+    // user-deletable func-type handle) and `Type::params()`/`results()` PANIC on
+    // a non-function type (`imports.addFunction` does not check the type's KIND,
+    // so an imported func can carry a Struct/Array type).
+    let ty_id = match &self.inner.funcs.get(fid).kind {
+      FunctionKind::Import(imported) => imported.ty,
+      _ => {
+        return Err(Error::from_reason(format!(
+          "cannot replace function at index {func_index}: it is not an imported function"
+        )))
+      }
+    };
+
+    // Same NO-PANIC signature resolution as `replace_exported_func`: a liveness
+    // scan (`types.iter()` skips tombstoned entries, so a deleted `ty_id` is a
+    // catchable error, not `types.get`'s panic) with no entry-type filter (a
+    // signature type may be an entry type), then `as_function()` (walrus'
+    // `params()`/`results()` panic via `unwrap_function()` on a non-function
+    // type). `.to_vec()` ends the borrow before `FunctionBuilder::new` takes
+    // `&mut self.inner.types`.
+    let sig_ty = self
+      .inner
+      .types
+      .iter()
+      .find(|t| t.id() == ty_id)
+      .ok_or_else(|| {
+        Error::from_reason(format!(
+          "cannot replace function at index {func_index}: its signature type was deleted"
+        ))
+      })?;
+    let fty = sig_ty.as_function().ok_or_else(|| {
+      Error::from_reason(format!(
+        "cannot replace function at index {func_index}: its signature type is not a function type"
+      ))
+    })?;
+    let (params_w, results_w) = (fty.params().to_vec(), fty.results().to_vec());
+
+    // Resolve the argument locals against the live arena.
+    let arg_ids = arg_local_indices
+      .into_iter()
+      .map(|i| local_id_at(&self.inner, i))
+      .collect::<Result<Vec<_>>>()?;
+
+    let body = body.0;
+
+    // Preflight the WHOLE body before any mutation (all-or-nothing).
+    validate_body(&self.inner, &body, 1)?;
+
+    // Build the replacement, swap the kind IN PLACE (same id), then drop the
+    // import record. Order mirrors walrus exactly.
+    let mut fb = FunctionBuilder::new(&mut self.inner.types, &params_w, &results_w);
+    let entry = fb.func_body_id();
+    let mut label_stack = Vec::new();
+    emit_desc(&mut fb, &self.inner, entry, body, &mut label_stack)?;
+    let new_local = fb.local_func(arg_ids);
+    self.inner.funcs.get_mut(fid).kind = FunctionKind::Local(new_local);
+    self.inner.imports.delete(import_id);
+    Ok(fid.index() as u32)
   }
 
   #[napi(getter)]

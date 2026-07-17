@@ -1065,6 +1065,74 @@ export declare class WasmModule {
    * index names no live function yet, and that errs).
    */
   buildFunction(params: Array<ValType>, results: Array<ValType>, argLocalIndices: Array<number>, body: Array<InstrDesc>): number
+  /**
+   * Replace an EXPORTED, locally-defined function's body with one built from an
+   * instruction-descriptor array, returning the NEW function's stable index.
+   *
+   * This mirrors walrus' [`Module::replace_exported_func`] using its PUBLIC API
+   * (we cannot call walrus' method directly: it fills the body inside a closure
+   * that holds `&mut Module`, but our [`emit_desc`] needs `&Module` to resolve
+   * indices — an unavoidable borrow conflict). The surgery is identical: mint a
+   * new local function with the SAME signature as the target and repoint the
+   * export at it. The old function is left in the arena (walrus does the same);
+   * run [`Self::gc`] to reclaim it if nothing else references it.
+   *
+   * The signature is INHERITED from the target function — the caller supplies
+   * only `funcIndex` (which function), `argLocalIndices` (the stable indices of
+   * the pre-created parameter locals, in order), and `body` (see [`InstrDesc`]),
+   * exactly like [`Self::build_function`].
+   *
+   * Errors (all catchable — nothing aborts): `funcIndex` names no function; the
+   * function is not exported; the function is exported but not locally defined
+   * (an export may point at an imported func); the inherited signature type was
+   * deleted; the inherited signature type is not a function type (a GC
+   * Struct/Array); an `argLocalIndex` names no local; or `body` fails the
+   * [`crate::ir::validate_body`] preflight (an out-of-range index / label /
+   * block-type). MIRROR-WALRUS: no arg-count- or arg-type-vs-signature check is
+   * added — a mismatch builds a semantically invalid (but non-aborting) module
+   * that `WebAssembly.validate` rejects.
+   *
+   * All-or-nothing: every fallible check runs BEFORE any arena mutation, so a
+   * rejected call leaves the module completely unchanged (no repointed export,
+   * no orphaned func/type). Resolving `funcIndex` through
+   * [`crate::ir::function_id_at`] (a live-arena scan) neutralizes walrus'
+   * `funcs.get`-on-a-tombstoned-id panic. The inherited signature is read via a
+   * no-panic liveness scan + `Type::as_function()` (an `Option`), never
+   * `types.get(ty_id)` / `Type::params()`, which panic on a deleted or
+   * non-function type — a func's signature type is user-deletable and can be a
+   * non-function type, so both are caller-reachable and must not abort.
+   */
+  replaceExportedFunc(funcIndex: number, argLocalIndices: Array<number>, body: Array<InstrDesc>): number
+  /**
+   * Replace an IMPORTED function with a locally-defined body built from an
+   * instruction-descriptor array, returning the SAME function index (the import
+   * becomes a local function in place, so existing `Call` references stay
+   * valid). The import record is removed.
+   *
+   * This mirrors walrus' [`Module::replace_imported_func`] using its PUBLIC API
+   * (same borrow conflict as [`Self::replace_exported_func`]). The surgery is
+   * identical EXCEPT for the argument locals: walrus allocates fresh parameter
+   * locals inside its closure and hands them to it, but our `body` is
+   * materialized BEFORE this call and references locals by index, so the caller
+   * pre-allocates them (via `module.locals.add`) and passes their indices as
+   * `argLocalIndices` — identical ergonomics to [`Self::build_function`].
+   *
+   * The signature is INHERITED from the imported function. Errors (all
+   * catchable — nothing aborts): `funcIndex` names no function; the function is
+   * not imported; the inherited signature type was deleted; the inherited
+   * signature type is not a function type (a GC Struct/Array — `imports.addFunction`
+   * does not check the type's kind); an `argLocalIndex` names no local; or `body`
+   * fails the preflight. MIRROR-WALRUS: no arg-count/type-vs-signature check is
+   * added.
+   *
+   * All-or-nothing / abort-safety: identical to [`Self::replace_exported_func`]
+   * — every fallible check runs before any mutation, `function_id_at`
+   * neutralizes the `funcs.get` panic surface, and the inherited signature is
+   * read via a no-panic liveness scan + `Type::as_function()` (never
+   * `types.get(ty_id)` / `Type::params()`, which panic on a deleted or
+   * non-function type — both caller-reachable here).
+   */
+  replaceImportedFunc(funcIndex: number, argLocalIndices: Array<number>, body: Array<InstrDesc>): number
   /** The name of this module, as stored in the wasm "name" custom section. */
   get name(): string | null
   /** Set the name of this module, stored in the wasm "name" custom section. */

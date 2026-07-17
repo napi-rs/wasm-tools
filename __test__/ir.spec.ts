@@ -6,6 +6,7 @@ import test from 'ava'
 
 import {
   ConstExpr,
+  FunctionKindTag,
   ModuleConfig,
   WasmModule,
   type AtomicOp,
@@ -443,6 +444,267 @@ test('guard: a body that fails late leaves the type arena unchanged, and a later
   t.true(WebAssembly.validate(bytes))
   const reparsed = WasmModule.fromBuffer(bytes)
   t.deepEqual(reparsed.functions.getByIndex(idx)!.instructions(), [{ type: 'LocalGet', local: 0 }])
+})
+
+// ---------------------------------------------------------------------------
+// replaceExportedFunc / replaceImportedFunc: builder-consuming surgery that
+// reuses the SAME emit/validate machinery as buildFunction. Both INHERIT the
+// target's signature and take (funcIndex, argLocalIndices, body). The exported
+// path mints a NEW local func and repoints the export at it; the imported path
+// swaps the func's kind IN PLACE (same index) and drops the import record. All
+// fallible checks run BEFORE any mutation (all-or-nothing), and funcIndex is
+// resolved against the live arena so a bad/tombstoned id is a catchable error,
+// never an abort.
+// ---------------------------------------------------------------------------
+
+// Build a module with one exported LOCAL function `f: (i32) -> i32` whose body
+// is `local.get 0`. Returns the module and f's stable index.
+function exportedLocalFixture(): { m: WasmModule; fIdx: number } {
+  const m = empty()
+  const p0 = m.locals.add(I32)
+  const fIdx = m.buildFunction([I32], [I32], [p0.index], [{ type: 'LocalGet', local: p0.index }])
+  m.exports.addFunction('f', m.functions.getByIndex(fIdx)!)
+  return { m, fIdx }
+}
+
+test('replaceExportedFunc happy path: mints a NEW func, repoints the export, and the new body round-trips', (t) => {
+  const { m, fIdx } = exportedLocalFixture()
+  // Pre-allocate the replacement's parameter local, then replace the body with
+  // `i32.const 42` (signature (i32)->i32 is INHERITED, so the arg local is still
+  // required even though the new body ignores it).
+  const a0 = m.locals.add(I32)
+  const newBody: InstrDesc[] = [{ type: 'Const', value: { type: 'I32', value: 42 } }]
+  const newIdx = m.replaceExportedFunc(fIdx, [a0.index], newBody)
+
+  // A brand-new function id was minted (walrus does NOT reuse the old one).
+  t.not(newIdx, fIdx)
+
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+  const rm = WasmModule.fromBuffer(bytes)
+  // The export `f` still exists and now targets the new body.
+  const exp = rm.exports.byName('f')
+  t.not(exp, null)
+  t.deepEqual(exp!.func()!.instructions(), newBody)
+})
+
+test('replaceImportedFunc happy path: swaps the import to a local func IN PLACE (same index) and removes the import', (t) => {
+  const m = empty()
+  const sig = m.types.add([I32], [I32])
+  const g = m.imports.addFunction('env', 'g', sig)
+  const gIdx = g.index
+  t.is(g.kind, FunctionKindTag.Import)
+
+  const a0 = m.locals.add(I32)
+  const newBody: InstrDesc[] = [{ type: 'LocalGet', local: a0.index }]
+  const retIdx = m.replaceImportedFunc(gIdx, [a0.index], newBody)
+
+  // Same index is returned (existing `Call gIdx` references would stay valid).
+  t.is(retIdx, gIdx)
+
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+  const rm = WasmModule.fromBuffer(bytes)
+  // The import is gone and the sole function is now a local with the new body.
+  t.is(rm.imports.find('env', 'g'), null)
+  const funcs = rm.functions.items()
+  t.is(funcs.length, 1)
+  t.is(funcs[0].kind, FunctionKindTag.Local)
+  t.deepEqual(funcs[0].instructions(), [{ type: 'LocalGet', local: 0 }])
+})
+
+test('replace negatives: non-existent funcIndex throws catchably (both methods)', (t) => {
+  t.throws(() => empty().replaceExportedFunc(99, [], []), { message: /no function at index 99/ })
+  t.throws(() => empty().replaceImportedFunc(99, [], []), { message: /no function at index 99/ })
+  t.is(1 + 1, 2)
+})
+
+test('replace negatives: replaceExportedFunc on a non-exported func throws "not an exported function"', (t) => {
+  // (a) An imported func (never exported).
+  const mi = empty()
+  const sig = mi.types.add([], [])
+  const gi = mi.imports.addFunction('env', 'g', sig)
+  t.throws(() => mi.replaceExportedFunc(gi.index, [], []), { message: /not an exported function/ })
+
+  // (b) A local func that is simply not exported.
+  const ml = empty()
+  const lIdx = ml.buildFunction([], [], [], [])
+  t.throws(() => ml.replaceExportedFunc(lIdx, [], []), { message: /not an exported function/ })
+  t.is(1 + 1, 2)
+})
+
+test('replace negatives: replaceExportedFunc on an exported IMPORTED func throws "not a local function"', (t) => {
+  const m = empty()
+  const sig = m.types.add([], [])
+  const g = m.imports.addFunction('env', 'g', sig)
+  m.exports.addFunction('g', g) // export points at an imported func
+  t.throws(() => m.replaceExportedFunc(g.index, [], []), { message: /not a local function/ })
+  t.is(1 + 1, 2)
+})
+
+test('replace negatives: replaceImportedFunc on a local func throws "not an imported function"', (t) => {
+  const m = empty()
+  const lIdx = m.buildFunction([], [], [], [])
+  t.throws(() => m.replaceImportedFunc(lIdx, [], []), { message: /not an imported function/ })
+  t.is(1 + 1, 2)
+})
+
+test('replace negatives: an out-of-range index in the body is rejected by the preflight (both methods)', (t) => {
+  const { m, fIdx } = exportedLocalFixture()
+  const a0 = m.locals.add(I32)
+  // Out-of-range local reference in the body.
+  t.throws(() => m.replaceExportedFunc(fIdx, [a0.index], [{ type: 'LocalGet', local: 99 }]), {
+    message: /no local at index 99/,
+  })
+  // Out-of-range func reference (Call) in the body.
+  t.throws(() => m.replaceExportedFunc(fIdx, [a0.index], [{ type: 'Call', func: 99 }]), {
+    message: /no function at index 99/,
+  })
+
+  const mi = empty()
+  const sig = mi.types.add([I32], [I32])
+  const gi = mi.imports.addFunction('env', 'g', sig)
+  const b0 = mi.locals.add(I32)
+  t.throws(() => mi.replaceImportedFunc(gi.index, [b0.index], [{ type: 'GlobalGet', global: 99 }]), {
+    message: /no global at index 99/,
+  })
+  t.is(1 + 1, 2)
+})
+
+test('replace negatives: a bad argLocalIndex throws (both methods)', (t) => {
+  const { m, fIdx } = exportedLocalFixture()
+  t.throws(() => m.replaceExportedFunc(fIdx, [42], [{ type: 'Const', value: { type: 'I32', value: 0 } }]), {
+    message: /no local at index 42/,
+  })
+
+  const mi = empty()
+  const sig = mi.types.add([I32], [I32])
+  const gi = mi.imports.addFunction('env', 'g', sig)
+  t.throws(() => mi.replaceImportedFunc(gi.index, [42], [{ type: 'Const', value: { type: 'I32', value: 0 } }]), {
+    message: /no local at index 42/,
+  })
+  t.is(1 + 1, 2)
+})
+
+test('replace all-or-nothing: a rejected replaceExportedFunc leaves the module completely unchanged', (t) => {
+  const { m, fIdx } = exportedLocalFixture()
+  const funcsBefore = m.functions.length
+  const typesBefore = m.types.length
+  const a0 = m.locals.add(I32)
+
+  // A body naming a non-existent function is rejected by the preflight, BEFORE
+  // any arena mutation.
+  t.throws(() => m.replaceExportedFunc(fIdx, [a0.index], [{ type: 'Call', func: 99 }]), {
+    message: /no function at index 99/,
+  })
+  // Process still alive (a real abort would take the whole WASI run down).
+  t.is(1 + 1, 2)
+
+  // No new func minted, no orphan type leaked.
+  t.is(m.functions.length, funcsBefore)
+  t.is(m.types.length, typesBefore)
+
+  // The export still targets the ORIGINAL body, and the module still emits.
+  const rm = WasmModule.fromBuffer(m.emitWasm(false))
+  t.deepEqual(rm.exports.byName('f')!.func()!.instructions(), [{ type: 'LocalGet', local: 0 }])
+})
+
+test('replace all-or-nothing: a rejected replaceImportedFunc leaves the import intact', (t) => {
+  const m = empty()
+  const sig = m.types.add([I32], [I32])
+  const g = m.imports.addFunction('env', 'g', sig)
+  const gIdx = g.index
+  const importsBefore = m.imports.length
+  const funcsBefore = m.functions.length
+  const typesBefore = m.types.length
+  const a0 = m.locals.add(I32)
+
+  t.throws(() => m.replaceImportedFunc(gIdx, [a0.index], [{ type: 'Call', func: 99 }]), {
+    message: /no function at index 99/,
+  })
+  t.is(1 + 1, 2)
+
+  // The import and the imported func are untouched, and NO orphan type leaked
+  // (the type count is unchanged — a partial mutation would have interned a
+  // second copy of the signature via FunctionBuilder::new).
+  t.is(m.imports.length, importsBefore)
+  t.is(m.functions.length, funcsBefore)
+  t.is(m.types.length, typesBefore)
+  t.not(m.imports.find('env', 'g'), null)
+  t.is(m.functions.getByIndex(gIdx)!.kind, FunctionKindTag.Import)
+
+  // Emit + re-parse: the import `env/g` still exists as an imported function with
+  // its ORIGINAL (i32)->i32 signature — proof the rejected call left no partial
+  // in-place kind swap and no orphan type.
+  const rm = WasmModule.fromBuffer(m.emitWasm(false))
+  const imp = rm.imports.find('env', 'g')
+  t.not(imp, null)
+  const impFunc = imp!.func()
+  t.not(impFunc, null)
+  t.is(impFunc!.kind, FunctionKindTag.Import)
+  t.deepEqual(impFunc!.ty().params(), [I32])
+  t.deepEqual(impFunc!.ty().results(), [I32])
+})
+
+// ---------------------------------------------------------------------------
+// Review-fix regressions: the inherited-signature deref must NOT abort. Both
+// replace methods derive the replacement's signature from the target's INHERITED
+// walrus type. Reading it via a panicking `types.get(ty_id)` (aborts on a deleted
+// id) or `Type::params()`/`results()` (aborts via `unwrap_function()` on a
+// non-function type) would take the whole ava worker down under panic=abort/WASI.
+// The fix reads the signature through a no-panic liveness scan + `as_function()`
+// (an Option), so each of the three cases below must THROW catchably — a passing
+// WASI run is the proof the abort is gone (an abort crashes the entire run).
+// ---------------------------------------------------------------------------
+
+test('replace regression (exported, deleted signature): replaceExportedFunc on a func whose signature type was deleted throws catchably, no abort', (t) => {
+  const { m, fIdx } = exportedLocalFixture()
+  // The exported local func `f` has a REGULAR (i32)->i32 signature type in the
+  // arena (walrus' `FunctionBuilder::new` interns it via `types.add`; the entry
+  // type is a separate, empty-param `add_entry_ty`, so `find([I32],[I32])`
+  // returns the signature, never the entry type). Deleting it leaves the func
+  // referencing a tombstoned TypeId — the exact deleted-signature hazard.
+  const sigTy = m.types.find([I32], [I32])
+  t.not(sigTy, null)
+  m.types.delete(sigTy!)
+
+  const a0 = m.locals.add(I32)
+  t.throws(() => m.replaceExportedFunc(fIdx, [a0.index], [{ type: 'Const', value: { type: 'I32', value: 0 } }]), {
+    message: /signature type was deleted/,
+  })
+  // Process survived — a real abort would take the whole (WASI) run down.
+  t.is(1 + 1, 2)
+})
+
+test('replace regression (imported, deleted signature): replaceImportedFunc on a func whose signature type was deleted throws catchably, no abort', (t) => {
+  const m = empty()
+  const sig = m.types.add([I32], [I32])
+  const g = m.imports.addFunction('env', 'g', sig)
+  // Delete the signature type the imported func still references (walrus' delete
+  // does NOT check for referencing functions), then attempt the replace.
+  m.types.delete(sig)
+
+  const a0 = m.locals.add(I32)
+  t.throws(() => m.replaceImportedFunc(g.index, [a0.index], [{ type: 'Const', value: { type: 'I32', value: 0 } }]), {
+    message: /signature type was deleted/,
+  })
+  t.is(1 + 1, 2)
+})
+
+test('replace regression (imported, non-function signature): replaceImportedFunc on a func whose signature type is a GC struct throws catchably, no abort', (t) => {
+  const m = empty()
+  // `imports.addFunction` only checks the type is LIVE, not that it is a function
+  // type, so an imported func can carry a GC struct type. Deref-ing it via
+  // walrus' `Type::params()` would `unwrap_function()`-panic; the fix returns a
+  // catchable error instead.
+  const structTy = m.types.addStruct([{ storage: { type: 'Val', value: I32 }, mutable: false }])
+  const g = m.imports.addFunction('env', 'g', structTy)
+
+  const a0 = m.locals.add(I32)
+  t.throws(() => m.replaceImportedFunc(g.index, [a0.index], [{ type: 'Const', value: { type: 'I32', value: 0 } }]), {
+    message: /signature type is not a function type/,
+  })
+  t.is(1 + 1, 2)
 })
 
 // ---------------------------------------------------------------------------
