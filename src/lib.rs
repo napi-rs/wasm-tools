@@ -17,6 +17,7 @@ mod locals;
 mod memories;
 mod module;
 mod producers;
+mod safevec;
 mod tables;
 mod tags;
 mod types;

@@ -6,6 +6,7 @@ use walrus::{ExportItem, FunctionBuilder, FunctionKind, Module, RawCustomSection
 use crate::convert::{checked_index, val_type_to_walrus_in};
 use crate::ir::{emit_desc, function_id_at, local_id_at, validate_body};
 use crate::ir_marshal::InstrBody;
+use crate::safevec::SafeVec;
 use crate::valtype::ValType;
 use crate::{
   ModuleConfig, WasmCustomSections, WasmDataSegments, WasmElements, WasmExports, WasmFunction,
@@ -56,12 +57,18 @@ impl WasmModule {
 
   #[napi]
   /// Emit this module into an in-memory wasm buffer.
+  ///
+  /// MIRROR-WALRUS: a surviving reference (start/export/element/`Call`) to a
+  /// deleted item aborts at gc/emit — caller's responsibility.
   pub fn emit_wasm(&mut self, demangle: bool) -> Result<Uint8Array> {
     Ok(self.emit_bytes(demangle)?.into())
   }
 
   #[napi]
   /// Emit this module into a `.wasm` file at the given path.
+  ///
+  /// MIRROR-WALRUS: a surviving reference (start/export/element/`Call`) to a
+  /// deleted item aborts at gc/emit — caller's responsibility.
   pub fn emit_wasm_file(&mut self, path: String, demangle: bool) -> Result<()> {
     let bytes = self.emit_bytes(demangle)?;
     std::fs::write(&path, bytes)
@@ -79,6 +86,9 @@ impl WasmModule {
   /// Run garbage collection passes over this module, removing items that are
   /// not transitively referenced from any root (exports, the start function,
   /// etc.).
+  ///
+  /// MIRROR-WALRUS: a surviving reference (start/export/element/`Call`) to a
+  /// deleted item aborts at gc/emit — caller's responsibility.
   pub fn gc(&mut self) {
     walrus::passes::gc::run(&mut self.inner);
   }
@@ -118,9 +128,12 @@ impl WasmModule {
   /// index names no live function yet, and that errs).
   pub fn build_function(
     &mut self,
-    params: Vec<ValType>,
-    results: Vec<ValType>,
-    arg_local_indices: Vec<f64>,
+    // `SafeVec` decodes NON-preallocating (see `src/safevec.rs`), so a sparse-huge
+    // JS `.length` fails catchably instead of aborting on `with_capacity`;
+    // `ts_arg_type` keeps the generated `.d.ts` reading `Array<ValType>` as before.
+    #[napi(ts_arg_type = "Array<ValType>")] params: SafeVec<ValType>,
+    #[napi(ts_arg_type = "Array<ValType>")] results: SafeVec<ValType>,
+    #[napi(ts_arg_type = "Array<number>")] arg_local_indices: SafeVec<f64>,
     // `InstrBody` decodes ITERATIVELY with the nesting guard integrated (see
     // `src/ir_marshal.rs`); `ts_arg_type` keeps the generated `.d.ts` reading
     // `Array<InstrDesc>` exactly as before.
@@ -130,14 +143,17 @@ impl WasmModule {
     // builder. `val_type_to_walrus_in` resolves concrete refs and rejects
     // unsupported/entry-type indices catchably.
     let params_w = params
+      .0
       .into_iter()
       .map(|v| val_type_to_walrus_in(&self.inner, v))
       .collect::<Result<Vec<_>>>()?;
     let results_w = results
+      .0
       .into_iter()
       .map(|v| val_type_to_walrus_in(&self.inner, v))
       .collect::<Result<Vec<_>>>()?;
     let arg_ids = arg_local_indices
+      .0
       .into_iter()
       .map(|i| local_id_at(&self.inner, checked_index(i, "argLocalIndex")?))
       .collect::<Result<Vec<_>>>()?;
@@ -210,7 +226,9 @@ impl WasmModule {
   pub fn replace_exported_func(
     &mut self,
     func_index: f64,
-    arg_local_indices: Vec<f64>,
+    // Non-preallocating decode (see `src/safevec.rs`); `ts_arg_type` keeps the
+    // generated `.d.ts` reading `Array<number>` verbatim.
+    #[napi(ts_arg_type = "Array<number>")] arg_local_indices: SafeVec<f64>,
     #[napi(ts_arg_type = "Array<InstrDesc>")] body: InstrBody,
   ) -> Result<u32> {
     let func_index = checked_index(func_index, "funcIndex")?;
@@ -274,6 +292,7 @@ impl WasmModule {
 
     // Resolve the argument locals against the live arena.
     let arg_ids = arg_local_indices
+      .0
       .into_iter()
       .map(|i| local_id_at(&self.inner, checked_index(i, "argLocalIndex")?))
       .collect::<Result<Vec<_>>>()?;
@@ -325,7 +344,9 @@ impl WasmModule {
   pub fn replace_imported_func(
     &mut self,
     func_index: f64,
-    arg_local_indices: Vec<f64>,
+    // Non-preallocating decode (see `src/safevec.rs`); `ts_arg_type` keeps the
+    // generated `.d.ts` reading `Array<number>` verbatim.
+    #[napi(ts_arg_type = "Array<number>")] arg_local_indices: SafeVec<f64>,
     #[napi(ts_arg_type = "Array<InstrDesc>")] body: InstrBody,
   ) -> Result<u32> {
     let func_index = checked_index(func_index, "funcIndex")?;
@@ -386,6 +407,7 @@ impl WasmModule {
 
     // Resolve the argument locals against the live arena.
     let arg_ids = arg_local_indices
+      .0
       .into_iter()
       .map(|i| local_id_at(&self.inner, checked_index(i, "argLocalIndex")?))
       .collect::<Result<Vec<_>>>()?;

@@ -355,6 +355,7 @@ pub(crate) fn composite_type_to_walrus_in(
   Ok(match comp {
     CompositeType::Struct { fields } => {
       let fields = fields
+        .0
         .into_iter()
         .map(|f| field_type_to_walrus_in(module, f))
         .collect::<napi::Result<Vec<_>>>()?;
@@ -367,10 +368,12 @@ pub(crate) fn composite_type_to_walrus_in(
     }),
     CompositeType::Function { params, results } => {
       let params = params
+        .0
         .into_iter()
         .map(|v| val_type_to_walrus_in(module, v))
         .collect::<napi::Result<Vec<_>>>()?;
       let results = results
+        .0
         .into_iter()
         .map(|v| val_type_to_walrus_in(module, v))
         .collect::<napi::Result<Vec<_>>>()?;
@@ -506,6 +509,7 @@ fn plan_composite(
   Ok(match comp {
     CompositeType::Struct { fields } => PlanComposite::Struct(
       fields
+        .0
         .into_iter()
         .map(|f| plan_field(module, f, count))
         .collect::<napi::Result<Vec<_>>>()?,
@@ -513,10 +517,12 @@ fn plan_composite(
     CompositeType::Array { element } => PlanComposite::Array(plan_field(module, element, count)?),
     CompositeType::Function { params, results } => PlanComposite::Function {
       params: params
+        .0
         .into_iter()
         .map(|v| plan_val(module, v, count))
         .collect::<napi::Result<Vec<_>>>()?,
       results: results
+        .0
         .into_iter()
         .map(|v| plan_val(module, v, count))
         .collect::<napi::Result<Vec<_>>>()?,

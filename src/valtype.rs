@@ -9,6 +9,8 @@
 
 use napi_derive::napi;
 
+use crate::safevec::SafeVec;
+
 /// A wasm value type.
 ///
 /// Generated as a TypeScript discriminated union keyed on `type`, e.g.
@@ -151,7 +153,11 @@ pub enum CompositeType {
   /// A GC struct type: a sequence of field types.
   Struct {
     /// The struct's fields, in order.
-    fields: Vec<FieldType>,
+    // `SafeVec` decodes NON-preallocating (see `src/safevec.rs`): a sparse-huge
+    // JS `.length` fails catchably instead of aborting on `with_capacity`.
+    // `ts_type` keeps the generated `.d.ts` reading `Array<FieldType>` verbatim.
+    #[napi(ts_type = "Array<FieldType>")]
+    fields: SafeVec<FieldType>,
   },
   /// A GC array type: a single element field type shared by all elements.
   Array {
@@ -161,9 +167,13 @@ pub enum CompositeType {
   /// A function type: parameter and result value types.
   Function {
     /// The parameter value types.
-    params: Vec<ValType>,
+    // Non-preallocating decode (see `src/safevec.rs`); `ts_type` keeps the
+    // generated `.d.ts` reading `Array<ValType>` verbatim.
+    #[napi(ts_type = "Array<ValType>")]
+    params: SafeVec<ValType>,
     /// The result value types.
-    results: Vec<ValType>,
+    #[napi(ts_type = "Array<ValType>")]
+    results: SafeVec<ValType>,
   },
 }
 

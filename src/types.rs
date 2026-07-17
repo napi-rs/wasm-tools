@@ -7,6 +7,7 @@ use walrus::ir::InstrSeqType;
 use walrus::TypeId;
 
 use crate::constexpr::ConstExpr;
+use crate::safevec::SafeVec;
 use crate::valtype::{CompositeType, FieldType, RecGroupMember, ValType};
 use crate::WasmModule;
 
@@ -198,11 +199,18 @@ impl WasmTypes {
   ///
   /// The returned handle holds its own strong reference to the module (same as
   /// the accessor handles), so it stays valid as long as it is held.
-  pub fn add(&mut self, env: Env, params: Vec<ValType>, results: Vec<ValType>) -> Result<WasmType> {
+  pub fn add(
+    &mut self,
+    env: Env,
+    // `SafeVec` decodes NON-preallocating (see `src/safevec.rs`); `ts_arg_type`
+    // keeps the generated `.d.ts` reading `Array<ValType>` verbatim.
+    #[napi(ts_arg_type = "Array<ValType>")] params: SafeVec<ValType>,
+    #[napi(ts_arg_type = "Array<ValType>")] results: SafeVec<ValType>,
+  ) -> Result<WasmType> {
     // Convert (resolving concrete refs, rejecting a bad index) BEFORE touching
     // the arena, so a failed add never mutates the module.
-    let params = to_walrus_valtypes(&self.module.inner, params)?;
-    let results = to_walrus_valtypes(&self.module.inner, results)?;
+    let params = to_walrus_valtypes(&self.module.inner, params.0)?;
+    let results = to_walrus_valtypes(&self.module.inner, results.0)?;
     let id = self.module.inner.types.add(&params, &results);
     Ok(WasmType {
       id,
@@ -220,11 +228,13 @@ impl WasmTypes {
   pub fn find(
     &self,
     env: Env,
-    params: Vec<ValType>,
-    results: Vec<ValType>,
+    // Non-preallocating decode (see `src/safevec.rs`); `ts_arg_type` keeps the
+    // generated `.d.ts` reading `Array<ValType>` verbatim.
+    #[napi(ts_arg_type = "Array<ValType>")] params: SafeVec<ValType>,
+    #[napi(ts_arg_type = "Array<ValType>")] results: SafeVec<ValType>,
   ) -> Result<Option<WasmType>> {
-    let params = to_walrus_valtypes(&self.module.inner, params)?;
-    let results = to_walrus_valtypes(&self.module.inner, results)?;
+    let params = to_walrus_valtypes(&self.module.inner, params.0)?;
+    let results = to_walrus_valtypes(&self.module.inner, results.0)?;
     match self.module.inner.types.find(&params, &results) {
       Some(id) => Ok(Some(WasmType {
         id,
@@ -251,10 +261,17 @@ impl WasmTypes {
   ///
   /// The returned handle holds its own strong reference to the module, so it
   /// stays valid as long as it is held.
-  pub fn add_struct(&mut self, env: Env, fields: Vec<FieldType>) -> Result<WasmType> {
+  pub fn add_struct(
+    &mut self,
+    env: Env,
+    // Non-preallocating decode (see `src/safevec.rs`); `ts_arg_type` keeps the
+    // generated `.d.ts` reading `Array<FieldType>` verbatim.
+    #[napi(ts_arg_type = "Array<FieldType>")] fields: SafeVec<FieldType>,
+  ) -> Result<WasmType> {
     // Convert (resolving each concrete ref, rejecting a bad index) BEFORE
     // touching the arena, so a failed add never mutates the module.
     let fields = fields
+      .0
       .into_iter()
       .map(|f| crate::convert::field_type_to_walrus_in(&self.module.inner, f))
       .collect::<Result<Vec<_>>>()?;
@@ -373,7 +390,15 @@ impl WasmTypes {
   ///
   /// Each returned handle holds its own strong reference to the module, so it
   /// stays valid as long as it is held.
-  pub fn add_rec_group(&mut self, env: Env, members: Vec<RecGroupMember>) -> Result<Vec<WasmType>> {
+  pub fn add_rec_group(
+    &mut self,
+    env: Env,
+    // Non-preallocating decode (see `src/safevec.rs`) — this reaches the nested
+    // `CompositeType` Vecs transitively; `ts_arg_type` keeps the generated
+    // `.d.ts` reading `Array<RecGroupMember>` verbatim.
+    #[napi(ts_arg_type = "Array<RecGroupMember>")] members: SafeVec<RecGroupMember>,
+  ) -> Result<Vec<WasmType>> {
+    let members = members.0;
     let count = members.len();
     // PREFLIGHT (fallible): resolve every existing-type ref and range-check every
     // sibling `recIndex` BEFORE touching the arena, so the build closure below is

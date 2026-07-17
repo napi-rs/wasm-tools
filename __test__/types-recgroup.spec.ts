@@ -339,3 +339,54 @@ test('PART3: WasmType.refNull on a deleted handle throws catchably (no abort)', 
   m.types.delete(s)
   t.regex(t.throws(() => s.refNull())!.message, /deleted/)
 })
+
+// ---------------------------------------------------------------------------
+// F1 #4 (untrusted-length Vec decode): `addRecGroup`'s `members` — AND every
+// nested `CompositeType` Vec reached through it — decode through the
+// non-preallocating `SafeVec<T>` (see `src/safevec.rs`), NOT the derived
+// `Vec::<T>::from_napi_value` (which `Vec::with_capacity(arr.length)` from the
+// untrusted JS `.length` → an uncatchable OOM/capacity-overflow abort under WASI
+// `panic=abort`). A sparse `2**32 - 1`-length array holds no real elements, so the
+// OLD code aborted on the huge prealloc; the NEW code fails CATCHABLY on the first
+// hole and leaves the type arena UNCHANGED (all-or-nothing). The nested cases are
+// the load-bearing ones: fixing the `members` param alone does NOT cover the inner
+// `Struct.fields` / `Function.params` Vecs — the derived `CompositeType` decode
+// reaches them regardless of container.
+// ---------------------------------------------------------------------------
+function sparseHuge(): never[] {
+  const a: unknown[] = []
+  a.length = 2 ** 32 - 1
+  return a as never[]
+}
+
+test('F1 #4 (addRecGroup members sparse): a 2**32-1-length sparse `members` throws catchably, arena unchanged', (t) => {
+  const m = empty()
+  const before = m.types.length
+  t.throws(() => m.types.addRecGroup(sparseHuge()))
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F1 #4 (addRecGroup NESTED composite Struct.fields sparse): the transitive inner Vec throws catchably, arena unchanged', (t) => {
+  const m = empty()
+  const before = m.types.length
+  // A real 1-element members array whose member's composite carries a sparse-huge
+  // `fields` — the derived `CompositeType::from_napi_value` decodes that inner Vec
+  // via `SafeVec<FieldType>`, so it fails catchably instead of aborting.
+  t.throws(() => m.types.addRecGroup([{ composite: { type: 'Struct', fields: sparseHuge() }, isFinal: true }]))
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F1 #4 (addRecGroup NESTED composite Function.params/results sparse): the transitive inner Vecs throw catchably, arena unchanged', (t) => {
+  const m = empty()
+  const before = m.types.length
+  t.throws(() =>
+    m.types.addRecGroup([{ composite: { type: 'Function', params: sparseHuge(), results: [] }, isFinal: true }]),
+  )
+  t.throws(() =>
+    m.types.addRecGroup([{ composite: { type: 'Function', params: [], results: sparseHuge() }, isFinal: true }]),
+  )
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})

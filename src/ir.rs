@@ -3837,7 +3837,24 @@ fn validate_legacy_catches(
   catches: &[CatchClause],
   label_len: usize,
 ) -> Result<()> {
+  // walrus's legacy emit treats `LegacyDelegate` as TERMINAL (it emits the
+  // `Delegate` and RETURNS — there is no handler block, so nothing re-enters the
+  // clause loop) and assumes `LegacyCatchAll` is the LAST handler (its block-end
+  // just emits `End` without re-entering the loop). So any clause appearing AFTER
+  // a `LegacyDelegate` or `LegacyCatchAll` would be SILENTLY DROPPED at emit,
+  // yielding a mis-encoded module — silent value corruption, not a hard abort.
+  // Reject those two orderings here in the read-only preflight (BEFORE
+  // `FunctionBuilder::new` mutates the arena), so the whole call stays
+  // all-or-nothing. Modern `try_table` catches are instruction OPERANDS with no
+  // such terminal/last assumption (see `validate_try_table_catches`), so no
+  // matching rule belongs there.
+  let mut terminal_seen = false;
   for c in catches {
+    if terminal_seen {
+      return Err(Error::from_reason(
+        "a legacy catch clause after a `LegacyCatchAll`/`LegacyDelegate` clause is unreachable and would be silently dropped at emit",
+      ));
+    }
     match c.kind.as_str() {
       "LegacyCatch" => {
         tag_id_at(
@@ -3862,6 +3879,8 @@ fn validate_legacy_catches(
             .ok_or_else(|| missing("LegacyCatchAll", "seq"))?,
           label_len + 1,
         )?;
+        // `CatchAll` is assumed LAST by emit — any later clause is dropped.
+        terminal_seen = true;
       }
       "LegacyDelegate" => {
         checked_index(
@@ -3869,6 +3888,8 @@ fn validate_legacy_catches(
             .ok_or_else(|| missing("LegacyDelegate", "relativeDepth"))?,
           "relativeDepth",
         )?;
+        // `Delegate` ends the try — any later clause is dropped at emit.
+        terminal_seen = true;
       }
       other => return Err(unknown_legacy_catch_kind(other)),
     }

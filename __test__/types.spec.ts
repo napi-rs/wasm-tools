@@ -728,3 +728,65 @@ test('recGroupMembers / isExplicitRecGroup delete-guard: a deleted handle throws
   t.regex(t.throws(() => s.recGroupMembers())!.message, /deleted/)
   t.regex(t.throws(() => s.isExplicitRecGroup)!.message, /deleted/)
 })
+
+// ---------------------------------------------------------------------------
+// F1 #4 (untrusted-length Vec decode): every `Array<T>` INPUT on `WasmTypes` /
+// `addComposite` is decoded through the non-preallocating `SafeVec<T>` (see
+// `src/safevec.rs`), NOT the derived `Vec::<T>::from_napi_value` (which
+// `Vec::with_capacity(arr.length)` from the untrusted JS `.length` → an
+// uncatchable OOM/capacity-overflow abort under WASI `panic=abort`). A sparse
+// `2**32 - 1`-length array holds no real elements (no JS memory), so the OLD code
+// aborted on the huge prealloc; the NEW code fails CATCHABLY on the first hole
+// and leaves the type arena UNCHANGED (the throw is at the FFI arg-decode
+// boundary, before the method body runs). The nested `addComposite` cases prove
+// the TRANSITIVE `CompositeType` variant fields (Struct.fields / Function.params
+// / Function.results) are hardened too — the derived enum decode reaches those
+// inner Vecs regardless of container.
+// ---------------------------------------------------------------------------
+function sparseHuge(): never[] {
+  const a: unknown[] = []
+  a.length = 2 ** 32 - 1
+  return a as never[]
+}
+
+test('F1 #4 (types.add params/results sparse): a 2**32-1-length sparse array throws catchably, arena unchanged', (t) => {
+  const m = emptyModule()
+  const before = m.types.length
+  t.throws(() => m.types.add(sparseHuge(), []))
+  t.throws(() => m.types.add([], sparseHuge()))
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F1 #4 (types.find params/results sparse): a 2**32-1-length sparse array throws catchably, arena unchanged', (t) => {
+  const m = emptyModule()
+  const before = m.types.length
+  t.throws(() => m.types.find(sparseHuge(), []))
+  t.throws(() => m.types.find([], sparseHuge()))
+  t.is(m.types.length, before)
+})
+
+test('F1 #4 (types.addStruct fields sparse): a 2**32-1-length sparse `fields` throws catchably, arena unchanged', (t) => {
+  const m = emptyModule()
+  const before = m.types.length
+  t.throws(() => m.types.addStruct(sparseHuge()))
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F1 #4 (addComposite nested Struct.fields sparse): the transitive CompositeType Vec throws catchably, arena unchanged', (t) => {
+  const m = emptyModule()
+  const before = m.types.length
+  t.throws(() => m.types.addComposite({ type: 'Struct', fields: sparseHuge() }, true))
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F1 #4 (addComposite nested Function.params/results sparse): the transitive CompositeType Vecs throw catchably, arena unchanged', (t) => {
+  const m = emptyModule()
+  const before = m.types.length
+  t.throws(() => m.types.addComposite({ type: 'Function', params: sparseHuge(), results: [] }, true))
+  t.throws(() => m.types.addComposite({ type: 'Function', params: [], results: sparseHuge() }, true))
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})

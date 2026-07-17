@@ -3933,6 +3933,11 @@ function legacyBody(T: number): InstrDesc[] {
           seq: [{ type: 'Rethrow', relativeDepth: 0 }],
         },
         {
+          // `CatchAll` is LAST here: walrus emit treats it as terminal (F1 #3),
+          // so any clause after it would be silently dropped at emit — the
+          // `validate_legacy_catches` ordering guard now rejects that. The
+          // `LegacyDelegate` kind is still exercised by the nested Try below and
+          // the second top-level Try.
           kind: 'LegacyCatchAll',
           blockType: { type: 'Empty' },
           // a NESTED Try inside a handler — proves catches[].seq marshalling both
@@ -3946,7 +3951,6 @@ function legacyBody(T: number): InstrDesc[] {
             },
           ],
         },
-        { kind: 'LegacyDelegate', relativeDepth: 3 },
       ],
     },
     // catch-less-ish: a Try with ONLY a Delegate (no handler bodies at all).
@@ -4484,4 +4488,173 @@ test('H2 review-fix (replace): a poisoned RELEVANT body index is caught in prefl
     t.is(m.functions.getByIndex(gIdx)!.kind, FunctionKindTag.Import)
     t.notThrows(() => m.emitWasm(false))
   }
+})
+
+// ---------------------------------------------------------------------------
+// F1 #4 (untrusted-length Vec decode): `buildFunction`'s `params` / `results` /
+// `argLocalIndices` are decoded through the non-preallocating `SafeVec<T>` (see
+// `src/safevec.rs`), NOT the derived `Vec::<T>::from_napi_value` (which would
+// `Vec::with_capacity(arr.length)` from the untrusted JS `.length` BEFORE the
+// element loop → an uncatchable capacity-overflow / OOM abort under WASI
+// `panic=abort`). A sparse `2**32 - 1`-length array occupies no real JS memory,
+// so the OLD code would have aborted the worker on the huge prealloc; the NEW
+// code grows from the ACTUAL elements and fails CATCHABLY on the first hole. The
+// module is untouched (the throw is at the FFI arg-decode boundary, before the
+// method body runs), proving all-or-nothing.
+// ---------------------------------------------------------------------------
+function sparseHuge(): unknown[] {
+  const a: unknown[] = []
+  a.length = 2 ** 32 - 1
+  return a
+}
+
+test('F1 #4 (buildFunction params sparse): a 2**32-1-length sparse `params` throws catchably, module unchanged', (t) => {
+  const m = empty()
+  const before = m.types.length
+  t.throws(() => m.buildFunction(sparseHuge() as unknown as ValType[], [], [], []))
+  t.is(m.types.length, before) // no signature/entry type minted
+  t.notThrows(() => m.emitWasm(false)) // process survived
+})
+
+test('F1 #4 (buildFunction results sparse): a 2**32-1-length sparse `results` throws catchably, module unchanged', (t) => {
+  const m = empty()
+  const before = m.types.length
+  t.throws(() => m.buildFunction([], sparseHuge() as unknown as ValType[], [], []))
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F1 #4 (buildFunction argLocalIndices sparse): a 2**32-1-length sparse `argLocalIndices` throws catchably, module unchanged', (t) => {
+  const m = empty()
+  const before = m.types.length
+  t.throws(() => m.buildFunction([], [], sparseHuge() as unknown as number[], []))
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F1 #4 (replaceExportedFunc argLocalIndices sparse): throws catchably, export/module unchanged', (t) => {
+  const { m, fIdx } = exportedLocalFixture()
+  const before = m.types.length
+  t.throws(() => m.replaceExportedFunc(fIdx, sparseHuge() as unknown as number[], []))
+  t.is(m.types.length, before) // no replacement func minted, export intact
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+test('F1 #4 (replaceImportedFunc argLocalIndices sparse): throws catchably, import/module unchanged', (t) => {
+  const m = empty()
+  const sig = m.types.add([I32], [I32])
+  const g = m.imports.addFunction('env', 'g', sig)
+  const before = m.types.length
+  t.throws(() => m.replaceImportedFunc(g.index, sparseHuge() as unknown as number[], []))
+  t.is(m.types.length, before) // import not swapped
+  t.not(m.imports.find('env', 'g'), null) // import still present
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+// ---------------------------------------------------------------------------
+// F1 #3 (legacy-EH clause ordering): walrus's legacy emit treats `LegacyDelegate`
+// as TERMINAL and assumes `LegacyCatchAll` is the LAST handler, so any clause
+// AFTER either is SILENTLY DROPPED at emit (a mis-encoded module — silent value
+// corruption). `validate_legacy_catches` rejects those two orderings in the
+// read-only preflight (BEFORE `FunctionBuilder::new`), so the whole call stays
+// all-or-nothing and `types.length` is unchanged. Valid orderings still build and
+// preserve every clause.
+// ---------------------------------------------------------------------------
+test('F1 #3 (legacy-EH ordering): a clause after `Delegate` or `CatchAll` throws catchably, module unchanged', (t) => {
+  const m = empty()
+  m.tags.add(m.types.add([], [])) // tag 0
+  const before = m.types.length
+  const TRY = (catches: unknown): InstrDesc[] =>
+    [{ type: 'Try', blockType: { type: 'Empty' }, seq: [], catches }] as unknown as InstrDesc[]
+
+  // A `Catch` after a `Delegate` would be dropped at emit.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        TRY([
+          { kind: 'LegacyDelegate', relativeDepth: 0 },
+          { kind: 'LegacyCatch', tag: 0, blockType: { type: 'Empty' }, seq: [] },
+        ]),
+      ),
+    { message: /unreachable and would be silently dropped/ },
+  )
+
+  // A `Catch` after a `CatchAll` would be dropped at emit.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        TRY([
+          { kind: 'LegacyCatchAll', blockType: { type: 'Empty' }, seq: [] },
+          { kind: 'LegacyCatch', tag: 0, blockType: { type: 'Empty' }, seq: [] },
+        ]),
+      ),
+    { message: /unreachable and would be silently dropped/ },
+  )
+
+  // A `CatchAll` after a `CatchAll` (both terminal) is likewise rejected.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        TRY([
+          { kind: 'LegacyCatchAll', blockType: { type: 'Empty' }, seq: [] },
+          { kind: 'LegacyCatchAll', blockType: { type: 'Empty' }, seq: [] },
+        ]),
+      ),
+    { message: /unreachable and would be silently dropped/ },
+  )
+
+  // All-or-nothing: no function/type was left behind by any rejected build.
+  t.is(m.types.length, before)
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F1 #3 (legacy-EH ordering): valid orderings [Catch, Catch, CatchAll] and [Catch, Delegate] still build, keeping every clause', (t) => {
+  const m = empty()
+  m.tags.add(m.types.add([], [])) // tag 0
+
+  // `[Catch, Catch, CatchAll]` — CatchAll last (its assumed position): all kept.
+  const idx1 = m.buildFunction([], [], [], [
+    {
+      type: 'Try',
+      blockType: { type: 'Empty' },
+      seq: [],
+      catches: [
+        { kind: 'LegacyCatch', tag: 0, blockType: { type: 'Empty' }, seq: [] },
+        { kind: 'LegacyCatch', tag: 0, blockType: { type: 'Empty' }, seq: [] },
+        { kind: 'LegacyCatchAll', blockType: { type: 'Empty' }, seq: [] },
+      ],
+    },
+  ] as unknown as InstrDesc[])
+  const read1 = m.functions.getByIndex(idx1)!.instructions()
+  t.deepEqual(
+    read1[0].catches!.map((c) => c.kind),
+    ['LegacyCatch', 'LegacyCatch', 'LegacyCatchAll'],
+  )
+
+  // `[Catch, Delegate]` — Delegate last (terminal): both kept.
+  const idx2 = m.buildFunction([], [], [], [
+    {
+      type: 'Try',
+      blockType: { type: 'Empty' },
+      seq: [],
+      catches: [
+        { kind: 'LegacyCatch', tag: 0, blockType: { type: 'Empty' }, seq: [] },
+        { kind: 'LegacyDelegate', relativeDepth: 0 },
+      ],
+    },
+  ] as unknown as InstrDesc[])
+  const read2 = m.functions.getByIndex(idx2)!.instructions()
+  t.deepEqual(
+    read2[0].catches!.map((c) => c.kind),
+    ['LegacyCatch', 'LegacyDelegate'],
+  )
 })

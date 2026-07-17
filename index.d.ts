@@ -1022,9 +1022,19 @@ export declare class WasmModule {
   static fromBuffer(bytes: Uint8Array): WasmModule
   /** Construct a new module from the in-memory wasm buffer and configuration. */
   static fromBufferWithConfig(bytes: Uint8Array, config: ModuleConfig): WasmModule
-  /** Emit this module into an in-memory wasm buffer. */
+  /**
+   * Emit this module into an in-memory wasm buffer.
+   *
+   * MIRROR-WALRUS: a surviving reference (start/export/element/`Call`) to a
+   * deleted item aborts at gc/emit — caller's responsibility.
+   */
   emitWasm(demangle: boolean): Uint8Array
-  /** Emit this module into a `.wasm` file at the given path. */
+  /**
+   * Emit this module into a `.wasm` file at the given path.
+   *
+   * MIRROR-WALRUS: a surviving reference (start/export/element/`Call`) to a
+   * deleted item aborts at gc/emit — caller's responsibility.
+   */
   emitWasmFile(path: string, demangle: boolean): void
   /** Write the GraphViz `.dot` representation of this module to the given path. */
   writeGraphvizDot(path: string): void
@@ -1032,6 +1042,9 @@ export declare class WasmModule {
    * Run garbage collection passes over this module, removing items that are
    * not transitively referenced from any root (exports, the start function,
    * etc.).
+   *
+   * MIRROR-WALRUS: a surviving reference (start/export/element/`Call`) to a
+   * deleted item aborts at gc/emit — caller's responsibility.
    */
   gc(): void
   /**
