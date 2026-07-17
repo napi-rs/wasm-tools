@@ -191,3 +191,38 @@ test('addLocal accepts a typed RefNull ConstExpr whose type is live in the same 
   const reparsed = new ModuleConfig().onlyStableFeatures(false).parse(out)
   t.is(reparsed.globals.length, 2)
 })
+
+// elements.wasm has func $f (index 0), already in the module's declared refs
+// (referenced by its element segments), so `ref.func $f` is a valid const-expr
+// initializer.
+const ELEMENTS = readFileSync(join(__dirname, 'fixtures', 'elements.wasm'))
+const loadWithFunc = () => WasmModule.fromBuffer(ELEMENTS)
+
+// refFunc (F2 API 2) used as a global initializer round-trips through emit +
+// re-parse (the write direction of `ref.func`, mirroring globalGet/refNull).
+test('addLocal accepts a refFunc initializer that round-trips', (t) => {
+  const m = loadWithFunc()
+  const func = m.functions.items()[0]
+  const g = m.globals.addLocal(FUNCREF, false, false, ConstExpr.refFunc(func))
+  t.is(g.init()!.kind, 'RefFunc')
+
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+
+  const reparsed = WasmModule.fromBuffer(bytes)
+  const rg = reparsed.globals.items().find((x) => x.init()?.kind === 'RefFunc')
+  t.truthy(rg)
+})
+
+// Consume-site guard: a refFunc off a DELETED function is rejected catchably at
+// globals.addLocal (its FunctionId is no longer live), never a process abort.
+test('addLocal rejects a refFunc initializer off a deleted function (throws, never aborts)', (t) => {
+  const m = loadWithFunc()
+  const func = m.functions.items()[0]
+  const rf = ConstExpr.refFunc(func)
+  m.functions.delete(func)
+
+  const err = t.throws(() => m.globals.addLocal(FUNCREF, false, false, rf))
+  t.regex(err!.message, /function that is not in this module/)
+  t.is(m.globals.length, 0)
+})

@@ -10,9 +10,11 @@
 //! only its [`ConstExprKind`] discriminant (value-extraction getters are YAGNI
 //! until a consumer needs them).
 
-use napi::bindgen_prelude::{BigInt, Result, Uint8Array};
+use napi::bindgen_prelude::{BigInt, FromNapiValue, Result, Uint8Array, ValidateNapiValue};
+use napi::sys;
 use napi_derive::napi;
 
+use crate::functions::WasmFunction;
 use crate::globals::WasmGlobal;
 use crate::valtype::HeapType;
 
@@ -96,6 +98,25 @@ impl ConstExpr {
     }
   }
 
+  /// A constant function reference (`ref.func $f`).
+  ///
+  /// Takes a live [`WasmFunction`] HANDLE (not an index), exactly like
+  /// [`ConstExpr::global_get`]: the handle already carries the resolved
+  /// `FunctionId`, so no module/index resolution is needed here. Provenance is
+  /// validated at the CONSUME site — every consumer (`globals.addLocal`,
+  /// `data.addActive`, `elements.addFunctions`/`addExpressions`,
+  /// `tables.addLocalWithInit`) runs `validate_const_expr`, whose `RefFunc` arm
+  /// rejects a function that is not live in that module. So a `refFunc` built
+  /// off a foreign/deleted function handle is caught catchably where it is used,
+  /// never as a process-aborting emit-time panic. Adds no new abort surface
+  /// (identical risk profile to `global_get`).
+  #[napi(factory)]
+  pub fn ref_func(func: &WasmFunction) -> Self {
+    Self {
+      inner: walrus::ConstExpr::RefFunc(func.id),
+    }
+  }
+
   /// A null reference of the given (abstract) heap type (`ref.null`).
   ///
   /// `ref.null` is ALWAYS nullable — a non-nullable null is invalid wasm
@@ -127,6 +148,39 @@ impl ConstExpr {
       walrus::ConstExpr::RefFunc(_) => ConstExprKind::RefFunc,
       walrus::ConstExpr::Extended(_) => ConstExprKind::Extended,
     }
+  }
+}
+
+/// An abort-safe napi decode of ONE JS `ConstExpr` class handle into an owned
+/// clone of its inner `walrus::ConstExpr`.
+///
+/// This exists so a LIST of `ConstExpr` handles (`elements.addExpressions`'
+/// `exprs`) can be decoded through [`crate::safevec::SafeVec`] without ever
+/// pre-allocating from the untrusted JS `Array.length` (the finding #4 abort
+/// class). `SafeVec<T>` requires `T: FromNapiValue`, and neither `&ConstExpr` (a
+/// borrow, not owned) nor `ClassInstance<ConstExpr>` (carries an `'env`
+/// lifetime) drops cleanly into the lifetime-free `SafeVec<T>`; this owned
+/// newtype does.
+///
+/// The decode is byte-for-byte the same path the derived `&ConstExpr` param
+/// takes: it runs the generated `instanceof ConstExpr` validation FIRST, so a JS
+/// array element that is some OTHER `#[napi]` class can never have its native
+/// pointer type-confused into a `walrus::ConstExpr` (`napi_unwrap` is
+/// type-blind). The inner const expr is cloned out immediately; the provenance
+/// of any id it embeds is validated by the caller via `validate_const_expr`.
+pub struct ConstExprArg(pub(crate) walrus::ConstExpr);
+
+impl FromNapiValue for ConstExprArg {
+  unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> Result<Self> {
+    // Same instanceof guard the derived `&ConstExpr` param runs (napi-derive's
+    // `ValidateNapiValue for &ConstExpr`): reject anything that is not a
+    // `ConstExpr` instance BEFORE the type-blind `napi_unwrap` inside
+    // `<&ConstExpr>::from_napi_value` can reinterpret a foreign class's native
+    // pointer as a `walrus::ConstExpr`.
+    unsafe { <&ConstExpr as ValidateNapiValue>::validate(env, napi_val)? };
+    let handle: &ConstExpr =
+      unsafe { <&ConstExpr as FromNapiValue>::from_napi_value(env, napi_val)? };
+    Ok(ConstExprArg(handle.inner.clone()))
   }
 }
 

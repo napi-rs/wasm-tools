@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 import test from 'ava'
 
-import { WasmModule } from '../index'
+import { ConstExpr, WasmModule } from '../index'
 
 const __dirname = join(fileURLToPath(import.meta.url), '..')
 
@@ -207,4 +207,181 @@ test('delete of an active element then gc() does not abort on a rooted table', (
   // The module is still coherent: it emits and re-parses with no elements.
   const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
   t.is(reparsed.elements.length, 0)
+})
+
+const FUNC_HEAP = { type: 'Abstract', kind: 'Func' } as const
+
+// ---------------------------------------------------------------------------
+// addFunctions / addExpressions (F2 API 1) — element-segment creation.
+// The base fixture (elements.wasm) has table 0 (4 funcref) and func $f (index 0).
+// ---------------------------------------------------------------------------
+
+test('addFunctions(Active) writes through emit + re-parse as an active Functions segment', (t) => {
+  const m = load()
+  const table = m.tables.items()[0]
+  const seg = m.elements.addFunctions('Active', table, ConstExpr.i32(0), [0])
+  seg.name = 'added_active'
+  t.is(seg.kind, 'Active')
+  t.is(seg.itemsKind, 'Functions')
+  t.is(m.elements.length, 3)
+
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+
+  const reparsed = WasmModule.fromBuffer(bytes)
+  const found = reparsed.elements.items().find((e) => e.name === 'added_active')
+  t.truthy(found)
+  t.is(found!.kind, 'Active')
+  t.is(found!.table()!.index, 0)
+  t.is(found!.itemsKind, 'Functions')
+  t.deepEqual(
+    found!.functionItems()!.map((f) => f.index),
+    [0],
+  )
+})
+
+// gc-survival: an ACTIVE segment on a rooted (exported) LOCAL table is reachable
+// ONLY through the table's `elem_segments` back-link (walrus' initial roots do
+// NOT keep active segments of a non-imported table — used.rs). So this segment
+// surviving gc() PROVES addFunctions inserted the back-link; without it the
+// segment would be silently dropped by gc.
+test('addFunctions(Active) inserts the elem_segments back-link so the segment survives gc()', (t) => {
+  const m = loadRooted()
+  const table = m.tables.items()[0]
+  const seg = m.elements.addFunctions('Active', table, ConstExpr.i32(0), [0])
+  seg.name = 'survivor'
+  t.is(m.elements.length, 2)
+
+  // Must not abort (rooted table walks elem_segments, which now includes our id).
+  m.gc()
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const found = reparsed.elements.items().find((e) => e.name === 'survivor')
+  t.truthy(found)
+  t.is(found!.kind, 'Active')
+})
+
+test('addFunctions(Passive) writes through emit + re-parse as a passive Functions segment', (t) => {
+  const m = load()
+  const seg = m.elements.addFunctions('Passive', null, null, [0])
+  seg.name = 'added_passive'
+  t.is(seg.kind, 'Passive')
+  t.is(seg.table(), null)
+  t.is(seg.offset(), null)
+  t.is(seg.itemsKind, 'Functions')
+
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+
+  const reparsed = WasmModule.fromBuffer(bytes)
+  const found = reparsed.elements.items().find((e) => e.name === 'added_passive')
+  t.truthy(found)
+  t.is(found!.kind, 'Passive')
+  t.is(found!.itemsKind, 'Functions')
+  t.deepEqual(
+    found!.functionItems()!.map((f) => f.index),
+    [0],
+  )
+})
+
+test('addExpressions(Passive) writes through emit + re-parse as a passive Expressions segment', (t) => {
+  const m = load()
+  const func = m.functions.items()[0]
+  const seg = m.elements.addExpressions('Passive', null, null, FUNCREF, [
+    ConstExpr.refFunc(func),
+    ConstExpr.refNull(FUNC_HEAP),
+  ])
+  seg.name = 'passive_exprs'
+  t.is(seg.kind, 'Passive')
+  t.is(seg.itemsKind, 'Expressions')
+  t.deepEqual(seg.expressionElementType(), FUNCREF)
+  t.is(seg.expressionItems()!.length, 2)
+
+  const bytes = m.emitWasm(false)
+  t.true(WebAssembly.validate(bytes))
+
+  const reparsed = WasmModule.fromBuffer(bytes)
+  const found = reparsed.elements.items().find((e) => e.name === 'passive_exprs')
+  t.truthy(found)
+  t.is(found!.itemsKind, 'Expressions')
+  t.deepEqual(found!.expressionElementType(), FUNCREF)
+  t.deepEqual(
+    found!.expressionItems()!.map((e) => e.kind),
+    ['RefFunc', 'RefNull'],
+  )
+})
+
+test('addFunctions(Active) without a table/offset throws catchably and leaves the module unchanged', (t) => {
+  const m = load()
+  const err = t.throws(() => m.elements.addFunctions('Active', null, null, [0]))
+  t.regex(err!.message, /active element segment requires a table and offset/)
+  t.is(m.elements.length, 2)
+})
+
+test('addFunctions(Passive) WITH a table/offset throws catchably (no silent corruption) and leaves the module unchanged', (t) => {
+  const m = load()
+  const table = m.tables.items()[0]
+  const err = t.throws(() => m.elements.addFunctions('Passive', table, ConstExpr.i32(0), [0]))
+  t.regex(err!.message, /only valid for an active element segment/)
+  t.is(m.elements.length, 2)
+})
+
+test('addFunctions rejects a funcIndex naming no live function and leaves the module unchanged', (t) => {
+  const m = load()
+  const err = t.throws(() => m.elements.addFunctions('Passive', null, null, [999]))
+  t.regex(err!.message, /no function at index 999/)
+  t.is(m.elements.length, 2)
+})
+
+test('addExpressions rejects a non-reference elementTy and leaves the module unchanged', (t) => {
+  const m = load()
+  const err = t.throws(() => m.elements.addExpressions('Passive', null, null, { type: 'I32' }, []))
+  t.regex(err!.message, /reference type/)
+  t.is(m.elements.length, 2)
+})
+
+// Abort-safety (#4 parity): a hostile sparse funcIndices length must fail
+// CATCHABLY at decode (SafeVec grows non-preallocating), never pre-allocate
+// ~2**32 slots from the untrusted JS `.length` and abort the process.
+function sparseHuge(): never[] {
+  const a: unknown[] = []
+  a.length = 2 ** 32 - 1
+  return a as never[]
+}
+
+test('addFunctions rejects a huge sparse funcIndices array instead of aborting', (t) => {
+  const m = load()
+  t.throws(() => m.elements.addFunctions('Passive', null, null, sparseHuge()))
+  t.is(m.elements.length, 2)
+})
+
+// ---------------------------------------------------------------------------
+// ConstExpr.refFunc (F2 API 2) — provenance validated at the CONSUME site.
+// ---------------------------------------------------------------------------
+
+test('ConstExpr.refFunc builds a RefFunc const expr', (t) => {
+  const m = load()
+  const func = m.functions.items()[0]
+  t.is(ConstExpr.refFunc(func).kind, 'RefFunc')
+})
+
+test('a refFunc off a DELETED function is rejected catchably at the consume site (addExpressions)', (t) => {
+  const m = load()
+  const func = m.functions.items()[0]
+  const rf = ConstExpr.refFunc(func)
+  // Delete the function so the RefFunc now carries a dead FunctionId. (The
+  // module is not emitted here — only the consume-site guard is exercised.)
+  m.functions.delete(func)
+
+  const err = t.throws(() => m.elements.addExpressions('Passive', null, null, FUNCREF, [rf]))
+  t.regex(err!.message, /function that is not in this module/)
+  t.is(m.elements.length, 2)
+})
+
+test('addExpressions rejects a non-ConstExpr array element instead of type-confusing it', (t) => {
+  const m = load()
+  const table = m.tables.items()[0]
+  // A WasmTable is a different #[napi] class; the instanceof guard must reject it.
+  t.throws(() => m.elements.addExpressions('Passive', null, null, FUNCREF, [table as unknown as ConstExpr]))
+  t.is(m.elements.length, 2)
 })

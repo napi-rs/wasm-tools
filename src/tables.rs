@@ -157,6 +157,88 @@ impl WasmTables {
       module: self.module.clone(env)?,
     })
   }
+
+  #[napi]
+  /// Add a new locally defined table WITH an optional initializer expression,
+  /// returning a live handle to it.
+  ///
+  /// This is the superset of [`WasmTables::add_local`]: `init` is the constant
+  /// expression each entry is initialized to (build one with the `ConstExpr`
+  /// factories), or `null` for a null-initialized table. walrus REQUIRES an
+  /// initializer for a non-defaultable (non-nullable) element type, so a
+  /// non-nullable `elementTy` with `init: null` is rejected with a catchable
+  /// error (it would otherwise emit a module that fails validation). A nullable
+  /// `elementTy` may still carry an `init`.
+  ///
+  /// `initial`/`maximum` are entry counts (`bigint`); `maximum` is `null` for an
+  /// unbounded table. `elementTy` must be a reference type; a non-reference type
+  /// is rejected catchably.
+  ///
+  /// `init` is a CONSUME site for arena ids: any global/function/type id it
+  /// embeds is resolved by walrus at emit via a panicking index lookup, and a
+  /// panic across FFI ABORTS the whole Node process. So a supplied `init` is
+  /// validated (`validate_const_expr`) BEFORE the arena add — a foreign/deleted
+  /// id yields a catchable JS error and leaves the module untouched.
+  ///
+  /// Per mirror-walrus policy this adds NO wasm semantic-validity check: the
+  /// init value's type is not matched to the element type. A
+  /// semantically-invalid-but-stored module is the caller's responsibility,
+  /// catchable via `WebAssembly.validate` / re-parse.
+  ///
+  /// The returned handle holds its own strong reference to the module (same as
+  /// the accessor handles), so it stays valid as long as it is held.
+  pub fn add_local_with_init(
+    &mut self,
+    env: Env,
+    table64: bool,
+    initial: BigInt,
+    maximum: Option<BigInt>,
+    element_ty: ValType,
+    init: Option<&ConstExpr>,
+  ) -> Result<WasmTable> {
+    // Convert (resolving a concrete ref, rejecting a bad index) BEFORE touching
+    // the arena; then reject a non-reference element type.
+    let wty = crate::convert::val_type_to_walrus_in(&self.module.inner, element_ty)?;
+    let element_ty = match wty {
+      walrus::ValType::Ref(rt) => rt,
+      _ => {
+        return Err(Error::from_reason(
+          "table element type must be a reference type",
+        ))
+      }
+    };
+    // walrus requires an initializer for a non-defaultable (non-nullable)
+    // element type — a non-nullable element with no init would emit a table
+    // that fails validation. Reject it BEFORE touching the arena. (Unlike
+    // `add_local`'s BLANKET non-nullable reject, a non-nullable element WITH an
+    // init is allowed here.)
+    if !element_ty.nullable && init.is_none() {
+      return Err(Error::from_reason(
+        "a non-nullable table element type requires an init expression",
+      ));
+    }
+    // Reject an init that references a global/function/type id not live in THIS
+    // module (a foreign-module handle or an already-deleted id) BEFORE it can
+    // reach emit, where walrus would abort the whole Node process.
+    if let Some(ce) = init {
+      crate::handle::validate_const_expr(&self.module.inner, &ce.inner)?;
+    }
+    let initial = crate::handle::bigint_to_u64(initial, "initial")?;
+    let maximum = maximum
+      .map(|m| crate::handle::bigint_to_u64(m, "maximum"))
+      .transpose()?;
+    let id = self.module.inner.tables.add_local_with_init(
+      table64,
+      initial,
+      maximum,
+      element_ty,
+      init.map(|c| c.inner.clone()),
+    );
+    Ok(WasmTable {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
 }
 
 /// A single table in a module, as a live handle: it holds the table's id plus a

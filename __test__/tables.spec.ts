@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 import test from 'ava'
 
-import { WasmModule } from '../index'
+import { ConstExpr, WasmModule } from '../index'
 
 const __dirname = join(fileURLToPath(import.meta.url), '..')
 
@@ -16,6 +16,11 @@ const FIXTURE = join(__dirname, 'fixtures', 'tables.wasm')
 const fixtureBytes = readFileSync(FIXTURE)
 
 const load = () => WasmModule.fromBuffer(fixtureBytes)
+
+// elements.wasm has func $f (index 0); used where addLocalWithInit needs a live
+// function to point a `ref.func` initializer at.
+const elementsBytes = readFileSync(join(__dirname, 'fixtures', 'elements.wasm'))
+const loadWithFunc = () => WasmModule.fromBuffer(elementsBytes)
 
 const FUNCREF = { type: 'Ref', nullable: true, heap: { type: 'Abstract', kind: 'Func' } } as const
 const EXTERNREF = { type: 'Ref', nullable: true, heap: { type: 'Abstract', kind: 'Extern' } } as const
@@ -219,4 +224,45 @@ test('delete-guard: using a handle after delete throws instead of crashing', (t)
 
   // The identity accessor stays usable — it never touches the arena.
   t.is(handle.index, 0)
+})
+
+// ---------------------------------------------------------------------------
+// addLocalWithInit (F2 API 3) — non-nullable / initialized tables.
+// ---------------------------------------------------------------------------
+
+test('addLocalWithInit creates a non-nullable table with a refFunc init that round-trips', (t) => {
+  const m = loadWithFunc()
+  const func = m.functions.items()[0]
+  const before = m.tables.length
+  const table = m.tables.addLocalWithInit(false, 1n, null, NON_NULLABLE_FUNCREF, ConstExpr.refFunc(func))
+  t.is(m.tables.length, before + 1)
+  t.deepEqual(table.elementTy, NON_NULLABLE_FUNCREF)
+  t.truthy(table.init())
+  t.is(table.init()!.kind, 'RefFunc')
+
+  const reparsed = WasmModule.fromBuffer(m.emitWasm(false))
+  const rt = reparsed.tables.getByIndex(table.index)!
+  t.deepEqual(rt.elementTy, NON_NULLABLE_FUNCREF)
+  t.truthy(rt.init())
+  t.is(rt.init()!.kind, 'RefFunc')
+})
+
+test('addLocalWithInit rejects a non-nullable element type with no init and leaves the collection unchanged', (t) => {
+  const m = load()
+  const err = t.throws(() => m.tables.addLocalWithInit(false, 1n, null, NON_NULLABLE_FUNCREF, null))
+  t.regex(err!.message, /requires an init/)
+  t.is(m.tables.length, 2)
+})
+
+test('addLocalWithInit rejects an init ConstExpr embedding a deleted global and leaves the collection unchanged', (t) => {
+  const m = load()
+  const g = m.globals.addLocal({ type: 'I32' }, false, false, ConstExpr.i32(0))
+  const gg = ConstExpr.globalGet(g)
+  m.globals.delete(g)
+
+  // The element type is nullable, so the `!nullable && init.is_none()` gate is
+  // not what fires — the init's dead-global provenance guard is.
+  const err = t.throws(() => m.tables.addLocalWithInit(false, 1n, null, FUNCREF, gg))
+  t.regex(err!.message, /global that is not in this module/)
+  t.is(m.tables.length, 2)
 })

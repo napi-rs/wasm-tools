@@ -1,10 +1,11 @@
 use napi::bindgen_prelude::{Reference, Result};
-use napi::Env;
+use napi::{Env, Error};
 use napi_derive::napi;
-use walrus::{ElementId, ElementItems, ElementKind, FunctionId};
+use walrus::{ElementId, ElementItems, ElementKind, FunctionId, TableId};
 
-use crate::constexpr::ConstExpr;
+use crate::constexpr::{ConstExpr, ConstExprArg};
 use crate::functions::WasmFunction;
+use crate::safevec::SafeVec;
 use crate::tables::WasmTable;
 use crate::valtype::ValType;
 use crate::WasmModule;
@@ -153,6 +154,217 @@ impl WasmElements {
       Ok(())
     } else {
       Err(crate::handle::deleted("element segment"))
+    }
+  }
+
+  #[napi]
+  /// Add a new element segment whose items are FUNCTION references
+  /// (`ElementItems::Functions`), returning a live handle to it.
+  ///
+  /// `kind` selects the segment shape and, together with `table`/`offset`,
+  /// obeys walrus' `ElementKind`:
+  ///   * `Active` REQUIRES both `table` and `offset` (the segment is copied into
+  ///     `table` at `offset` at instantiation); omitting either is a catchable
+  ///     error.
+  ///   * `Passive` / `Declared` take NEITHER `table` nor `offset`; supplying one
+  ///     is a catchable error (silently dropping it would make the caller think
+  ///     they built an active segment).
+  ///
+  /// `funcIndices` are the stable indices of the referenced functions, resolved
+  /// to live ids before any mutation. Every consumed id is validated up front,
+  /// so a foreign/deleted table, a bad offset, or a dead function index is
+  /// rejected with a catchable JS error and leaves the module untouched — never
+  /// a process-aborting emit-time panic. Per mirror-walrus policy NO wasm
+  /// semantic-validity check is added (the offset is not range/type-checked, nor
+  /// matched to `table64`); a stored-but-invalid module is the caller's
+  /// responsibility, catchable via `WebAssembly.validate` / re-parse.
+  pub fn add_functions(
+    &mut self,
+    env: Env,
+    kind: ElementKindTag,
+    table: Option<&WasmTable>,
+    offset: Option<&ConstExpr>,
+    // `SafeVec` decodes NON-preallocating (see `src/safevec.rs`), so a
+    // sparse-huge JS `.length` fails catchably instead of aborting on
+    // `with_capacity`; `ts_arg_type` keeps the generated `.d.ts` reading
+    // `Array<number>`.
+    #[napi(ts_arg_type = "Array<number>")] func_indices: SafeVec<f64>,
+  ) -> Result<WasmElement> {
+    // Resolve + validate the kind (table liveness, offset provenance) BEFORE any
+    // mutation, so a rejected add leaves the module completely unchanged.
+    let (element_kind, active_table) = self.resolve_element_kind(kind, table, offset)?;
+    // Resolve each funcIndex to a LIVE `FunctionId`, growing the result with
+    // `try_reserve` (never `Vec::with_capacity` from a JS length). A dead index
+    // would abort walrus' `get_func_index` at emit; `function_id_at` rejects it
+    // catchably here.
+    let mut func_ids: Vec<FunctionId> = Vec::new();
+    for i in func_indices.0 {
+      let idx = crate::convert::checked_index(i, "funcIndex")?;
+      let id = crate::ir::function_id_at(&self.module.inner, idx)?;
+      func_ids
+        .try_reserve(1)
+        .map_err(|_| Error::from_reason("function index list too large to decode"))?;
+      func_ids.push(id);
+    }
+    let id = self
+      .module
+      .inner
+      .elements
+      .add(element_kind, ElementItems::Functions(func_ids));
+    self.restore_active_back_link(active_table, id);
+    Ok(WasmElement {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
+
+  #[napi]
+  /// Add a new element segment whose items are constant EXPRESSIONS
+  /// (`ElementItems::Expressions`), returning a live handle to it.
+  ///
+  /// `kind` / `table` / `offset` behave exactly as in
+  /// [`WasmElements::add_functions`] (`Active` requires table+offset;
+  /// `Passive`/`Declared` reject them). `elementTy` is the segment's declared
+  /// element type and must be a reference type (a non-reference type is rejected
+  /// catchably); `exprs` are the per-entry constant expressions (build them with
+  /// the `ConstExpr` factories).
+  ///
+  /// Every id embedded in `offset` and in each `expr` is validated
+  /// (`validate_const_expr`) BEFORE the arena add, so a foreign/deleted
+  /// global/function/type id is rejected with a catchable JS error and leaves
+  /// the module untouched — never a process-aborting emit-time panic. Per
+  /// mirror-walrus policy NO wasm semantic-validity check is added (an expr's
+  /// value type is not matched to `elementTy`); a stored-but-invalid module is
+  /// the caller's responsibility, catchable via `WebAssembly.validate` /
+  /// re-parse.
+  pub fn add_expressions(
+    &mut self,
+    env: Env,
+    kind: ElementKindTag,
+    table: Option<&WasmTable>,
+    offset: Option<&ConstExpr>,
+    element_ty: ValType,
+    // Each element is decoded through the abort-safe [`ConstExprArg`] (the same
+    // instanceof-guarded unwrap as a derived `&ConstExpr` param), and `SafeVec`
+    // grows non-preallocating (see `src/safevec.rs`); `ts_arg_type` keeps the
+    // generated `.d.ts` reading `Array<ConstExpr>`.
+    #[napi(ts_arg_type = "Array<ConstExpr>")] exprs: SafeVec<ConstExprArg>,
+  ) -> Result<WasmElement> {
+    // Resolve + validate the kind BEFORE any mutation.
+    let (element_kind, active_table) = self.resolve_element_kind(kind, table, offset)?;
+    // `elementTy` -> `RefType`: resolve concrete refs against the live arena and
+    // reject a non-reference element type, all before mutating.
+    let wty = crate::convert::val_type_to_walrus_in(&self.module.inner, element_ty)?;
+    let ref_type = match wty {
+      walrus::ValType::Ref(rt) => rt,
+      _ => return Err(Error::from_reason("element type must be a reference type")),
+    };
+    // Validate each expr's embedded ids, then move it into the result, growing
+    // with `try_reserve` (never `Vec::with_capacity` from a JS length).
+    let mut const_exprs: Vec<walrus::ConstExpr> = Vec::new();
+    for e in exprs.0 {
+      crate::handle::validate_const_expr(&self.module.inner, &e.0)?;
+      const_exprs
+        .try_reserve(1)
+        .map_err(|_| Error::from_reason("expression list too large to decode"))?;
+      const_exprs.push(e.0);
+    }
+    let id = self.module.inner.elements.add(
+      element_kind,
+      ElementItems::Expressions(ref_type, const_exprs),
+    );
+    self.restore_active_back_link(active_table, id);
+    Ok(WasmElement {
+      id,
+      module: self.module.clone(env)?,
+    })
+  }
+}
+
+impl WasmElements {
+  /// Resolve a JS `ElementKindTag` + optional `table`/`offset` into a walrus
+  /// `ElementKind`, validating all embedded ids and the kind/table/offset
+  /// consistency BEFORE any arena mutation.
+  ///
+  /// Returns the `ElementKind` plus, for an `Active` segment, the owning
+  /// `TableId` so the caller can restore the table↔segment back-link after the
+  /// add (see [`WasmElements::restore_active_back_link`]). All checks here are
+  /// abort guards: a foreign/deleted table or a bad offset would otherwise abort
+  /// walrus at emit.
+  fn resolve_element_kind(
+    &self,
+    kind: ElementKindTag,
+    table: Option<&WasmTable>,
+    offset: Option<&ConstExpr>,
+  ) -> Result<(ElementKind, Option<TableId>)> {
+    match kind {
+      ElementKindTag::Active => {
+        let (table, offset) = match (table, offset) {
+          (Some(table), Some(offset)) => (table, offset),
+          _ => {
+            return Err(Error::from_reason(
+              "an active element segment requires a table and offset",
+            ))
+          }
+        };
+        // Reject a table handle that is not live in THIS module (a foreign
+        // handle or an already-deleted id) — it would abort `get_table_index`
+        // at emit.
+        if !self.module.inner.tables.iter().any(|t| t.id() == table.id) {
+          return Err(Error::from_reason(
+            "table is not in this module (or was deleted)",
+          ));
+        }
+        // Reject an offset that references an id not live in THIS module.
+        crate::handle::validate_const_expr(&self.module.inner, &offset.inner)?;
+        Ok((
+          ElementKind::Active {
+            table: table.id,
+            offset: offset.inner.clone(),
+          },
+          Some(table.id),
+        ))
+      }
+      ElementKindTag::Passive => {
+        if table.is_some() || offset.is_some() {
+          return Err(Error::from_reason(
+            "table/offset are only valid for an active element segment",
+          ));
+        }
+        Ok((ElementKind::Passive, None))
+      }
+      ElementKindTag::Declared => {
+        if table.is_some() || offset.is_some() {
+          return Err(Error::from_reason(
+            "table/offset are only valid for an active element segment",
+          ));
+        }
+        Ok((ElementKind::Declared, None))
+      }
+    }
+  }
+
+  /// Restore walrus' ACTIVE-segment back-link invariant after an `add`.
+  ///
+  /// walrus' `ModuleElements::add` does NOT record the new segment in its
+  /// owning table's `elem_segments` set — only the PARSER does
+  /// (`table.elem_segments.insert(id)`), and `gc` RELIES on it: a rooted table
+  /// is walked via `elem_segments` (`passes/used.rs`), and an active segment on
+  /// a LOCAL (non-imported) table is reachable ONLY through that set. Omitting
+  /// this insert would leave the segment invisible to gc-via-table and silently
+  /// dropped on `gc()` (silent value corruption). This is the exact inverse of
+  /// the removal `WasmElements::delete` performs. Passive/declared segments have
+  /// no back-link. `active_table` was validated live in
+  /// [`WasmElements::resolve_element_kind`], so `get_mut` cannot panic.
+  fn restore_active_back_link(&mut self, active_table: Option<TableId>, id: ElementId) {
+    if let Some(table_id) = active_table {
+      self
+        .module
+        .inner
+        .tables
+        .get_mut(table_id)
+        .elem_segments
+        .insert(id);
     }
   }
 }

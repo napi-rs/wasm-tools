@@ -41,6 +41,21 @@ export declare class ConstExpr {
    */
   static globalGet(global: WasmGlobal): ConstExpr
   /**
+   * A constant function reference (`ref.func $f`).
+   *
+   * Takes a live [`WasmFunction`] HANDLE (not an index), exactly like
+   * [`ConstExpr::global_get`]: the handle already carries the resolved
+   * `FunctionId`, so no module/index resolution is needed here. Provenance is
+   * validated at the CONSUME site — every consumer (`globals.addLocal`,
+   * `data.addActive`, `elements.addFunctions`/`addExpressions`,
+   * `tables.addLocalWithInit`) runs `validate_const_expr`, whose `RefFunc` arm
+   * rejects a function that is not live in that module. So a `refFunc` built
+   * off a foreign/deleted function handle is caught catchably where it is used,
+   * never as a process-aborting emit-time panic. Adds no new abort surface
+   * (identical risk profile to `global_get`).
+   */
+  static refFunc(func: WasmFunction): ConstExpr
+  /**
    * A null reference of the given (abstract) heap type (`ref.null`).
    *
    * `ref.null` is ALWAYS nullable — a non-nullable null is invalid wasm
@@ -373,6 +388,50 @@ export declare class WasmElements {
    * surfacing a catchable JS error instead of aborting.
    */
   delete(element: WasmElement): void
+  /**
+   * Add a new element segment whose items are FUNCTION references
+   * (`ElementItems::Functions`), returning a live handle to it.
+   *
+   * `kind` selects the segment shape and, together with `table`/`offset`,
+   * obeys walrus' `ElementKind`:
+   *   * `Active` REQUIRES both `table` and `offset` (the segment is copied into
+   *     `table` at `offset` at instantiation); omitting either is a catchable
+   *     error.
+   *   * `Passive` / `Declared` take NEITHER `table` nor `offset`; supplying one
+   *     is a catchable error (silently dropping it would make the caller think
+   *     they built an active segment).
+   *
+   * `funcIndices` are the stable indices of the referenced functions, resolved
+   * to live ids before any mutation. Every consumed id is validated up front,
+   * so a foreign/deleted table, a bad offset, or a dead function index is
+   * rejected with a catchable JS error and leaves the module untouched — never
+   * a process-aborting emit-time panic. Per mirror-walrus policy NO wasm
+   * semantic-validity check is added (the offset is not range/type-checked, nor
+   * matched to `table64`); a stored-but-invalid module is the caller's
+   * responsibility, catchable via `WebAssembly.validate` / re-parse.
+   */
+  addFunctions(kind: ElementKindTag, table: WasmTable | undefined | null, offset: ConstExpr | undefined | null, funcIndices: Array<number>): WasmElement
+  /**
+   * Add a new element segment whose items are constant EXPRESSIONS
+   * (`ElementItems::Expressions`), returning a live handle to it.
+   *
+   * `kind` / `table` / `offset` behave exactly as in
+   * [`WasmElements::add_functions`] (`Active` requires table+offset;
+   * `Passive`/`Declared` reject them). `elementTy` is the segment's declared
+   * element type and must be a reference type (a non-reference type is rejected
+   * catchably); `exprs` are the per-entry constant expressions (build them with
+   * the `ConstExpr` factories).
+   *
+   * Every id embedded in `offset` and in each `expr` is validated
+   * (`validate_const_expr`) BEFORE the arena add, so a foreign/deleted
+   * global/function/type id is rejected with a catchable JS error and leaves
+   * the module untouched — never a process-aborting emit-time panic. Per
+   * mirror-walrus policy NO wasm semantic-validity check is added (an expr's
+   * value type is not matched to `elementTy`); a stored-but-invalid module is
+   * the caller's responsibility, catchable via `WebAssembly.validate` /
+   * re-parse.
+   */
+  addExpressions(kind: ElementKindTag, table: WasmTable | undefined | null, offset: ConstExpr | undefined | null, elementTy: ValType, exprs: Array<ConstExpr>): WasmElement
 }
 
 /**
@@ -1386,6 +1445,37 @@ export declare class WasmTables {
    * the accessor handles), so it stays valid as long as it is held.
    */
   addLocal(table64: boolean, initial: bigint, maximum: bigint | undefined | null, elementTy: ValType): WasmTable
+  /**
+   * Add a new locally defined table WITH an optional initializer expression,
+   * returning a live handle to it.
+   *
+   * This is the superset of [`WasmTables::add_local`]: `init` is the constant
+   * expression each entry is initialized to (build one with the `ConstExpr`
+   * factories), or `null` for a null-initialized table. walrus REQUIRES an
+   * initializer for a non-defaultable (non-nullable) element type, so a
+   * non-nullable `elementTy` with `init: null` is rejected with a catchable
+   * error (it would otherwise emit a module that fails validation). A nullable
+   * `elementTy` may still carry an `init`.
+   *
+   * `initial`/`maximum` are entry counts (`bigint`); `maximum` is `null` for an
+   * unbounded table. `elementTy` must be a reference type; a non-reference type
+   * is rejected catchably.
+   *
+   * `init` is a CONSUME site for arena ids: any global/function/type id it
+   * embeds is resolved by walrus at emit via a panicking index lookup, and a
+   * panic across FFI ABORTS the whole Node process. So a supplied `init` is
+   * validated (`validate_const_expr`) BEFORE the arena add — a foreign/deleted
+   * id yields a catchable JS error and leaves the module untouched.
+   *
+   * Per mirror-walrus policy this adds NO wasm semantic-validity check: the
+   * init value's type is not matched to the element type. A
+   * semantically-invalid-but-stored module is the caller's responsibility,
+   * catchable via `WebAssembly.validate` / re-parse.
+   *
+   * The returned handle holds its own strong reference to the module (same as
+   * the accessor handles), so it stays valid as long as it is held.
+   */
+  addLocalWithInit(table64: boolean, initial: bigint, maximum: bigint | undefined | null, elementTy: ValType, init?: ConstExpr | undefined | null): WasmTable
 }
 
 /**
