@@ -3554,3 +3554,245 @@ test('C8a (sparse-wide catches, inherited): a polluted `Object.prototype.catches
   // The pollution is fully gone — no later test can observe it.
   t.false('catches' in Object.prototype)
 })
+
+// ---------------------------------------------------------------------------
+// C8b: legacy exception handling — Try (a Block twin whose catch clauses carry
+// FULL child handler bodies), Rethrow, and the legacy clause kinds LegacyCatch /
+// LegacyCatchAll / LegacyDelegate. Handlers are SIBLING sequences of the try body
+// (their own InstrSeq at the same label depth, like an IfElse arm); `relativeDepth`
+// (Rethrow + LegacyDelegate) is a RAW pass-through u32 walrus never resolves.
+// ---------------------------------------------------------------------------
+
+// A body exercising every C8b shape. Read-back always materializes each handler's
+// `seq` AND `blockType` as present, so the input provides them for a clean
+// deepEqual. Ill-typed at the wasm level (arbitrary handler blockTypes / a bare
+// top-level Rethrow), which the in-memory read-back permits (MIRROR-WALRUS) — no
+// re-parse here. Exercises: all three clause kinds; DISTINCT handler blockTypes
+// (Empty vs an i32 result) proving per-handler types round-trip; a Rethrow at a
+// chosen relativeDepth INSIDE a handler; a Try with ONLY a Delegate (catch-less-ish);
+// and a NESTED Try inside a handler (the nested-edge marshalling end-to-end).
+function legacyBody(T: number): InstrDesc[] {
+  return [
+    {
+      type: 'Try',
+      blockType: { type: 'Empty' },
+      seq: [{ type: 'Throw', tag: T }],
+      catches: [
+        {
+          kind: 'LegacyCatch',
+          tag: T,
+          blockType: { type: 'Value', value: { type: 'I32' } },
+          // a Rethrow INSIDE this handler at relativeDepth 0 (the raw pass-through)
+          seq: [{ type: 'Rethrow', relativeDepth: 0 }],
+        },
+        {
+          kind: 'LegacyCatchAll',
+          blockType: { type: 'Empty' },
+          // a NESTED Try inside a handler — proves catches[].seq marshalling both
+          // directions, end to end (a Try two levels of handler-body nesting deep).
+          seq: [
+            {
+              type: 'Try',
+              blockType: { type: 'Empty' },
+              seq: [],
+              catches: [{ kind: 'LegacyDelegate', relativeDepth: 0 }],
+            },
+          ],
+        },
+        { kind: 'LegacyDelegate', relativeDepth: 3 },
+      ],
+    },
+    // catch-less-ish: a Try with ONLY a Delegate (no handler bodies at all).
+    {
+      type: 'Try',
+      blockType: { type: 'Empty' },
+      seq: [],
+      catches: [{ kind: 'LegacyDelegate', relativeDepth: 1 }],
+    },
+    // a bare top-level Rethrow (ill-typed but MIRROR-WALRUS builds+reads it).
+    { type: 'Rethrow', relativeDepth: 2 },
+  ]
+}
+
+test('C8b: Try (3 legacy clause kinds + distinct handler blockTypes + Rethrow-in-handler + Delegate-only + nested Try-in-handler) round-trip in memory', (t) => {
+  const m = empty()
+  const tag = m.tags.add(m.types.add([], []))
+  const body = legacyBody(tag.index)
+  const idx = m.buildFunction([], [], [], body)
+  // In-memory read-back (no re-parse: several shapes are ill-typed at the wasm
+  // level, which MIRROR-WALRUS permits) must reproduce the descriptors exactly,
+  // proving emit and read are exact inverses for every legacy clause kind, for the
+  // per-handler blockType, for the raw relativeDepth pass-through, AND for the
+  // nested-edge (`catches[].seq`) marshalling in both directions.
+  t.deepEqual(m.functions.getByIndex(idx)!.instructions(), body)
+})
+
+test('C8b: a well-typed legacy try (catch_all wrapping a rethrow) round-trips emitWasm -> walrus re-parse -> instructions', (t) => {
+  const m = empty()
+  const tag = m.tags.add(m.types.add([], []))
+  const body: InstrDesc[] = [
+    {
+      type: 'Try',
+      blockType: { type: 'Empty' },
+      seq: [{ type: 'Throw', tag: tag.index }],
+      catches: [{ kind: 'LegacyCatchAll', blockType: { type: 'Empty' }, seq: [{ type: 'Rethrow', relativeDepth: 0 }] }],
+    },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'leh'
+  // The oracle is the binding's OWN parse (walrus enables LEGACY_EXCEPTIONS
+  // unconditionally), NOT WebAssembly.validate — V8/Node may reject deprecated
+  // legacy EH bytes. The emitted bytes re-parse to the SAME descriptors, proving
+  // the handler body + rethrow depth survive a full byte round-trip.
+  const bytes = m.emitWasm(false)
+  const read = WasmModule.fromBuffer(bytes).functions.byName('leh')!.instructions()
+  t.deepEqual(read, body)
+})
+
+test('C8b negatives: out-of-range tag, missing handler seq, unknown legacy kind, and missing relativeDepth all throw catchably', (t) => {
+  const m = empty()
+  m.tags.add(m.types.add([], [])) // tag 0 now exists; 99 does not
+  const TRY = (catches: unknown): InstrDesc[] =>
+    [{ type: 'Try', blockType: { type: 'Empty' }, seq: [], catches }] as unknown as InstrDesc[]
+
+  // Out-of-range tag on a LegacyCatch — resolves through `tag_id_at`.
+  t.throws(() => m.buildFunction([], [], [], TRY([{ kind: 'LegacyCatch', tag: 99, seq: [] }])), {
+    message: /no tag at index 99/,
+  })
+
+  // Missing handler `seq` on the two handler-bearing kinds.
+  t.throws(() => m.buildFunction([], [], [], TRY([{ kind: 'LegacyCatch', tag: 0 }])), {
+    message: /`LegacyCatch` instruction is missing its `seq` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], TRY([{ kind: 'LegacyCatchAll' }])), {
+    message: /`LegacyCatchAll` instruction is missing its `seq` field/,
+  })
+
+  // Unknown legacy clause kind.
+  t.throws(() => m.buildFunction([], [], [], TRY([{ kind: 'Bogus', seq: [] }])), {
+    message: /unknown legacy catch clause kind `Bogus`/,
+  })
+
+  // Missing relativeDepth on a LegacyDelegate and on a top-level Rethrow.
+  t.throws(() => m.buildFunction([], [], [], TRY([{ kind: 'LegacyDelegate' }])), {
+    message: /`LegacyDelegate` instruction is missing its `relativeDepth` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Rethrow' } as unknown as InstrDesc]), {
+    message: /`Rethrow` instruction is missing its `relativeDepth` field/,
+  })
+
+  // The process survived every catchable throw: the (untouched) module still emits.
+  t.notThrows(() => m.emitWasm(false))
+})
+
+// C8b: `catches[].seq` (a legacy handler body) is the NESTED edge — a
+// `Vec<InstrDesc>` two levels down inside `Vec<CatchClause>`. It is driven by the
+// iterative marshalling's `ParentSlot::CatchSeq` bookkeeping + `decode_catch_clause_shallow`
+// (NOT the derived `Vec` decode, which pre-allocates `Vec::with_capacity(seq.length)`
+// from the untrusted JS length BEFORE inspecting any element → uncatchable
+// capacity-overflow abort on a sparse-huge array; and NOT via a prototype-traversing
+// read that would recurse into `Vec::<InstrDesc>::from_napi_value` on the call stack).
+// These two tests (own + inherited) are the real proof C8b did not reopen either
+// abort class — mirroring the CH-fix `seq`/`catches` sparse-wide tests.
+test('C8b (sparse-wide catches[].seq, own): a 2**32-1-length sparse own handler `seq` throws catchably (no huge alloc/abort), module survives', (t) => {
+  const m = empty()
+  const sparse: unknown[] = []
+  sparse.length = 2 ** 32 - 1
+  // The CatchSeq child frame grows from the ACTUAL elements: it hits the first hole
+  // immediately and fails CATCHABLY (an `InstrDesc` decode error on `undefined`) —
+  // never a `Vec::with_capacity(2**32-1)` abort.
+  const body = [
+    { type: 'Try', blockType: { type: 'Empty' }, seq: [], catches: [{ kind: 'LegacyCatchAll', seq: sparse }] },
+  ] as unknown as InstrDesc[]
+  t.throws(() => m.buildFunction([], [], [], body))
+  // The process survived: the (untouched) module still emits valid wasm.
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+test('C8b (sparse-wide catches[].seq, inherited): a polluted `Object.prototype.seq` on a clause is ignored — throws catchably (missing seq), no abort, module survives', (t) => {
+  const saved = Object.getOwnPropertyDescriptor(Object.prototype, 'seq')
+  t.is(saved, undefined) // sanity: nothing owned this key before us
+  try {
+    const sparse: unknown[] = []
+    sparse.length = 2 ** 32 - 1
+    // Pre-fix, a prototype-traversing read of the clause's `seq` would reach
+    // `Vec::with_capacity` and abort. Post-fix: `decode_catch_clause_shallow` shadows
+    // `seq` as own `undefined` and the driver reads the clause's OWN `seq` only, so the
+    // INHERITED sparse array is ignored — the handler ends up with no own `seq` and
+    // `buildFunction` throws the catchable `missing seq` error instead of aborting.
+    Object.defineProperty(Object.prototype, 'seq', {
+      value: sparse,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    })
+    const m = empty()
+    const body = [
+      { type: 'Try', blockType: { type: 'Empty' }, seq: [], catches: [{ kind: 'LegacyCatchAll' }] },
+    ] as unknown as InstrDesc[]
+    t.throws(() => m.buildFunction([], [], [], body), {
+      message: /`LegacyCatchAll` instruction is missing its `seq` field/,
+    })
+    // The process survived: the module still emits valid wasm.
+    t.true(WebAssembly.validate(m.emitWasm(false)))
+  } finally {
+    // saved is always undefined here, so this deletes the injected key.
+    if (saved) Object.defineProperty(Object.prototype, 'seq', saved)
+    else delete (Object.prototype as Record<string, unknown>)['seq']
+  }
+  // The pollution is fully gone — no later test can observe it.
+  t.false('seq' in Object.prototype)
+})
+
+// C8b review-fix #1 (snapshot-once / no double-read TOCTOU): the decode reads an
+// InstrDesc's `catches` (and each clause) EXACTLY ONCE — capturing each clause's
+// OWN `seq` handle in the SAME pass that decodes its metadata — so a `catches`
+// getter that returns a DIFFERENT array on a second read can NEVER splice one
+// clause's kind/tag/blockType (read 1) with another clause's handler body (read 2),
+// and never aborts. Pre-fix the driver re-read `elem.catches` for the seq walk.
+test('C8b (getter-swap catches): `catches` is snapshotted ONCE — no spliced metadata/seq from a second read, no abort', (t) => {
+  const m = empty()
+  let reads = 0
+  const tryInstr = { type: 'Try', blockType: { type: 'Empty' }, seq: [] } as Record<string, unknown>
+  Object.defineProperty(tryInstr, 'catches', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      reads += 1
+      // read 1 => a catch_all with an EMPTY handler body; any LATER read => a
+      // DIFFERENT clause (a non-empty handler body). A re-read would splice this
+      // second body onto the first clause — the fixed decode never re-reads.
+      return reads === 1
+        ? [{ kind: 'LegacyCatchAll', blockType: { type: 'Empty' }, seq: [] }]
+        : [{ kind: 'LegacyCatchAll', blockType: { type: 'Empty' }, seq: [{ type: 'Rethrow', relativeDepth: 7 }] }]
+    },
+  })
+  const idx = m.buildFunction([], [], [], [tryInstr] as unknown as InstrDesc[])
+  // Snapshot-once: the getter ran EXACTLY one time (the whole decode used read 1).
+  t.is(reads, 1)
+  // The build used read 1 consistently: an empty handler body, NOT the second
+  // read's `[Rethrow 7]` (which a re-read would have spliced in).
+  t.deepEqual(m.functions.getByIndex(idx)!.instructions()[0].catches, [
+    { kind: 'LegacyCatchAll', blockType: { type: 'Empty' }, seq: [] },
+  ])
+})
+
+// C8b review-fix #2 (fallible catch fan-out): the per-clause `catch_seq_handles`
+// capture AND the per-clause `CatchSeq` frame push both grow via `try_reserve` —
+// the catch fan-out is caller-controlled and UNBOUNDED (unlike the 3 fixed edges),
+// so a `2**32`-reporting `catches` carrying seq-bearing clauses must fail CATCHABLY
+// (no huge prealloc, no infallible-push abort), NOT abort the process. Pre-fix the
+// frame push was infallible.
+test('C8b (wide catch fan-out): a 2**32-reporting `catches` with a seq-bearing clause throws catchably (no huge alloc/abort), module survives', (t) => {
+  const m = empty()
+  // A real array whose index 0 is a seq-bearing clause and whose reported length is
+  // ~2**32 (the rest holes). The decode captures clause 0 (+ its own `seq`) then
+  // hits the first hole and fails CATCHABLY — never `Vec::with_capacity(2**32)` for
+  // the clause list nor an infallible frame push for billions of handlers.
+  const catches: unknown[] = [{ kind: 'LegacyCatchAll', blockType: { type: 'Empty' }, seq: [] }]
+  catches.length = 2 ** 32 - 1
+  const body = [{ type: 'Try', blockType: { type: 'Empty' }, seq: [], catches }] as unknown as InstrDesc[]
+  t.throws(() => m.buildFunction([], [], [], body))
+  // The process survived: the (untouched) module still emits valid wasm.
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})

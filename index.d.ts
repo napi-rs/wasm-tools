@@ -1722,42 +1722,74 @@ value: ValType }
 typeIndex: number }
 
 /**
- * A single catch clause of a modern `TryTable` instruction (the wasm
- * exception-handling phase-4 proposal), as a wide tagged record shared by both
- * the read and build directions — the `TryTable` analogue of [`InstrDesc`].
+ * A single catch clause of a `TryTable` (modern, phase-4) OR a legacy `Try`
+ * (phase-1) instruction, as a wide tagged record shared by both the read and
+ * build directions — the exception-handling analogue of [`InstrDesc`].
  *
- * `kind` is the discriminant (the walrus `TryTableCatch` variant name verbatim):
- * `"Catch"` (tag + label), `"CatchRef"` (tag + label), `"CatchAll"` (label
- * only), `"CatchAllRef"` (label only). `tag`/`label` carry the immediates the
- * kind needs; an unknown `kind` or a missing required field is a catchable error
- * in BOTH build and preflight.
+ * `kind` is the discriminant. For a MODERN `TryTable` it is the walrus
+ * `TryTableCatch` variant name verbatim: `"Catch"` (tag + label), `"CatchRef"`
+ * (tag + label), `"CatchAll"` (label only), `"CatchAllRef"` (label only). For a
+ * LEGACY `Try` it is a distinct, collision-free name (walrus' legacy variant
+ * names `Catch`/`CatchAll` overlap with the modern ones): `"LegacyCatch"` (tag +
+ * `seq` handler body + `blockType`), `"LegacyCatchAll"` (`seq` handler body +
+ * `blockType`), `"LegacyDelegate"` (`relativeDepth`). An unknown `kind` or a
+ * missing required field is a catchable error in BOTH build and preflight.
+ * Which kinds are legal is decided by the PARENT instruction `type` (`"TryTable"`
+ * routes clauses through `try_table_catches_to_walrus`; `"Try"` through
+ * `legacy_catches_to_walrus`).
  *
- * LOAD-BEARING SCOPING: a clause `label` is a relative branch depth resolved
- * against the label stack WITHOUT the `try_table`'s own body sequence — depth
- * `0` names the innermost block ENCLOSING the `try_table` instruction, NOT the
- * try body. walrus resolves catch labels before pushing the try_table control
- * frame (parse) and computes their branch targets before pushing the try_table
- * block (emit), so our emit/validate/read convert/validate/invert the clauses
- * against the OUTER stack, then descend into the body (which walks one frame
- * deeper). See the `TryTable` arms.
+ * LOAD-BEARING SCOPING (modern only): a modern clause `label` is a relative
+ * branch depth resolved against the label stack WITHOUT the `try_table`'s own
+ * body sequence — depth `0` names the innermost block ENCLOSING the `try_table`
+ * instruction, NOT the try body. walrus resolves catch labels before pushing the
+ * try_table control frame (parse) and computes their branch targets before
+ * pushing the try_table block (emit), so our emit/validate/read convert/validate/
+ * invert the clauses against the OUTER stack, then descend into the body (which
+ * walks one frame deeper). Legacy handlers carry NO clause label: each is its own
+ * child `InstrSeq` (`seq`), a SIBLING of the try body at the SAME label depth
+ * (like an `IfElse` arm); `relativeDepth` (`LegacyDelegate`) is a RAW pass-through
+ * `u32` walrus never resolves. See the `TryTable`/`Try` arms.
  */
 export interface CatchClause {
   /**
-   * The clause variant — the walrus `TryTableCatch` variant name: `"Catch"`,
-   * `"CatchRef"`, `"CatchAll"`, or `"CatchAllRef"`.
+   * The clause variant. Modern (`TryTable`): the walrus `TryTableCatch` name —
+   * `"Catch"`, `"CatchRef"`, `"CatchAll"`, `"CatchAllRef"`. Legacy (`Try`):
+   * `"LegacyCatch"`, `"LegacyCatchAll"`, `"LegacyDelegate"`.
    */
   kind: string
   /**
-   * The caught exception tag's stable index. Required for `"Catch"`/`"CatchRef"`,
-   * absent for the catch-all kinds.
+   * The caught exception tag's stable index. Required for the modern
+   * `"Catch"`/`"CatchRef"` and the legacy `"LegacyCatch"`; absent otherwise.
    */
   tag?: number
   /**
-   * The relative label depth of the block this clause branches to on a catch
+   * The relative label depth of the block a MODERN clause branches to on a catch
    * (`0` = the innermost block ENCLOSING the `try_table` — clause labels resolve
-   * against the OUTER scope, NOT the try body). Required for every kind.
+   * against the OUTER scope, NOT the try body). Required for every modern kind;
+   * absent for every legacy kind (legacy handlers are child sequences, not
+   * branch targets).
    */
   label?: number
+  /**
+   * LEGACY `"LegacyCatch"`/`"LegacyCatchAll"`: the handler body instructions (a
+   * child `InstrSeq`, a SIBLING of the try body). Required for those two kinds,
+   * absent for every other kind. This is the nested edge driven by the iterative
+   * marshalling in `src/ir_marshal.rs`.
+   */
+  seq?: Array<InstrDesc>
+  /**
+   * LEGACY `"LegacyDelegate"`: the relative depth this clause delegates to — a
+   * RAW pass-through `u32` walrus never resolves (NOT a resolved `label`).
+   * Required for `"LegacyDelegate"`, absent otherwise.
+   */
+  relativeDepth?: number
+  /**
+   * LEGACY `"LegacyCatch"`/`"LegacyCatchAll"`: the handler `InstrSeq`'s own type
+   * signature (each legacy handler carries its OWN `InstrSeqType`, distinct from
+   * the try's). Captured for a faithful in-memory round-trip; absent for every
+   * other kind. Defaults to empty when omitted on build.
+   */
+  blockType?: BlockType
 }
 
 /**
@@ -2060,8 +2092,11 @@ export declare const enum ImportKindTag {
  * `BrOnNonNull`/`BrOnCast`/`BrOnCastFail`), and the C8a modern
  * exception-handling subset — the `TryTable` control construct (a `Block` twin
  * carrying a `catches` clause list, [`CatchClause`]), `Throw` (`tag`), and
- * `ThrowRef`. Any other instruction (incl. the legacy `Try`/`Rethrow`) is
- * rejected catchably by both directions.
+ * `ThrowRef`, and the C8b LEGACY exception-handling subset — the `Try` control
+ * construct (a `Block` twin whose `catches` clauses carry full child handler
+ * bodies in `CatchClause.seq`) and `Rethrow` (`relativeDepth`). Exception
+ * handling (modern + legacy) is now complete; any other instruction is rejected
+ * catchably by both directions.
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -2208,11 +2243,17 @@ export interface InstrDesc {
   /** `Throw`: the thrown exception tag's stable index. */
   tag?: number
   /**
-   * `TryTable`: the catch clauses of the try block, in order. Absent (or empty)
-   * is a legal catch-less `try_table`. `TryTable` reuses `block_type` + `seq`
-   * (the try body) — it is a `Block` twin — so those are NOT re-declared here.
+   * `TryTable` (modern) / `Try` (legacy): the catch clauses of the try block, in
+   * order. Absent (or empty) is a legal catch-less try. Both reuse `block_type` +
+   * `seq` (the try body) — each is a `Block` twin — so those are NOT re-declared
+   * here. Legacy `Try` clauses carry their handler bodies in `CatchClause.seq`.
    */
   catches?: Array<CatchClause>
+  /**
+   * `Rethrow` (legacy): the relative depth of the caught exception to rethrow — a
+   * RAW pass-through `u32` walrus never resolves (NOT a resolved branch `label`).
+   */
+  relativeDepth?: number
 }
 
 /**

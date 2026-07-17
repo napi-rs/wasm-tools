@@ -40,15 +40,24 @@
 //!   `Option` field. Taking the edges also dismantles the tree as it is
 //!   consumed, so Rust `Drop` never sees deep nesting on this path.
 //!
-//! ## MAINTENANCE: adding a self-referential field (e.g. C8b `catches[].seq`)
+//! ## MAINTENANCE: adding a self-referential field
 //! ANY future `InstrDesc` field that can contain `InstrDesc`s MUST be routed
-//! through BOTH drivers or the derived per-element call will recurse again:
+//! through BOTH drivers or the derived per-element call will recurse again. A
+//! DIRECT `InstrDesc` edge (own property of the descriptor):
 //! * decode: extend [`EDGE_NAMES`]/[`EDGE_CSTRS`] (the copy-except skip list
 //!   AND the edge walk in `InstrBody::from_napi_value`) and [`write_edge`];
 //! * encode: extend the edge take/attach list in `InstrList::to_napi_value`.
 //!
-//! A field with a DIFFERENT shape (e.g. a struct wrapping a `Vec<InstrDesc>`)
-//! additionally needs its own frame bookkeeping in both drivers.
+//! A field with a DIFFERENT shape (a `Vec<InstrDesc>` nested inside another `Vec`/
+//! struct) additionally needs its OWN parent-slot variant + child-enqueue walk in
+//! both drivers. One such field is HANDLED today: the LEGACY `Try` handler bodies
+//! `catches[].seq` (C8b) — a `Vec<InstrDesc>` two levels down inside
+//! `Vec<CatchClause>`. It is NOT in [`EDGE_NAMES`]/[`EDGE_CSTRS`] (adding `"seq"`
+//! there would collide with `InstrDesc.seq`); instead it rides the
+//! [`ParentSlot::CatchSeq`] frame bookkeeping: decode shadows each clause's `seq`
+//! (`decode_catch_clause_shallow`) then a SECOND child-enqueue walk reads each
+//! clause's OWN `seq`; encode takes each clause's `seq` out before
+//! `InstrDesc::to_napi_value` then re-attaches it as a child frame.
 //!
 //! ## MAINTENANCE: adding a NON-edge `Vec`/`Option<Vec<T>>` field (e.g. C8a
 //! `catches: Option<Vec<CatchClause>>`)
@@ -155,6 +164,23 @@ unsafe fn set_element(
     "Failed to set element with index `{}`",
     index,
   )
+}
+
+/// `napi_get_named_property` — a plain (prototype-traversing) read. Used ONLY on the
+/// ENCODE side to fetch back the `catches` array we JUST wrote onto our own freshly
+/// created object via the derived `InstrDesc::to_napi_value` (so it is a real own
+/// property, no user JS / prototype pollution involved).
+unsafe fn get_named_property(
+  env: sys::napi_env,
+  obj: sys::napi_value,
+  name: &CStr,
+) -> Result<sys::napi_value> {
+  let mut ret = std::ptr::null_mut();
+  check_status!(
+    unsafe { sys::napi_get_named_property(env, obj, name.as_ptr(), &mut ret) },
+    "Failed to get property"
+  )?;
+  Ok(ret)
 }
 
 /// `napi_create_array_with_length`, with the derived `Array::new` message.
@@ -377,16 +403,41 @@ unsafe fn snapshot_uint8array(env: sys::napi_env, u: Uint8Array) -> Result<Uint8
 /// `.d.ts` it still reads `Array<InstrDesc>` (via `ts_arg_type`).
 pub struct InstrBody(pub Vec<InstrDesc>);
 
-/// One in-flight sequence being decoded. `parent` locates the edge slot this
-/// sequence fills when complete: `(frame index, element index, edge index)`.
-/// The root frame (the `body` argument itself) has no parent and `depth == 1`,
-/// matching `validate_body(body, 1)`'s root depth.
+/// Locates the parent slot a completed child sequence fills. Two shapes cross the
+/// driver, but the work-stack NODES stay homogeneous (both are a `Vec<InstrDesc>`
+/// decoded by the same [`DecodeFrame`]/driver/[`MAX_NESTING_DEPTH`] guard) — only
+/// the WRITE-BACK target differs:
+/// * [`ParentSlot::Edge`] — an `InstrDesc` self-referential edge
+///   (`seq`/`consequent`/`alternative`), written via [`write_edge`].
+/// * [`ParentSlot::CatchSeq`] — a LEGACY `Try` handler body,
+///   `InstrDesc.catches[catch].seq` (C8b). This is the "different shape" nesting
+///   two levels down (a `Vec<InstrDesc>` inside a `Vec<CatchClause>`), so it is NOT
+///   an `InstrDesc` edge and is NOT in [`EDGE_NAMES`]/[`EDGE_CSTRS`] (adding `"seq"`
+///   there would collide with `InstrDesc.seq`). The target slot already exists: the
+///   clause was decoded with `seq == None` by [`decode_catch_clause_shallow`].
+enum ParentSlot {
+  Edge {
+    frame: usize,
+    elem: usize,
+    edge: usize,
+  },
+  CatchSeq {
+    frame: usize,
+    elem: usize,
+    catch: usize,
+  },
+}
+
+/// One in-flight sequence being decoded. `parent` locates the slot this sequence
+/// fills when complete (see [`ParentSlot`]). The root frame (the `body` argument
+/// itself) has no parent and `depth == 1`, matching `validate_body(body, 1)`'s root
+/// depth.
 struct DecodeFrame {
   js_array: sys::napi_value,
   len: u32,
   next: u32,
   out: Vec<InstrDesc>,
-  parent: Option<(usize, usize, usize)>,
+  parent: Option<ParentSlot>,
   depth: usize,
 }
 
@@ -417,7 +468,21 @@ struct DecodeFrame {
 /// The copy carries no edges of its own, so the derived impl cannot recurse;
 /// every plain field keeps its derived decode + error behavior and automatically
 /// tracks future field additions. The user's `elem` is never mutated.
-unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> Result<InstrDesc> {
+///
+/// Returns the decoded [`InstrDesc`] AND — captured in the SAME single pass over
+/// `elem.catches` — the OWN `seq` handle of each legacy catch clause that has one,
+/// as `(clause index, seq napi_value)`. The driver enqueues the legacy handler
+/// bodies (`catches[ci].seq`) from THESE captured handles, so `elem.catches` (and
+/// each clause) is read EXACTLY ONCE: a `Proxy`/own-getter returning a different
+/// array or different clause objects on a second read can never splice one clause's
+/// `kind`/`tag`/`blockType` with another clause's handler body (the snapshot-once
+/// rule, the TOCTOU class CH-fix3 closed for typed arrays). The capture is OWN-only
+/// (`get_own_named_property`), so an inherited `Object.prototype.seq` is ignored —
+/// in lockstep with `decode_catch_clause_shallow`'s own-`undefined` shadow.
+unsafe fn decode_element_shallow(
+  env: sys::napi_env,
+  elem: sys::napi_value,
+) -> Result<(InstrDesc, Vec<(usize, sys::napi_value)>)> {
   let mut copy = std::ptr::null_mut();
   check_status!(
     unsafe { sys::napi_create_object(env, &mut copy) },
@@ -587,19 +652,31 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
   // `labels`, so a sparse-wide `catches.length` (own OR inherited via
   // `Object.prototype.catches`) never reaches `Vec::<CatchClause>::with_capacity`:
   // it fails CATCHABLY on its first hole (a `CatchClause` object decode error, the
-  // SAME error the derived `Vec` decode surfaces), never a panic/abort. A
-  // `CatchClause` is FLAT (a `kind`/`tag`/`label` record, no inner huge `Vec`), so
-  // the per-element derived `CatchClause::from_napi_value` is itself abort-safe.
+  // SAME error the derived `Vec` decode surfaces), never a panic/abort.
   // `get_own_named_property` never traverses the prototype, so an inherited
   // `Object.prototype.catches` is ignored (stays `None`), in lockstep with the
   // own-`undefined` shadow. Absent/`undefined` own `catches` leaves it at `None`.
+  //
+  // Each clause is decoded via `decode_catch_clause_shallow`, NOT the derived
+  // `CatchClause::from_napi_value`: a clause's LEGACY handler body `seq`
+  // (`Option<Vec<InstrDesc>>`, C8b) would otherwise recurse into
+  // `Vec::<InstrDesc>::from_napi_value` on the CALL STACK (the uncatchable
+  // stack-overflow abort this module removes) AND prealloc from an untrusted
+  // `seq.length`. The shallow decode shadows the clause's `seq` as own `undefined`
+  // so the derived read yields `None`; the DRIVER later fills each clause's `seq`
+  // from the OWN `seq` handle CAPTURED HERE, in this SAME pass, as a
+  // `ParentSlot::CatchSeq` child frame — `elem.catches` and each clause are read
+  // EXACTLY ONCE (snapshot-once: no re-read the driver could observe a `Proxy`
+  // mutate between). Capturing the handle here is OWN-only, keeping the
+  // inherited-`seq`-ignored semantics in lockstep with the shadow.
+  let mut catch_seq_handles: Vec<(usize, sys::napi_value)> = Vec::new();
   if let Some(arr) = unsafe { get_own_named_property(env, elem, c"catches")? } {
     let len = unsafe { array_length(env, arr) }.map_err(|e| decorate(e, "catches"))?;
     let mut catches: Vec<CatchClause> = Vec::new();
     for i in 0..len {
       let el = unsafe { get_element(env, arr, i) }.map_err(|e| decorate(e, "catches"))?;
       let clause =
-        unsafe { CatchClause::from_napi_value(env, el) }.map_err(|e| decorate(e, "catches"))?;
+        unsafe { decode_catch_clause_shallow(env, el) }.map_err(|e| decorate(e, "catches"))?;
       // FALLIBLE growth: `len` is the untrusted `Array.length` of `arr`. A `Proxy`
       // returning a valid `CatchClause` for EVERY numeric index (no hole to fail
       // on) can report ~`2**32`; `try_reserve` maps that exhaustion to a CATCHABLE
@@ -608,11 +685,128 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
         .try_reserve(1)
         .map_err(|_| decorate(too_large("catch clause list"), "catches"))?;
       catches.push(clause);
+      // Capture this clause's OWN `seq` handle NOW (same pass, from the SAME `el`
+      // we already decoded), so the driver never re-reads `elem.catches`. The index
+      // `i` is the clause's position in `desc.catches` (we push every clause in
+      // order). FALLIBLE growth again: the handle count is bounded only by the
+      // caller-controlled `catches` length.
+      if let Some(seq_handle) =
+        unsafe { get_own_named_property(env, el, c"seq") }.map_err(|e| decorate(e, "catches"))?
+      {
+        catch_seq_handles
+          .try_reserve(1)
+          .map_err(|_| decorate(too_large("catch handler list"), "catches"))?;
+        catch_seq_handles.push((i as usize, seq_handle));
+      }
     }
     desc.catches = Some(catches);
   }
 
-  Ok(desc)
+  Ok((desc, catch_seq_handles))
+}
+
+/// Decode ONE `CatchClause` element with its LEGACY handler-body `seq` shadowed as
+/// own `undefined`, the [`decode_element_shallow`] trick applied to a clause. A
+/// `CatchClause` gained a self-referential `seq: Option<Vec<InstrDesc>>` in C8b (the
+/// legacy `Try` handler body); the derived `CatchClause::from_napi_value` reads it
+/// via a prototype-traversing `[[Get]]`, which would (1) recurse into
+/// `Vec::<InstrDesc>::from_napi_value` on the CALL STACK — the uncatchable
+/// stack-overflow abort this module exists to remove, reachable via an inherited
+/// `Object.prototype.seq` — and (2) prealloc from an untrusted `seq.length`. So we
+/// shadow `seq` as an own `undefined` (the derived read yields `None` on ANY
+/// prototype chain) and copy every OTHER own enumerable property, dropping
+/// `"__proto__"` so it can never retarget the copy's prototype. The returned clause
+/// has `seq == None`; the DRIVER fills it from the ORIGINAL clause's OWN `seq` as a
+/// `ParentSlot::CatchSeq` child frame (own-only, so an inherited `seq` is ignored —
+/// in lockstep with this shadow).
+///
+/// Every OTHER field (`kind`/`tag`/`label`/`relativeDepth`/`blockType`) is a scalar
+/// or small fixed record with NO untrusted-length hazard, so it keeps its derived
+/// decode (and automatically tracks future flat-field additions). The user's `el`
+/// is never mutated.
+unsafe fn decode_catch_clause_shallow(
+  env: sys::napi_env,
+  el: sys::napi_value,
+) -> Result<CatchClause> {
+  let mut copy = std::ptr::null_mut();
+  check_status!(
+    unsafe { sys::napi_create_object(env, &mut copy) },
+    "Failed to create napi Object"
+  )?;
+
+  let mut undefined = std::ptr::null_mut();
+  check_status!(
+    unsafe { sys::napi_get_undefined(env, &mut undefined) },
+    "Failed to get undefined"
+  )?;
+  // Shadow the single self-referential edge `seq` (built first so the derived
+  // prototype-traversing read resolves to this own `undefined` regardless of the
+  // clause's prototype chain). All properties are installed in ONE
+  // `napi_define_properties` call at the end.
+  let mut descriptors: Vec<sys::napi_property_descriptor> =
+    vec![data_descriptor_cstr(c"seq", undefined)];
+
+  // Enumerate the ORIGINAL clause's OWN enumerable string property names only. On a
+  // `null`/`undefined` element this raises the same pending TypeError the derived
+  // decode's first read raised.
+  let mut names = std::ptr::null_mut();
+  check_status!(
+    unsafe {
+      sys::napi_get_all_property_names(
+        env,
+        el,
+        sys::KeyCollectionMode::own_only,
+        sys::KeyFilter::enumerable | sys::KeyFilter::skip_symbols,
+        sys::KeyConversion::numbers_to_strings,
+        &mut names,
+      )
+    },
+    "Failed to get property names of given object"
+  )?;
+  let names_len = unsafe { array_length(env, names)? };
+
+  // A name only needs enough buffer to distinguish it from `"seq"` (3 bytes) and
+  // `"__proto__"` (9 bytes): a name that fills the buffer is longer than either and
+  // is copied without further inspection.
+  let mut buf = [0u8; 16];
+  for i in 0..names_len {
+    let name = unsafe { get_element(env, names, i)? };
+    let mut written = 0usize;
+    check_status!(
+      unsafe {
+        sys::napi_get_value_string_utf8(env, name, buf.as_mut_ptr().cast(), buf.len(), &mut written)
+      },
+      "Failed to read property name"
+    )?;
+    if written < buf.len() - 1 {
+      let nm = &buf[..written];
+      // `seq` keeps its own-`undefined` shadow (the driver fills the real one);
+      // `"__proto__"` is dropped so it can never retarget the copy's prototype.
+      if nm == b"seq" || nm == b"__proto__" {
+        continue;
+      }
+    }
+    let mut val = std::ptr::null_mut();
+    check_status!(
+      unsafe { sys::napi_get_property(env, el, name, &mut val) },
+      "Failed to get property"
+    )?;
+    // FALLIBLE growth: a `Proxy` `ownKeys` trap can inflate `names_len`.
+    descriptors
+      .try_reserve(1)
+      .map_err(|_| too_large("object property set"))?;
+    descriptors.push(data_descriptor_named(name, val));
+  }
+
+  check_status!(
+    unsafe { sys::napi_define_properties(env, copy, descriptors.len(), descriptors.as_ptr()) },
+    "Failed to define properties"
+  )?;
+
+  // The copy carries no `seq` of its own (own `undefined`), so the derived decode
+  // reads `seq == None` and cannot recurse; every flat field keeps its derived
+  // decode + error behavior.
+  unsafe { CatchClause::from_napi_value(env, copy) }
 }
 
 impl FromNapiValue for InstrBody {
@@ -623,9 +817,15 @@ impl FromNapiValue for InstrBody {
     let decorate_ancestors = |mut err: Error, frames: &[DecodeFrame], mut at: usize| -> Error {
       loop {
         match frames[at].parent {
-          Some((pf, _, edge)) => {
+          Some(ParentSlot::Edge { frame, edge, .. }) => {
             err = decorate(err, EDGE_NAMES[edge]);
-            at = pf;
+            at = frame;
+          }
+          // A legacy handler body is `InstrDesc.catches[..].seq`; surface the
+          // `catches` breadcrumb (the field on the parent `InstrDesc`).
+          Some(ParentSlot::CatchSeq { frame, .. }) => {
+            err = decorate(err, "catches");
+            at = frame;
           }
           None => return err,
         }
@@ -660,7 +860,19 @@ impl FromNapiValue for InstrBody {
         let done = frames.pop().expect("work stack is non-empty");
         match done.parent {
           None => return Ok(InstrBody(done.out)),
-          Some((pf, pe, edge)) => write_edge(&mut frames[pf].out[pe], edge, done.out),
+          Some(ParentSlot::Edge { frame, elem, edge }) => {
+            write_edge(&mut frames[frame].out[elem], edge, done.out)
+          }
+          // Write the completed legacy handler body into its clause's `seq`. The
+          // clause exists (populated with `seq == None` by
+          // `decode_catch_clause_shallow` before any child frame completes).
+          Some(ParentSlot::CatchSeq { frame, elem, catch }) => {
+            frames[frame].out[elem]
+              .catches
+              .as_mut()
+              .expect("catches present for a CatchSeq parent")[catch]
+              .seq = Some(done.out);
+          }
         }
         continue;
       }
@@ -672,7 +884,10 @@ impl FromNapiValue for InstrBody {
 
       let elem = unsafe { get_element(env, js_array, index) }
         .map_err(|e| decorate_ancestors(e, &frames, f))?;
-      let desc = unsafe { decode_element_shallow(env, elem) }
+      // `catch_seq_handles` are the OWN `seq` handles of the legacy catch clauses,
+      // captured in the SAME single pass that decoded them (snapshot-once — the
+      // driver never re-reads `elem.catches`).
+      let (desc, catch_seq_handles) = unsafe { decode_element_shallow(env, elem) }
         .map_err(|e| decorate_ancestors(e, &frames, f))?;
       // FALLIBLE growth: `out` grows to the ACTUAL element count of a frame whose
       // `len` is the untrusted `Array.length` (root body or an edge sequence). A
@@ -715,7 +930,57 @@ impl FromNapiValue for InstrBody {
           len: child_len,
           next: 0,
           out: Vec::new(),
-          parent: Some((f, elem_idx, edge)),
+          parent: Some(ParentSlot::Edge {
+            frame: f,
+            elem: elem_idx,
+            edge,
+          }),
+          depth: depth + 1,
+        });
+      }
+
+      // Second child-enqueue walk (C8b): the LEGACY `Try` handler bodies, which are
+      // `InstrDesc.catches[ci].seq` — a `Vec<InstrDesc>` two levels down. The clauses
+      // were decoded with `seq == None` (`decode_catch_clause_shallow` shadowed it),
+      // and their OWN `seq` handles were CAPTURED in the same single pass (snapshot-
+      // once — no re-read of `elem.catches` here). Enqueue each as a `CatchSeq` child
+      // frame at `depth + 1` (handlers are SIBLINGS of the try body — same depth); the
+      // write-back slot exists because `desc.catches` already holds the clause at `ci`
+      // with `seq == None`.
+      for (ci, seq_handle) in catch_seq_handles {
+        // Depth-guard BEFORE materializing the child (handler bodies enter at
+        // `depth + 1`, matching the try body — they are siblings).
+        if depth + 1 > MAX_NESTING_DEPTH {
+          return Err(nesting_too_deep());
+        }
+        // A non-array (incl. `null`) handler `seq` fails here catchably, decorated
+        // like the derived decode. `out` is NOT pre-sized from `child_len`, so a
+        // sparse-wide `catches[].seq` fails catchably on its first hole, never a
+        // huge prealloc/abort.
+        let child_len = unsafe { array_length(env, seq_handle) }
+          .map_err(|e| decorate_ancestors(decorate(e, "catches"), &frames, f))?;
+        // FALLIBLE frame growth: unlike the 3 fixed edges, the catch fan-out is
+        // caller-controlled and UNBOUNDED (one `Try` can carry a huge clause list,
+        // each with an own `seq`), so an infallible `push` could abort under memory
+        // pressure — `try_reserve` maps that to a CATCHABLE error. The mutable borrow
+        // ends before the immutable `decorate_ancestors` borrow of `frames` begins.
+        if frames.try_reserve(1).is_err() {
+          return Err(decorate_ancestors(
+            decorate(too_large("catch handler list"), "catches"),
+            &frames,
+            f,
+          ));
+        }
+        frames.push(DecodeFrame {
+          js_array: seq_handle,
+          len: child_len,
+          next: 0,
+          out: Vec::new(),
+          parent: Some(ParentSlot::CatchSeq {
+            frame: f,
+            elem: elem_idx,
+            catch: ci,
+          }),
           depth: depth + 1,
         });
       }
@@ -796,6 +1061,29 @@ impl ToNapiValue for InstrList {
       frame.next += 1;
       let js_array = frame.js_array;
 
+      // Take each LEGACY `Try` handler body (`catches[ci].seq`) OUT before the
+      // derived encode, so the derived `CatchClause::to_napi_value` sets no `seq`
+      // property (`None` field => absent) and CANNOT recurse into
+      // `Vec::<InstrDesc>::to_napi_value` on the call stack. Symmetric with the
+      // `ParentSlot::CatchSeq` decode. Each `(ci, body)` is re-attached below onto
+      // the corresponding derived-encoded clause object, then queued as a child
+      // frame — so a handler body of ANY depth is dismantled iteratively, never a
+      // deep `to_napi_value`/`Drop` recursion (the same guarantee as the edges).
+      let mut catch_seqs: Vec<(usize, Vec<InstrDesc>)> = Vec::new();
+      if let Some(catches) = desc.catches.as_mut() {
+        for (ci, clause) in catches.iter_mut().enumerate() {
+          if let Some(s) = clause.seq.take() {
+            // FALLIBLE growth: the clause count is bounded here (a body read from
+            // walrus), but keep it symmetric with the decode's catch fan-out so an
+            // infallible `push` can never abort.
+            catch_seqs
+              .try_reserve(1)
+              .map_err(|_| too_large("catch handler list"))?;
+            catch_seqs.push((ci, s));
+          }
+        }
+      }
+
       // Strip the edges so the DERIVED encode cannot recurse. With the edges
       // `None`, the derived `#[napi(object)]` impl sets no property for them —
       // `None` edges therefore stay ABSENT on the JS object, exactly as before.
@@ -820,6 +1108,26 @@ impl ToNapiValue for InstrList {
           items: vec.into_iter(),
           next: 0,
         });
+      }
+
+      // Attach each taken legacy handler body onto its clause object (fetched back
+      // from the derived-encoded `catches` array) and queue it as a child frame.
+      if !catch_seqs.is_empty() {
+        let catches_arr = unsafe { get_named_property(env, obj, c"catches")? };
+        for (ci, body) in catch_seqs {
+          let clause_obj = unsafe { get_element(env, catches_arr, ci as u32)? };
+          let child = unsafe { create_array(env, body.len())? };
+          unsafe { set_named_property_raw(env, clause_obj, c"seq".as_ptr(), child)? };
+          // FALLIBLE frame growth, symmetric with the decode's catch fan-out.
+          frames
+            .try_reserve(1)
+            .map_err(|_| too_large("catch handler list"))?;
+          frames.push(EncodeFrame {
+            js_array: child,
+            items: body.into_iter(),
+            next: 0,
+          });
+        }
       }
     }
   }

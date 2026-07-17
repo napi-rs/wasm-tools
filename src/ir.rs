@@ -522,43 +522,71 @@ pub struct RefType {
   pub heap: HeapType,
 }
 
-/// A single catch clause of a modern `TryTable` instruction (the wasm
-/// exception-handling phase-4 proposal), as a wide tagged record shared by both
-/// the read and build directions — the `TryTable` analogue of [`InstrDesc`].
+/// A single catch clause of a `TryTable` (modern, phase-4) OR a legacy `Try`
+/// (phase-1) instruction, as a wide tagged record shared by both the read and
+/// build directions — the exception-handling analogue of [`InstrDesc`].
 ///
-/// `kind` is the discriminant (the walrus `TryTableCatch` variant name verbatim):
-/// `"Catch"` (tag + label), `"CatchRef"` (tag + label), `"CatchAll"` (label
-/// only), `"CatchAllRef"` (label only). `tag`/`label` carry the immediates the
-/// kind needs; an unknown `kind` or a missing required field is a catchable error
-/// in BOTH build and preflight.
+/// `kind` is the discriminant. For a MODERN `TryTable` it is the walrus
+/// `TryTableCatch` variant name verbatim: `"Catch"` (tag + label), `"CatchRef"`
+/// (tag + label), `"CatchAll"` (label only), `"CatchAllRef"` (label only). For a
+/// LEGACY `Try` it is a distinct, collision-free name (walrus' legacy variant
+/// names `Catch`/`CatchAll` overlap with the modern ones): `"LegacyCatch"` (tag +
+/// `seq` handler body + `blockType`), `"LegacyCatchAll"` (`seq` handler body +
+/// `blockType`), `"LegacyDelegate"` (`relativeDepth`). An unknown `kind` or a
+/// missing required field is a catchable error in BOTH build and preflight.
+/// Which kinds are legal is decided by the PARENT instruction `type` (`"TryTable"`
+/// routes clauses through `try_table_catches_to_walrus`; `"Try"` through
+/// `legacy_catches_to_walrus`).
 ///
-/// LOAD-BEARING SCOPING: a clause `label` is a relative branch depth resolved
-/// against the label stack WITHOUT the `try_table`'s own body sequence — depth
-/// `0` names the innermost block ENCLOSING the `try_table` instruction, NOT the
-/// try body. walrus resolves catch labels before pushing the try_table control
-/// frame (parse) and computes their branch targets before pushing the try_table
-/// block (emit), so our emit/validate/read convert/validate/invert the clauses
-/// against the OUTER stack, then descend into the body (which walks one frame
-/// deeper). See the `TryTable` arms.
+/// LOAD-BEARING SCOPING (modern only): a modern clause `label` is a relative
+/// branch depth resolved against the label stack WITHOUT the `try_table`'s own
+/// body sequence — depth `0` names the innermost block ENCLOSING the `try_table`
+/// instruction, NOT the try body. walrus resolves catch labels before pushing the
+/// try_table control frame (parse) and computes their branch targets before
+/// pushing the try_table block (emit), so our emit/validate/read convert/validate/
+/// invert the clauses against the OUTER stack, then descend into the body (which
+/// walks one frame deeper). Legacy handlers carry NO clause label: each is its own
+/// child `InstrSeq` (`seq`), a SIBLING of the try body at the SAME label depth
+/// (like an `IfElse` arm); `relativeDepth` (`LegacyDelegate`) is a RAW pass-through
+/// `u32` walrus never resolves. See the `TryTable`/`Try` arms.
 //
 // MAINTENANCE (plain comment so the generated .d.ts is unchanged): `catches`
 // crosses the FFI through the ITERATIVE marshalling driver in
 // `src/ir_marshal.rs` (a LEAF `Vec`, decoded by a non-preallocating loop), NOT
-// napi's derived `Vec` decode — see the `catches` handling there. C8b will
-// extend this struct additively (a `seq`/`relativeDepth` for legacy handlers);
-// any handler `seq` that can hold `InstrDesc`s must join the edge lists there.
+// napi's derived `Vec` decode. The LEGACY handler body `seq` is the one
+// self-referential field on a clause (it can hold `InstrDesc`s): it is a NESTED
+// edge two levels down (`InstrDesc.catches[i].seq`), so it is driven by the
+// `ParentSlot::CatchSeq` frame bookkeeping + `decode_catch_clause_shallow` there
+// (it is NOT in `EDGE_NAMES`/`EDGE_CSTRS`, which are direct `InstrDesc` edges).
 #[napi(object)]
 pub struct CatchClause {
-  /// The clause variant — the walrus `TryTableCatch` variant name: `"Catch"`,
-  /// `"CatchRef"`, `"CatchAll"`, or `"CatchAllRef"`.
+  /// The clause variant. Modern (`TryTable`): the walrus `TryTableCatch` name —
+  /// `"Catch"`, `"CatchRef"`, `"CatchAll"`, `"CatchAllRef"`. Legacy (`Try`):
+  /// `"LegacyCatch"`, `"LegacyCatchAll"`, `"LegacyDelegate"`.
   pub kind: String,
-  /// The caught exception tag's stable index. Required for `"Catch"`/`"CatchRef"`,
-  /// absent for the catch-all kinds.
+  /// The caught exception tag's stable index. Required for the modern
+  /// `"Catch"`/`"CatchRef"` and the legacy `"LegacyCatch"`; absent otherwise.
   pub tag: Option<u32>,
-  /// The relative label depth of the block this clause branches to on a catch
+  /// The relative label depth of the block a MODERN clause branches to on a catch
   /// (`0` = the innermost block ENCLOSING the `try_table` — clause labels resolve
-  /// against the OUTER scope, NOT the try body). Required for every kind.
+  /// against the OUTER scope, NOT the try body). Required for every modern kind;
+  /// absent for every legacy kind (legacy handlers are child sequences, not
+  /// branch targets).
   pub label: Option<u32>,
+  /// LEGACY `"LegacyCatch"`/`"LegacyCatchAll"`: the handler body instructions (a
+  /// child `InstrSeq`, a SIBLING of the try body). Required for those two kinds,
+  /// absent for every other kind. This is the nested edge driven by the iterative
+  /// marshalling in `src/ir_marshal.rs`.
+  pub seq: Option<Vec<InstrDesc>>,
+  /// LEGACY `"LegacyDelegate"`: the relative depth this clause delegates to — a
+  /// RAW pass-through `u32` walrus never resolves (NOT a resolved `label`).
+  /// Required for `"LegacyDelegate"`, absent otherwise.
+  pub relative_depth: Option<u32>,
+  /// LEGACY `"LegacyCatch"`/`"LegacyCatchAll"`: the handler `InstrSeq`'s own type
+  /// signature (each legacy handler carries its OWN `InstrSeqType`, distinct from
+  /// the try's). Captured for a faithful in-memory round-trip; absent for every
+  /// other kind. Defaults to empty when omitted on build.
+  pub block_type: Option<BlockType>,
 }
 
 /// A single wasm instruction, as a wide tagged record shared by both the read
@@ -597,18 +625,23 @@ pub struct CatchClause {
 /// `BrOnNonNull`/`BrOnCast`/`BrOnCastFail`), and the C8a modern
 /// exception-handling subset — the `TryTable` control construct (a `Block` twin
 /// carrying a `catches` clause list, [`CatchClause`]), `Throw` (`tag`), and
-/// `ThrowRef`. Any other instruction (incl. the legacy `Try`/`Rethrow`) is
-/// rejected catchably by both directions.
+/// `ThrowRef`, and the C8b LEGACY exception-handling subset — the `Try` control
+/// construct (a `Block` twin whose `catches` clauses carry full child handler
+/// bodies in `CatchClause.seq`) and `Rethrow` (`relativeDepth`). Exception
+/// handling (modern + legacy) is now complete; any other instruction is rejected
+/// catchably by both directions.
 //
 // MAINTENANCE (plain comment so the generated .d.ts is unchanged): the three
 // self-referential edge fields (`seq`/`consequent`/`alternative`) do NOT cross
 // the FFI through this struct's DERIVED marshalling — `src/ir_marshal.rs`
 // drives them iteratively (decode: the copy-except-edges skip list + edge walk
 // in `InstrBody::from_napi_value`; encode: the take/attach list in
-// `InstrList::to_napi_value`). ANY future field that can contain `InstrDesc`s
-// (e.g. C8b's `catches[].seq`) MUST be added to BOTH edge lists there, or the
-// derived per-element call will recurse on the call stack again and reopen the
-// uncatchable stack-overflow abort this layering removed.
+// `InstrList::to_napi_value`). The C8b legacy handler bodies (`catches[].seq`, a
+// nested edge two levels down) are driven by the SEPARATE `ParentSlot::CatchSeq`
+// frame bookkeeping there. ANY future field that can contain `InstrDesc`s MUST be
+// routed through those drivers, or the derived per-element call will recurse on
+// the call stack again and reopen the uncatchable stack-overflow abort this
+// layering removed.
 #[napi(object)]
 pub struct InstrDesc {
   /// The instruction discriminant — the walrus variant name.
@@ -718,10 +751,14 @@ pub struct InstrDesc {
   pub to_ref_type: Option<RefType>,
   /// `Throw`: the thrown exception tag's stable index.
   pub tag: Option<u32>,
-  /// `TryTable`: the catch clauses of the try block, in order. Absent (or empty)
-  /// is a legal catch-less `try_table`. `TryTable` reuses `block_type` + `seq`
-  /// (the try body) — it is a `Block` twin — so those are NOT re-declared here.
+  /// `TryTable` (modern) / `Try` (legacy): the catch clauses of the try block, in
+  /// order. Absent (or empty) is a legal catch-less try. Both reuse `block_type` +
+  /// `seq` (the try body) — each is a `Block` twin — so those are NOT re-declared
+  /// here. Legacy `Try` clauses carry their handler bodies in `CatchClause.seq`.
   pub catches: Option<Vec<CatchClause>>,
+  /// `Rethrow` (legacy): the relative depth of the caught exception to rethrow — a
+  /// RAW pass-through `u32` walrus never resolves (NOT a resolved branch `label`).
+  pub relative_depth: Option<u32>,
 }
 
 impl InstrDesc {
@@ -765,6 +802,7 @@ impl InstrDesc {
       to_ref_type: None,
       tag: None,
       catches: None,
+      relative_depth: None,
     }
   }
 }
@@ -1506,7 +1544,10 @@ fn emit_one(
   // This is the exact `read_one`/`read_leaf` split applied to emit, and it is what
   // keeps the at-cap canary green as `InstrDesc` widens (each new field would
   // otherwise widen THIS recursive frame). The recursion (`emit_desc`) stays here.
-  if !matches!(d.r#type.as_str(), "Block" | "Loop" | "IfElse" | "TryTable") {
+  if !matches!(
+    d.r#type.as_str(),
+    "Block" | "Loop" | "IfElse" | "TryTable" | "Try"
+  ) {
     return emit_leaf(fb, module, seq_id, d, label_stack);
   }
   // Destructure ONLY the control-construct fields (the rest are dropped via `..`),
@@ -1580,7 +1621,18 @@ fn emit_one(
         catches,
       });
     }
-    // The `matches!` guard above admits only the four control types.
+    // Legacy exception handling (C8b). `Try` is the 5th recursive control
+    // construct — a `Block` twin whose child `seq` is the try body PLUS a legacy
+    // catch-clause list, EACH `LegacyCatch`/`LegacyCatchAll` handler being its OWN
+    // child `InstrSeq` (a SIBLING of the try body at the same label depth, like an
+    // `IfElse` arm), not a branch target. All of that work — building the body,
+    // building + emitting each handler body, and resolving each clause — lives in
+    // `emit_try` (`#[inline(never)]`) so this recursive `emit_one` frame does NOT
+    // grow as the try machinery is added (the at-cap canary stays green).
+    "Try" => {
+      emit_try(fb, module, seq_id, block_type, seq, catches, label_stack)?;
+    }
+    // The `matches!` guard above admits only the five control types.
     _ => unreachable!("emit_one handles only control constructs"),
   }
   Ok(())
@@ -1636,6 +1688,7 @@ fn emit_leaf(
     src_type_index,
     to_ref_type,
     tag,
+    relative_depth,
     // `block_type`/`seq`/`consequent`/`alternative`/`catches` are control-only
     // (handled in `emit_one`, never reached here) — dropped via `..`.
     ..
@@ -1718,6 +1771,13 @@ fn emit_leaf(
     // (the abort guard); `ThrowRef` is fieldless.
     "Throw" | "ThrowRef" => {
       emit_eh(fb, module, seq_id, r#type.as_str(), tag)?;
+    }
+    // Legacy EH leaf op (C8b): `Rethrow` carries a RAW `relativeDepth` `u32` walrus
+    // never resolves (§A.3) — emitted verbatim, NO `label_target`/`label_stack`. A
+    // missing depth is a catchable representation error, not an abort surface.
+    "Rethrow" => {
+      let relative_depth = relative_depth.ok_or_else(|| missing("Rethrow", "relativeDepth"))?;
+      fb.instr_seq(seq_id).instr(wir::Rethrow { relative_depth });
     }
     "Br" => {
       let target = label_target(label.ok_or_else(|| missing("Br", "label"))?, label_stack)?;
@@ -2041,6 +2101,19 @@ fn unknown_catch_kind(kind: &str) -> Error {
   ))
 }
 
+/// The catchable error for a LEGACY catch clause `kind` that names no
+/// `LegacyCatch` variant. Shared by emit ([`legacy_catches_to_walrus`]) and
+/// preflight ([`validate_legacy_catches`]) so both reject an unknown kind
+/// identically. Distinct from [`unknown_catch_kind`]: the legacy `Try` clause
+/// kinds are `LegacyCatch`/`LegacyCatchAll`/`LegacyDelegate` (collision-free with
+/// the modern `TryTable` kinds).
+fn unknown_legacy_catch_kind(kind: &str) -> Error {
+  Error::from_reason(format!(
+    "unknown legacy catch clause kind `{kind}` (expected `LegacyCatch`, `LegacyCatchAll`, or \
+     `LegacyDelegate`)"
+  ))
+}
+
 /// Convert JS catch clauses into walrus `TryTableCatch`es, resolving each tag via
 /// [`tag_id_at`] and each `label` via [`label_target`] against the CURRENT (outer)
 /// label stack — the try_table's own seq is deliberately NOT on the stack yet, so
@@ -2119,6 +2192,101 @@ fn emit_eh(
     }
   }
   Ok(())
+}
+
+/// Emit a legacy `Try` (C8b) into `seq_id`. Split out of [`emit_one`]'s `Try` arm
+/// and marked `#[inline(never)]` so the try machinery's locals (the body seq, the
+/// converted catch list) live in THIS frame, NOT the recursive `emit_one` frame —
+/// the same stack-frame discipline that keeps the at-cap canary green as the
+/// instruction set grows (see [`MAX_NESTING_DEPTH`]).
+///
+/// The try body is a child `InstrSeq` built via `dangling_instr_seq` + [`emit_desc`]
+/// (which pushes it, so `br 0` inside the body targets the try block). Each
+/// `LegacyCatch`/`LegacyCatchAll` handler is built the SAME way inside
+/// [`legacy_catches_to_walrus`] — its own dangling seq at the SAME label depth as
+/// the body (a SIBLING, like an `IfElse` arm; §A.2), NOT nested under it. There is
+/// no outer-scope clause-label resolution (unlike `TryTable`): legacy handlers are
+/// child sequences, and `Delegate`'s `relativeDepth` is a raw pass-through, so the
+/// body/handler emit order is immaterial. Body first, then handlers, matches
+/// walrus' own traversal + our read order.
+#[inline(never)]
+fn emit_try(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  seq_id: wir::InstrSeqId,
+  block_type: Option<BlockType>,
+  seq: Option<Vec<InstrDesc>>,
+  catches: Option<Vec<CatchClause>>,
+  label_stack: &mut Vec<wir::InstrSeqId>,
+) -> Result<()> {
+  let ty = to_instr_seq_type(module, block_type)?;
+  let child = fb.dangling_instr_seq(ty).id();
+  emit_desc(fb, module, child, seq.unwrap_or_default(), label_stack)?;
+  let catches = legacy_catches_to_walrus(fb, module, catches.unwrap_or_default(), label_stack)?;
+  fb.instr_seq(seq_id).instr(wir::Try {
+    seq: child,
+    catches,
+  });
+  Ok(())
+}
+
+/// Convert JS legacy catch clauses into walrus `LegacyCatch`es, BUILDING + emitting
+/// each handler body as its own child `InstrSeq` (a SIBLING of the try body — §A.2)
+/// via `dangling_instr_seq(clause.blockType)` + [`emit_desc`]. Split out of
+/// [`emit_try`] and marked `#[inline(never)]` so the per-clause locals stay OFF the
+/// recursive walker's frame (see [`MAX_NESTING_DEPTH`]). Takes `catches` BY VALUE so
+/// each clause's handler-body `seq` can be MOVED into `emit_desc`.
+///
+/// `LegacyCatch` resolves its `tag` via [`tag_id_at`] (the abort guard) and requires
+/// its handler `seq`; `LegacyCatchAll` requires its handler `seq`; `LegacyDelegate`
+/// passes its `relativeDepth` through VERBATIM (walrus never resolves it — no
+/// `label_target`, no abort surface — §A.4). An unknown kind / missing required
+/// field is a catchable error. Mirrors [`validate_legacy_catches`] arm-for-arm.
+#[inline(never)]
+fn legacy_catches_to_walrus(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  catches: Vec<CatchClause>,
+  label_stack: &mut Vec<wir::InstrSeqId>,
+) -> Result<Vec<wir::LegacyCatch>> {
+  let mut out = Vec::with_capacity(catches.len());
+  for c in catches {
+    let clause = match c.kind.as_str() {
+      "LegacyCatch" => {
+        let tag = tag_id_at(module, c.tag.ok_or_else(|| missing("LegacyCatch", "tag"))?)?;
+        let ty = to_instr_seq_type(module, c.block_type)?;
+        let handler = fb.dangling_instr_seq(ty).id();
+        emit_desc(
+          fb,
+          module,
+          handler,
+          c.seq.ok_or_else(|| missing("LegacyCatch", "seq"))?,
+          label_stack,
+        )?;
+        wir::LegacyCatch::Catch { tag, handler }
+      }
+      "LegacyCatchAll" => {
+        let ty = to_instr_seq_type(module, c.block_type)?;
+        let handler = fb.dangling_instr_seq(ty).id();
+        emit_desc(
+          fb,
+          module,
+          handler,
+          c.seq.ok_or_else(|| missing("LegacyCatchAll", "seq"))?,
+          label_stack,
+        )?;
+        wir::LegacyCatch::CatchAll { handler }
+      }
+      "LegacyDelegate" => wir::LegacyCatch::Delegate {
+        relative_depth: c
+          .relative_depth
+          .ok_or_else(|| missing("LegacyDelegate", "relativeDepth"))?,
+      },
+      other => return Err(unknown_legacy_catch_kind(other)),
+    };
+    out.push(clause);
+  }
+  Ok(out)
 }
 
 /// Emit one atomic (threads) instruction. Split out of [`emit_one`] and marked
@@ -2770,11 +2938,24 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
       validate_try_table_catches(module, d.catches.as_deref().unwrap_or(&[]), label_len)?;
       validate_body(module, d.seq.as_deref().unwrap_or(&[]), label_len + 1)?;
     }
+    // Legacy exception handling (C8b). `Try` mirrors [`emit_try`]: validate the try
+    // body type + body at `label_len + 1` (one frame deeper, like `Block`), then the
+    // clauses via `validate_legacy_catches` (`#[inline(never)]`) — which resolves
+    // each `LegacyCatch` tag (the abort guard) + validates each handler body at
+    // `label_len + 1` (handlers are SIBLINGS of the body at the SAME depth — §A.2).
+    // `relativeDepth` (Delegate) needs NO preflight — it is a raw pass-through
+    // walrus never resolves (cannot abort — §B).
+    "Try" => {
+      validate_block_type(module, &d.block_type)?;
+      validate_body(module, d.seq.as_deref().unwrap_or(&[]), label_len + 1)?;
+      validate_legacy_catches(module, d.catches.as_deref().unwrap_or(&[]), label_len)?;
+    }
     // `Throw`/`ThrowRef` preflight via `validate_eh` (`#[inline(never)]`), mirroring
     // `emit_eh`: `Throw` resolves its `tag` via `tag_id_at` (a missing preflight
     // resolution re-opens the emit-abort / partial-mutation defect); `ThrowRef`
-    // needs nothing.
-    "Throw" | "ThrowRef" => {
+    // needs nothing. `Rethrow` still routes through the preflight (below) for
+    // missing-field parity, though its raw `relativeDepth` cannot abort.
+    "Throw" | "ThrowRef" | "Rethrow" => {
       validate_eh(module, d)?;
     }
     "Br" => {
@@ -3130,10 +3311,64 @@ fn validate_eh(module: &Module, d: &InstrDesc) -> Result<()> {
       tag_id_at(module, d.tag.ok_or_else(|| missing("Throw", "tag"))?)?;
     }
     "ThrowRef" => {}
+    // Legacy `Rethrow` (C8b): its `relativeDepth` is a raw pass-through walrus never
+    // resolves (cannot abort), but its PRESENCE is still required so preflight
+    // rejects a missing field pre-mutation exactly as `emit_leaf` does.
+    "Rethrow" => {
+      d.relative_depth
+        .ok_or_else(|| missing("Rethrow", "relativeDepth"))?;
+    }
     other => {
       return Err(Error::from_reason(format!(
         "`{other}` is not an EH leaf op"
       )))
+    }
+  }
+  Ok(())
+}
+
+/// Preflight the legacy catch clauses of a `Try` (C8b). Split out of
+/// [`validate_one`] and marked `#[inline(never)]` for the same frame-size reason as
+/// [`validate_try_table_catches`]. Mirrors [`legacy_catches_to_walrus`] arm-for-arm:
+/// the SAME kind/required-field checks, `tag_id_at` for `LegacyCatch` (the abort
+/// guard), and each handler body validated at `label_len + 1` (SIBLING of the try
+/// body, same depth — §A.2). `LegacyDelegate`'s `relativeDepth` needs only presence
+/// (raw pass-through — no resolution, no abort — §B), and its ABSENCE is rejected
+/// pre-mutation exactly as emit rejects it.
+#[inline(never)]
+fn validate_legacy_catches(
+  module: &Module,
+  catches: &[CatchClause],
+  label_len: usize,
+) -> Result<()> {
+  for c in catches {
+    match c.kind.as_str() {
+      "LegacyCatch" => {
+        tag_id_at(module, c.tag.ok_or_else(|| missing("LegacyCatch", "tag"))?)?;
+        validate_block_type(module, &c.block_type)?;
+        validate_body(
+          module,
+          c.seq
+            .as_deref()
+            .ok_or_else(|| missing("LegacyCatch", "seq"))?,
+          label_len + 1,
+        )?;
+      }
+      "LegacyCatchAll" => {
+        validate_block_type(module, &c.block_type)?;
+        validate_body(
+          module,
+          c.seq
+            .as_deref()
+            .ok_or_else(|| missing("LegacyCatchAll", "seq"))?,
+          label_len + 1,
+        )?;
+      }
+      "LegacyDelegate" => {
+        c.relative_depth
+          .ok_or_else(|| missing("LegacyDelegate", "relativeDepth"))?;
+      }
+      other => return Err(unknown_legacy_catch_kind(other)),
     }
   }
   Ok(())
@@ -3685,6 +3920,23 @@ fn read_one(
       d.catches = Some(catches);
       d
     }
+    // Legacy exception handling (C8b). `Try` is the 5th recursive control construct
+    // (a `Block` twin whose clauses carry FULL child handler bodies). Each handler
+    // is its OWN `InstrSeq`, a SIBLING of the try body at the SAME label depth —
+    // read via its own `read_instr_seq` inside `read_legacy_catches` (which pushes
+    // the handler, exactly mirroring emit). No outer-scope clause labels: the legacy
+    // clauses carry child sequences (`seq`) + a raw `relativeDepth` (Delegate), not
+    // branch targets, so body/handler read order is immaterial. The per-clause work
+    // lives in the `#[inline(never)]` helper, keeping this recursive arm slim.
+    wir::Instr::Try(t) => {
+      let catches = read_legacy_catches(lf, &t.catches, label_stack)?;
+      let inner = read_instr_seq(lf, t.seq, label_stack)?;
+      let mut d = InstrDesc::new("Try");
+      d.block_type = Some(from_instr_seq_type(lf.block(t.seq).ty)?);
+      d.seq = Some(inner);
+      d.catches = Some(catches);
+      d
+    }
     _ => read_leaf(instr, label_stack)?,
   })
 }
@@ -3708,21 +3960,89 @@ fn read_try_table_catches(
         kind: "Catch".to_string(),
         tag: Some(tag.index() as u32),
         label: Some(label_depth(*label, label_stack)?),
+        seq: None,
+        relative_depth: None,
+        block_type: None,
       },
       wir::TryTableCatch::CatchRef { tag, label } => CatchClause {
         kind: "CatchRef".to_string(),
         tag: Some(tag.index() as u32),
         label: Some(label_depth(*label, label_stack)?),
+        seq: None,
+        relative_depth: None,
+        block_type: None,
       },
       wir::TryTableCatch::CatchAll { label } => CatchClause {
         kind: "CatchAll".to_string(),
         tag: None,
         label: Some(label_depth(*label, label_stack)?),
+        seq: None,
+        relative_depth: None,
+        block_type: None,
       },
       wir::TryTableCatch::CatchAllRef { label } => CatchClause {
         kind: "CatchAllRef".to_string(),
         tag: None,
         label: Some(label_depth(*label, label_stack)?),
+        seq: None,
+        relative_depth: None,
+        block_type: None,
+      },
+    };
+    out.push(clause);
+  }
+  Ok(out)
+}
+
+/// Invert a legacy `Try`'s walrus `LegacyCatch` clauses back into [`CatchClause`]s
+/// (C8b). Split out of [`read_one`]'s `Try` arm and marked `#[inline(never)]` so its
+/// per-clause locals stay OFF the recursion stack (see [`read_one`]). Each
+/// handler-bearing kind reads its OWN handler `InstrSeq` via [`read_instr_seq`]
+/// (which pushes the handler — the handler is a SIBLING of the try body at the SAME
+/// label depth, §A.2) into `seq`, and captures the handler's own `InstrSeqType` into
+/// `blockType` (distinct from the try's — needed for a faithful round-trip). This is
+/// the exact inverse of [`legacy_catches_to_walrus`]; `Delegate` surfaces its raw
+/// `relativeDepth` VERBATIM. Maps the walrus names to the collision-free legacy
+/// kinds (`Catch`→`"LegacyCatch"`, `CatchAll`→`"LegacyCatchAll"`,
+/// `Delegate`→`"LegacyDelegate"`).
+#[inline(never)]
+fn read_legacy_catches(
+  lf: &LocalFunction,
+  catches: &[wir::LegacyCatch],
+  label_stack: &mut Vec<wir::InstrSeqId>,
+) -> Result<Vec<CatchClause>> {
+  let mut out = Vec::with_capacity(catches.len());
+  for c in catches {
+    let clause = match c {
+      wir::LegacyCatch::Catch { tag, handler } => {
+        let seq = read_instr_seq(lf, *handler, label_stack)?;
+        CatchClause {
+          kind: "LegacyCatch".to_string(),
+          tag: Some(tag.index() as u32),
+          label: None,
+          seq: Some(seq),
+          relative_depth: None,
+          block_type: Some(from_instr_seq_type(lf.block(*handler).ty)?),
+        }
+      }
+      wir::LegacyCatch::CatchAll { handler } => {
+        let seq = read_instr_seq(lf, *handler, label_stack)?;
+        CatchClause {
+          kind: "LegacyCatchAll".to_string(),
+          tag: None,
+          label: None,
+          seq: Some(seq),
+          relative_depth: None,
+          block_type: Some(from_instr_seq_type(lf.block(*handler).ty)?),
+        }
+      }
+      wir::LegacyCatch::Delegate { relative_depth } => CatchClause {
+        kind: "LegacyDelegate".to_string(),
+        tag: None,
+        label: None,
+        seq: None,
+        relative_depth: Some(*relative_depth),
+        block_type: None,
       },
     };
     out.push(clause);
@@ -4236,6 +4556,14 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
       d
     }
     wir::Instr::ThrowRef(_) => InstrDesc::new("ThrowRef"),
+    // Legacy EH leaf op (C8b). `Try` is NOT here — it is a recursive control
+    // construct handled in `read_one`. `Rethrow` surfaces its raw `relativeDepth`
+    // VERBATIM (walrus never resolved it — §A.3), NOT via the `label_stack`.
+    wir::Instr::Rethrow(r) => {
+      let mut d = InstrDesc::new("Rethrow");
+      d.relative_depth = Some(r.relative_depth);
+      d
+    }
     other => {
       // MIRROR-WALRUS: never panic on an out-of-subset variant — surface a
       // catchable error naming it. Later C-tasks replace these arms with real
