@@ -64,19 +64,19 @@ impl WasmLocals {
   #[napi]
   /// Add a new local of the given value type, returning a live handle to it.
   ///
-  /// `ty` is the local's value type (e.g. `{ type: 'I64' }` or a `Ref`).
-  /// Fallible: an unsupported `ty` — currently a concrete/indexed ref type,
-  /// which needs a type handle we do not yet thread through — is rejected with a
-  /// catchable error rather than aborting.
+  /// `ty` is the local's value type (e.g. `{ type: 'I64' }` or a `Ref`). `ty`
+  /// may be a concrete ref to an EXISTING type in this module
+  /// (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+  /// names no live type is rejected with a catchable error rather than aborting.
   ///
   /// The local is added to the module-wide arena; it only reaches the emitted
   /// output if some function body references it. The returned handle holds its
   /// own strong reference to the module (same as the accessor handles), so it
   /// stays valid as long as it is held.
   pub fn add(&mut self, env: Env, ty: ValType) -> Result<WasmLocal> {
-    // Convert (and reject an unsupported value type) BEFORE touching the arena,
-    // so a failed add never mutates the module.
-    let wty: walrus::ValType = ty.try_into()?;
+    // Convert (resolving a concrete ref, rejecting a bad index) BEFORE touching
+    // the arena, so a failed add never mutates the module.
+    let wty = crate::convert::val_type_to_walrus_in(&self.module.inner, ty)?;
     let id = self.module.inner.locals.add(wty);
     Ok(WasmLocal {
       id,

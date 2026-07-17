@@ -96,14 +96,16 @@ impl ConstExpr {
     }
   }
 
-  /// A null reference of the given heap type (`ref.null`).
+  /// A null reference of the given (abstract) heap type (`ref.null`).
   ///
   /// `ref.null` is ALWAYS nullable — a non-nullable null is invalid wasm
   /// (`WebAssembly.validate` rejects it), so this factory takes only the heap
   /// type and always builds a nullable `RefType`.
   ///
-  /// Fallible because the heap type conversion rejects concrete/indexed heap
-  /// types (they need a type handle, deferred to the GC-types task).
+  /// This static factory is ABSTRACT-ONLY: it has no module access, so a
+  /// concrete/indexed heap (`Concrete`/`Exact`) is rejected catchably — use the
+  /// handle-based `WasmType.refNull()` for a `ref.null $t` to a concrete type. A
+  /// `RecGroup` heap (only meaningful inside `addRecGroup`) is likewise rejected.
   #[napi(factory)]
   pub fn ref_null(heap: HeapType) -> Result<Self> {
     let heap_type: walrus::HeapType = heap.try_into()?;

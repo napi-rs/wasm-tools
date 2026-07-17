@@ -77,12 +77,15 @@ test('ConstExpr.v128 accepts exactly 16 bytes', (t) => {
   t.is(ConstExpr.v128(new Uint8Array(16)).kind, 'Value')
 })
 
-test('addLocal rejects a concrete-heap ref type (needs a type handle, deferred to GC task)', (t) => {
+test('addLocal rejects a concrete-heap ref to a nonexistent type index (catchable, no abort)', (t) => {
   const m = empty()
+  // The empty module has no types, so `typeIndex: 0` names nothing live: the
+  // module-aware converter now resolves concrete refs (B5c) and rejects a bad
+  // index catchably BEFORE the arena is touched, rather than aborting at emit.
   const concreteRef = { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: 0 } } as const
 
   const err = t.throws(() => m.globals.addLocal(concreteRef, false, false, ConstExpr.i32(0)))
-  t.regex(err!.message, /concrete|type handle|not yet supported/i)
+  t.regex(err!.message, /no type at index 0/)
 
   // The rejected add left the module untouched.
   t.is(m.globals.length, 0)
@@ -177,8 +180,8 @@ test('addLocal accepts a typed RefNull ConstExpr whose type is live in the same 
   t.is(init.kind, 'RefNull')
 
   // funcref is the abstract supertype of `(ref null $t)`, so `ref.null $t` is a
-  // valid initializer for it (subtyping) — and it is an accepted `ty` (concrete
-  // ref types are not yet accepted by addLocal).
+  // valid initializer for it (subtyping). (`ty` here is the abstract funcref; a
+  // concrete `ty` is exercised separately in the B5c rec-group/concrete spec.)
   const g = moduleA.globals.addLocal(FUNCREF, false, false, init)
   t.is(g.init()!.kind, 'RefNull')
   t.is(moduleA.globals.length, 2)

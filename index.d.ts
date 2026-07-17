@@ -41,14 +41,16 @@ export declare class ConstExpr {
    */
   static globalGet(global: WasmGlobal): ConstExpr
   /**
-   * A null reference of the given heap type (`ref.null`).
+   * A null reference of the given (abstract) heap type (`ref.null`).
    *
    * `ref.null` is ALWAYS nullable — a non-nullable null is invalid wasm
    * (`WebAssembly.validate` rejects it), so this factory takes only the heap
    * type and always builds a nullable `RefType`.
    *
-   * Fallible because the heap type conversion rejects concrete/indexed heap
-   * types (they need a type handle, deferred to the GC-types task).
+   * This static factory is ABSTRACT-ONLY: it has no module access, so a
+   * concrete/indexed heap (`Concrete`/`Exact`) is rejected catchably — use the
+   * handle-based `WasmType.refNull()` for a `ref.null $t` to a concrete type. A
+   * `RecGroup` heap (only meaningful inside `addRecGroup`) is likewise rejected.
    */
   static refNull(heap: HeapType): ConstExpr
   /** Which kind of constant expression this is. */
@@ -682,9 +684,9 @@ export declare class WasmGlobals {
    *
    * `ty` is the global's value type (e.g. `{ type: 'I32' }` or a `Ref`), and
    * `init` is its constant initializer (build one with the `ConstExpr`
-   * factories). Fallible: an unsupported `ty` — currently a concrete/indexed
-   * ref type, which needs a type handle we do not yet thread through — is
-   * rejected with a catchable error rather than aborting.
+   * factories). `ty` may be a concrete ref to an EXISTING type in this module
+   * (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+   * names no live type is rejected with a catchable error rather than aborting.
    *
    * The returned handle holds its own strong reference to the module (same as
    * the accessor handles), so it stays valid as long as it is held.
@@ -820,9 +822,10 @@ export declare class WasmImports {
    * `initial`/`maximum` are entry counts (`bigint`, so 64-bit `table64` tables
    * are representable losslessly); `maximum` is `null` for an unbounded table.
    * `elementType` must be a reference type (e.g. a `funcref`/`externref`
-   * `{ type: 'Ref', ... }`); a non-reference type — or a concrete/indexed ref
-   * type, which embeds a `TypeId` not yet threadable (deferred to the GC-types
-   * task) — is rejected with a catchable error.
+   * `{ type: 'Ref', ... }`), and may be a concrete ref to an EXISTING type in
+   * this module (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); a
+   * non-reference type — or an index that names no live type — is rejected with
+   * a catchable error.
    *
    * Unlike `tables.addLocal`, a NON-NULLABLE element type is accepted: an
    * imported table carries no init segment (the host supplies the table), so a
@@ -836,10 +839,11 @@ export declare class WasmImports {
    * Add an imported global under `moduleName`/`name`, returning a live handle to
    * the newly created (imported) global.
    *
-   * `ty` is the global's value type (e.g. `{ type: 'I32' }` or a `Ref`).
-   * Fallible: a concrete/indexed ref type — which needs a type handle we do not
-   * yet thread through — is rejected with a catchable error rather than
-   * aborting. MIRROR-WALRUS otherwise.
+   * `ty` is the global's value type (e.g. `{ type: 'I32' }` or a `Ref`). `ty`
+   * may be a concrete ref to an EXISTING type in this module
+   * (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+   * names no live type is rejected with a catchable error rather than aborting.
+   * MIRROR-WALRUS otherwise.
    */
   addGlobal(moduleName: string, name: string, ty: ValType, mutable: boolean, shared: boolean): WasmGlobal
   /**
@@ -896,10 +900,10 @@ export declare class WasmLocals {
   /**
    * Add a new local of the given value type, returning a live handle to it.
    *
-   * `ty` is the local's value type (e.g. `{ type: 'I64' }` or a `Ref`).
-   * Fallible: an unsupported `ty` — currently a concrete/indexed ref type,
-   * which needs a type handle we do not yet thread through — is rejected with a
-   * catchable error rather than aborting.
+   * `ty` is the local's value type (e.g. `{ type: 'I64' }` or a `Ref`). `ty`
+   * may be a concrete ref to an EXISTING type in this module
+   * (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+   * names no live type is rejected with a catchable error rather than aborting.
    *
    * The local is added to the module-wide arena; it only reaches the emitted
    * output if some function body references it. The returned handle holds its
@@ -1551,6 +1555,25 @@ export declare class WasmType {
    * implicit singleton groups (`false`).
    */
   get isExplicitRecGroup(): boolean
+  /**
+   * A nullable concrete null reference to THIS type: `ref.null $self`, as a
+   * [`ConstExpr`] usable as a global initializer (e.g. to initialize a
+   * `(ref null $struct)` global).
+   *
+   * This is the concrete counterpart to the abstract-only static
+   * `ConstExpr.refNull(heap)`: the static factory has no module access and so
+   * cannot resolve a `type_index`, whereas this handle already carries the live
+   * `TypeId`, so no resolution is needed.
+   *
+   * `ref.null` is ALWAYS nullable (a non-nullable null is invalid wasm), so the
+   * built `RefType` is always nullable.
+   *
+   * Delete-guard: a deleted/foreign type handle is rejected with a catchable
+   * error BEFORE the id is embedded — building `HeapType::Concrete` on a
+   * tombstoned id would otherwise abort the process at emit via the panicking
+   * `get_type_index`.
+   */
+  refNull(): ConstExpr
 }
 
 /**
@@ -1601,10 +1624,10 @@ export declare class WasmTypes {
   /**
    * Add a new function type, returning a live handle to it.
    *
-   * `params`/`results` are the function signature's value types. Fallible: an
-   * unsupported value type — currently a concrete/indexed ref type, which
-   * needs a type handle we do not yet thread through — is rejected with a
-   * catchable error rather than aborting.
+   * `params`/`results` are the function signature's value types, each of which
+   * may be a concrete ref to an EXISTING type in this module
+   * (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+   * names no live type is rejected with a catchable error rather than aborting.
    *
    * walrus deduplicates structurally: adding a signature identical to an
    * existing type returns a handle to that existing type (the arena does not
@@ -1618,8 +1641,9 @@ export declare class WasmTypes {
    * Find an existing function type with the given signature, or `null` if none
    * matches.
    *
-   * Fallible only because an unsupported (concrete/indexed) ref type in the
-   * query is rejected with a catchable error, same as `add`.
+   * A concrete ref in the query resolves against the live arena (so the
+   * comparison is by resolved `TypeId`, like the stored type); a bad index is
+   * rejected with a catchable error, same as `add`.
    */
   find(params: Array<ValType>, results: Array<ValType>): WasmType | null
   /**
@@ -1685,6 +1709,35 @@ export declare class WasmTypes {
    * stays valid as long as it is held.
    */
   addComposite(composite: CompositeType, isFinal: boolean, supertype?: WasmType | undefined | null): WasmType
+  /**
+   * Add an explicit recursive type group, returning one live handle per member
+   * (in `members` order). This is the only way to build mutually-recursive
+   * types: a member's `composite` (and `supertype`) may reference its siblings
+   * (including itself) via `{ type: 'Ref', heap: { type: 'RecGroup', recIndex } }`
+   * — a forward/back reference to the `recIndex`-th member — as well as
+   * existing module types via `{ type: 'Concrete', typeIndex }`.
+   *
+   * Unlike `addStruct` / `addArray` / `addComposite`, rec-group members are NOT
+   * deduplicated (each gets a fresh id, matching the wasm binary format), and
+   * they land in an EXPLICIT `(rec ...)` group (`isExplicitRecGroup === true`).
+   *
+   * MIRROR-WALRUS: an empty `members` array is allowed (walrus permits a
+   * zero-length explicit rec group) and returns `[]`. Subtype legality and
+   * rec-group well-formedness are NOT checked — walrus records everything
+   * verbatim; a semantically invalid group is the caller's responsibility,
+   * catchable via `WebAssembly.validate` / re-parse.
+   *
+   * Abort-safety: walrus's `add_rec_group` pre-allocates placeholder ids and
+   * then runs an infallible build closure. So all fallible work — resolving
+   * each existing-type ref (a bad index would otherwise abort at emit) and
+   * range-checking each `recIndex` (an out-of-range one would otherwise panic
+   * on `type_ids[k]` inside the closure) — is done in a PREFLIGHT pass BEFORE
+   * the call. A rejected `addRecGroup` therefore leaves the module unchanged.
+   *
+   * Each returned handle holds its own strong reference to the module, so it
+   * stays valid as long as it is held.
+   */
+  addRecGroup(members: Array<RecGroupMember>): Array<WasmType>
 }
 
 /** An abstract heap type, mirroring `walrus::AbstractHeapType` 1:1. */
@@ -2095,11 +2148,18 @@ export declare const enum GlobalKind {
  * `TypeId`); the reverse direction is resolved against a live module by the
  * module-aware converters in [`crate::convert`] (`resolve_type_id`), used when
  * a struct/array field references another type via `(ref $t)`.
+ *
+ * The `RecGroup` variant is a WRITE-only placeholder valid ONLY inside a
+ * [`crate::types::WasmTypes::add_rec_group`] member descriptor: it names a
+ * sibling member of the rec group currently being built (which has no arena
+ * index yet). Every other converter rejects it catchably; it is never produced
+ * on the READ path.
  */
 export type HeapType =
   | { type: 'Abstract', kind: AbstractHeapType }
   | { type: 'Concrete', typeIndex: number }
   | { type: 'Exact', typeIndex: number }
+  | { type: 'RecGroup', recIndex: number }
 
 /**
  * The kind of item an import brings into a module.
@@ -2468,6 +2528,45 @@ export interface RawSectionInfo {
   name: string
   data?: Uint8Array
 }
+
+/**
+ * A single member of an explicit recursive type group, created via
+ * [`crate::types::WasmTypes::add_rec_group`]. Mirrors walrus's
+ * `(CompositeType, is_final, Option<TypeId>)` member tuple.
+ *
+ * Generated as a TypeScript object
+ * `{ composite: CompositeType; isFinal: boolean; supertype?: RecGroupRef }`.
+ *
+ * A member's `composite` may reference its siblings (including itself) via
+ * `{ type: 'Ref', heap: { type: 'RecGroup', recIndex } }` in any field /
+ * element / param / result, and existing module types via the usual
+ * `{ type: 'Concrete', typeIndex }`. The `supertype`, if present, is likewise a
+ * sibling or an existing type (walrus records it verbatim — mirror-walrus: it
+ * is NOT checked for subtyping legality).
+ */
+export interface RecGroupMember {
+  /** The member's composite type (`Struct` / `Array` / `Function`). */
+  composite: CompositeType
+  /** Whether the member is final (cannot be further subtyped). */
+  isFinal: boolean
+  /** The member's supertype, if any. */
+  supertype?: RecGroupRef
+}
+
+/**
+ * A reference to a type used as a rec-group member's `supertype`, mirroring
+ * walrus's `Option<TypeId>` supertype slot.
+ *
+ * A supertype may be either another member of the same rec group (by its
+ * position, `RecGroup { rec_index }`) or an EXISTING type in the module (by its
+ * stable arena index, `Existing { type_index }`). Valid ONLY inside an
+ * [`crate::types::WasmTypes::add_rec_group`] member descriptor.
+ */
+export type RecGroupRef =
+  | { type: 'RecGroup', /** The position of the referenced member in the `members` array. */
+recIndex: number }
+| { type: 'Existing', /** The stable `.index()` of the referenced existing type. */
+typeIndex: number }
 
 /**
  * The reference type carried by a `RefNull` instruction, mirroring

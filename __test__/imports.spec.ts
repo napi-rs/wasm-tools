@@ -434,12 +434,21 @@ test('element-type guard: addTable rejects a non-reference element type', (t) =>
   t.is(m.tables.length, before)
 })
 
-test('element-type guard: addTable rejects a concrete/indexed ref type (deferred to GC types)', (t) => {
+test('element-type: addTable accepts a concrete ref to an existing type, rejects a nonexistent index', (t) => {
+  // B5c: the element type now routes through the module-aware converter, so a
+  // concrete ref to an EXISTING type (type 0 is the imported function's type)
+  // is a valid typed-function-ref element type.
   const m = load()
   const before = m.tables.length
-  const err = t.throws(() => m.imports.addTable('env', 't', false, 1n, null, CONCRETE_REF))
-  t.regex(err!.message, /concrete|type handle/i)
-  t.is(m.tables.length, before)
+  const tbl = m.imports.addTable('env', 't', false, 1n, null, CONCRETE_REF)
+  t.deepEqual(tbl.elementTy, CONCRETE_REF)
+  t.is(m.tables.length, before + 1)
+
+  // A concrete ref to a NONEXISTENT index is rejected catchably (never aborts).
+  const bad = { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: 9999 } } as const
+  const err = t.throws(() => m.imports.addTable('env', 't2', false, 1n, null, bad))
+  t.regex(err!.message, /no type at index 9999/)
+  t.is(m.tables.length, before + 1)
 })
 
 test('element-type guard: addTable accepts BOTH a nullable and a non-nullable funcref (imported table, no init)', (t) => {

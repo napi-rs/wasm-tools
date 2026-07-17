@@ -6,7 +6,8 @@ use napi_derive::napi;
 use walrus::ir::InstrSeqType;
 use walrus::TypeId;
 
-use crate::valtype::{CompositeType, FieldType, ValType};
+use crate::constexpr::ConstExpr;
+use crate::valtype::{CompositeType, FieldType, RecGroupMember, ValType};
 use crate::WasmModule;
 
 /// Ids of internal function-entry types (one per local function). walrus keeps
@@ -44,11 +45,17 @@ pub enum TypeKind {
 /// Convert a JS `ValType[]` into `Vec<walrus::ValType>`, rejecting an
 /// unsupported value type BEFORE it can reach the arena.
 ///
-/// Fallible: a concrete/indexed ref type cannot be rebuilt from a bare
-/// `type_index` (that needs a real type handle, deferred to the GC-types task),
-/// so it surfaces a catchable error rather than aborting.
-fn to_walrus_valtypes(values: Vec<ValType>) -> Result<Vec<walrus::ValType>> {
-  values.into_iter().map(walrus::ValType::try_from).collect()
+/// Module-aware: a concrete/indexed ref (`{ type: 'Ref', heap: { type:
+/// 'Concrete', typeIndex } }`) resolves against the live type arena; an index
+/// that names no live type surfaces a catchable error rather than aborting.
+fn to_walrus_valtypes(
+  module: &walrus::Module,
+  values: Vec<ValType>,
+) -> Result<Vec<walrus::ValType>> {
+  values
+    .into_iter()
+    .map(|v| crate::convert::val_type_to_walrus_in(module, v))
+    .collect()
 }
 
 /// Convert a slice of `walrus::ValType` into a JS `ValType[]`.
@@ -179,10 +186,10 @@ impl WasmTypes {
   #[napi]
   /// Add a new function type, returning a live handle to it.
   ///
-  /// `params`/`results` are the function signature's value types. Fallible: an
-  /// unsupported value type — currently a concrete/indexed ref type, which
-  /// needs a type handle we do not yet thread through — is rejected with a
-  /// catchable error rather than aborting.
+  /// `params`/`results` are the function signature's value types, each of which
+  /// may be a concrete ref to an EXISTING type in this module
+  /// (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+  /// names no live type is rejected with a catchable error rather than aborting.
   ///
   /// walrus deduplicates structurally: adding a signature identical to an
   /// existing type returns a handle to that existing type (the arena does not
@@ -191,10 +198,10 @@ impl WasmTypes {
   /// The returned handle holds its own strong reference to the module (same as
   /// the accessor handles), so it stays valid as long as it is held.
   pub fn add(&mut self, env: Env, params: Vec<ValType>, results: Vec<ValType>) -> Result<WasmType> {
-    // Convert (and reject unsupported value types) BEFORE touching the arena,
-    // so a failed add never mutates the module.
-    let params = to_walrus_valtypes(params)?;
-    let results = to_walrus_valtypes(results)?;
+    // Convert (resolving concrete refs, rejecting a bad index) BEFORE touching
+    // the arena, so a failed add never mutates the module.
+    let params = to_walrus_valtypes(&self.module.inner, params)?;
+    let results = to_walrus_valtypes(&self.module.inner, results)?;
     let id = self.module.inner.types.add(&params, &results);
     Ok(WasmType {
       id,
@@ -206,16 +213,17 @@ impl WasmTypes {
   /// Find an existing function type with the given signature, or `null` if none
   /// matches.
   ///
-  /// Fallible only because an unsupported (concrete/indexed) ref type in the
-  /// query is rejected with a catchable error, same as `add`.
+  /// A concrete ref in the query resolves against the live arena (so the
+  /// comparison is by resolved `TypeId`, like the stored type); a bad index is
+  /// rejected with a catchable error, same as `add`.
   pub fn find(
     &self,
     env: Env,
     params: Vec<ValType>,
     results: Vec<ValType>,
   ) -> Result<Option<WasmType>> {
-    let params = to_walrus_valtypes(params)?;
-    let results = to_walrus_valtypes(results)?;
+    let params = to_walrus_valtypes(&self.module.inner, params)?;
+    let results = to_walrus_valtypes(&self.module.inner, results)?;
     match self.module.inner.types.find(&params, &results) {
       Some(id) => Ok(Some(WasmType {
         id,
@@ -335,6 +343,62 @@ impl WasmTypes {
       id,
       module: self.module.clone(env)?,
     })
+  }
+
+  #[napi]
+  /// Add an explicit recursive type group, returning one live handle per member
+  /// (in `members` order). This is the only way to build mutually-recursive
+  /// types: a member's `composite` (and `supertype`) may reference its siblings
+  /// (including itself) via `{ type: 'Ref', heap: { type: 'RecGroup', recIndex } }`
+  /// — a forward/back reference to the `recIndex`-th member — as well as
+  /// existing module types via `{ type: 'Concrete', typeIndex }`.
+  ///
+  /// Unlike `addStruct` / `addArray` / `addComposite`, rec-group members are NOT
+  /// deduplicated (each gets a fresh id, matching the wasm binary format), and
+  /// they land in an EXPLICIT `(rec ...)` group (`isExplicitRecGroup === true`).
+  ///
+  /// MIRROR-WALRUS: an empty `members` array is allowed (walrus permits a
+  /// zero-length explicit rec group) and returns `[]`. Subtype legality and
+  /// rec-group well-formedness are NOT checked — walrus records everything
+  /// verbatim; a semantically invalid group is the caller's responsibility,
+  /// catchable via `WebAssembly.validate` / re-parse.
+  ///
+  /// Abort-safety: walrus's `add_rec_group` pre-allocates placeholder ids and
+  /// then runs an infallible build closure. So all fallible work — resolving
+  /// each existing-type ref (a bad index would otherwise abort at emit) and
+  /// range-checking each `recIndex` (an out-of-range one would otherwise panic
+  /// on `type_ids[k]` inside the closure) — is done in a PREFLIGHT pass BEFORE
+  /// the call. A rejected `addRecGroup` therefore leaves the module unchanged.
+  ///
+  /// Each returned handle holds its own strong reference to the module, so it
+  /// stays valid as long as it is held.
+  pub fn add_rec_group(&mut self, env: Env, members: Vec<RecGroupMember>) -> Result<Vec<WasmType>> {
+    let count = members.len();
+    // PREFLIGHT (fallible): resolve every existing-type ref and range-check every
+    // sibling `recIndex` BEFORE touching the arena, so the build closure below is
+    // infallible and a rejected group never mutates the module.
+    let plans = members
+      .into_iter()
+      .map(|m| crate::convert::plan_rec_group_member(&self.module.inner, m, count))
+      .collect::<Result<Vec<_>>>()?;
+    // BUILD (infallible): substitute the pre-allocated ids for sibling refs. The
+    // closure returns exactly `count` tuples (`plans.len() == count`), satisfying
+    // walrus's internal `assert_eq!`.
+    let ids = self.module.inner.types.add_rec_group(count, |type_ids| {
+      plans
+        .iter()
+        .map(|p| crate::convert::build_rec_group_member(p, type_ids))
+        .collect()
+    });
+    ids
+      .into_iter()
+      .map(|id| {
+        Ok(WasmType {
+          id,
+          module: self.module.clone(env)?,
+        })
+      })
+      .collect()
   }
 }
 
@@ -543,5 +607,32 @@ impl WasmType {
         .map(|rg| rg.is_explicit)
         .unwrap_or(false),
     )
+  }
+
+  #[napi]
+  /// A nullable concrete null reference to THIS type: `ref.null $self`, as a
+  /// [`ConstExpr`] usable as a global initializer (e.g. to initialize a
+  /// `(ref null $struct)` global).
+  ///
+  /// This is the concrete counterpart to the abstract-only static
+  /// `ConstExpr.refNull(heap)`: the static factory has no module access and so
+  /// cannot resolve a `type_index`, whereas this handle already carries the live
+  /// `TypeId`, so no resolution is needed.
+  ///
+  /// `ref.null` is ALWAYS nullable (a non-nullable null is invalid wasm), so the
+  /// built `RefType` is always nullable.
+  ///
+  /// Delete-guard: a deleted/foreign type handle is rejected with a catchable
+  /// error BEFORE the id is embedded — building `HeapType::Concrete` on a
+  /// tombstoned id would otherwise abort the process at emit via the panicking
+  /// `get_type_index`.
+  pub fn ref_null(&self) -> Result<ConstExpr> {
+    self.ensure_exists()?;
+    Ok(ConstExpr {
+      inner: walrus::ConstExpr::RefNull(walrus::RefType {
+        nullable: true,
+        heap_type: walrus::HeapType::Concrete(self.id),
+      }),
+    })
   }
 }

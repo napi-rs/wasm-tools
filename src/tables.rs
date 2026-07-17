@@ -121,9 +121,10 @@ impl WasmTables {
     maximum: Option<BigInt>,
     element_ty: ValType,
   ) -> Result<WasmTable> {
-    // Reject an unsupported / non-reference element type BEFORE touching the
-    // arena, so a failed add never mutates the module.
-    let wty: walrus::ValType = element_ty.try_into()?;
+    // Convert (resolving a concrete ref to an existing type, rejecting a bad
+    // index) BEFORE touching the arena, so a failed add never mutates the
+    // module; then reject a non-reference element type.
+    let wty = crate::convert::val_type_to_walrus_in(&self.module.inner, element_ty)?;
     let element_ty = match wty {
       walrus::ValType::Ref(rt) => rt,
       _ => {

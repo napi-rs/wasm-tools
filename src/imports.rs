@@ -220,9 +220,10 @@ impl WasmImports {
   /// `initial`/`maximum` are entry counts (`bigint`, so 64-bit `table64` tables
   /// are representable losslessly); `maximum` is `null` for an unbounded table.
   /// `elementType` must be a reference type (e.g. a `funcref`/`externref`
-  /// `{ type: 'Ref', ... }`); a non-reference type — or a concrete/indexed ref
-  /// type, which embeds a `TypeId` not yet threadable (deferred to the GC-types
-  /// task) — is rejected with a catchable error.
+  /// `{ type: 'Ref', ... }`), and may be a concrete ref to an EXISTING type in
+  /// this module (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); a
+  /// non-reference type — or an index that names no live type — is rejected with
+  /// a catchable error.
   ///
   /// Unlike `tables.addLocal`, a NON-NULLABLE element type is accepted: an
   /// imported table carries no init segment (the host supplies the table), so a
@@ -240,11 +241,10 @@ impl WasmImports {
     maximum: Option<BigInt>,
     element_type: ValType,
   ) -> Result<WasmTable> {
-    // Reject a non-reference / concrete-ref element type BEFORE touching the
-    // arena, so a failed add never mutates the module. The `try_into` rejects a
-    // concrete/indexed ref (embeds a not-yet-threadable `TypeId`); the match
-    // rejects a non-reference value type.
-    let wty: walrus::ValType = element_type.try_into()?;
+    // Convert (resolving a concrete ref to an existing type, rejecting a bad
+    // index) BEFORE touching the arena, so a failed add never mutates the
+    // module; then reject a non-reference value type.
+    let wty = crate::convert::val_type_to_walrus_in(&self.module.inner, element_type)?;
     let element_type = match wty {
       walrus::ValType::Ref(rt) => rt,
       _ => {
@@ -275,10 +275,11 @@ impl WasmImports {
   /// Add an imported global under `moduleName`/`name`, returning a live handle to
   /// the newly created (imported) global.
   ///
-  /// `ty` is the global's value type (e.g. `{ type: 'I32' }` or a `Ref`).
-  /// Fallible: a concrete/indexed ref type — which needs a type handle we do not
-  /// yet thread through — is rejected with a catchable error rather than
-  /// aborting. MIRROR-WALRUS otherwise.
+  /// `ty` is the global's value type (e.g. `{ type: 'I32' }` or a `Ref`). `ty`
+  /// may be a concrete ref to an EXISTING type in this module
+  /// (`{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }`); an index that
+  /// names no live type is rejected with a catchable error rather than aborting.
+  /// MIRROR-WALRUS otherwise.
   pub fn add_global(
     &mut self,
     env: Env,
@@ -288,9 +289,9 @@ impl WasmImports {
     mutable: bool,
     shared: bool,
   ) -> Result<WasmGlobal> {
-    // Reject an unsupported value type BEFORE touching the arena, so a failed
-    // add never mutates the module.
-    let wty: walrus::ValType = ty.try_into()?;
+    // Convert (resolving a concrete ref, rejecting a bad index) BEFORE touching
+    // the arena, so a failed add never mutates the module.
+    let wty = crate::convert::val_type_to_walrus_in(&self.module.inner, ty)?;
     let (id, _import) =
       self
         .module

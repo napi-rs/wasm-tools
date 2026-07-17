@@ -2,8 +2,11 @@
 //! directions.
 //!
 //! READ (walrus -> napi): used by the getters (e.g. `WasmGlobal::ty`).
-//! WRITE (napi -> walrus): used when building things from JS (e.g.
-//! `globals.addLocal(ty, ...)`, `ConstExpr::ref_null(...)`).
+//! WRITE (napi -> walrus): the module-aware `*_in` converters build things from
+//! JS while resolving concrete refs against the live arena (e.g.
+//! `globals.addLocal(ty, ...)`, struct/array fields, rec-group members). The
+//! pure `TryFrom` variants below have no arena and reject concrete refs; the
+//! only remaining pure consumer is the abstract-only `ConstExpr::ref_null`.
 //!
 //! All matches over walrus enums are written out arm-by-arm so a *known*
 //! variant can never be silently mismapped. Two of these walrus enums —
@@ -22,7 +25,10 @@
 //! time). It is still fallible only because its `Ref` arm embeds a `HeapType`,
 //! whose conversion can fail.
 
-use crate::valtype::{AbstractHeapType, CompositeType, FieldType, HeapType, StorageType, ValType};
+use crate::valtype::{
+  AbstractHeapType, CompositeType, FieldType, HeapType, RecGroupMember, RecGroupRef, StorageType,
+  ValType,
+};
 
 impl TryFrom<walrus::ValType> for ValType {
   type Error = napi::Error;
@@ -133,14 +139,14 @@ impl TryFrom<walrus::FieldType> for FieldType {
 // ---------------------------------------------------------------------------
 // Pure WRITE direction (napi -> walrus), with NO module access.
 //
-// Used by the value-only write paths (`globals.addLocal(ty, ...)`,
-// `ConstExpr::ref_null(...)`) that have no live type arena to consult.
-// `ValType` -> `walrus::ValType` is fallible only because a `Ref` embeds a
-// `HeapType`, and this pure conversion REJECTS a concrete/indexed heap: a bare
+// Used by the abstract-only `ConstExpr::ref_null(...)` factory, which has no
+// live type arena to consult. `ValType` -> `walrus::ValType` is fallible only
+// because a `Ref` embeds a `HeapType`, and this pure conversion REJECTS a
+// concrete/indexed heap (and the `RecGroup` sibling placeholder): a bare
 // `type_index` cannot be rebuilt into a walrus `TypeId` without the arena. The
 // module-aware `*_in` converters further below ARE given the arena and resolve
-// concrete refs instead of rejecting them (used by struct/array field
-// creation). The rejection here is a catchable `napi::Error`, never a panic.
+// concrete refs instead of rejecting them (used by every other consume site).
+// The rejection here is a catchable `napi::Error`, never a panic.
 // ---------------------------------------------------------------------------
 
 impl TryFrom<ValType> for walrus::ValType {
@@ -170,9 +176,16 @@ impl TryFrom<HeapType> for walrus::HeapType {
       // A bare `type_index` (a stable arena index) cannot rebuild a walrus
       // `TypeId` without the type arena, which this pure conversion has no
       // access to. Callers that CAN reach the arena (struct/array field
-      // creation) use `heap_type_to_walrus_in` instead, which resolves it.
+      // creation, `globals.addLocal`, ...) use `heap_type_to_walrus_in`
+      // instead, which resolves it. For a concrete `ref.null $t` initializer,
+      // use `WasmType.refNull()` (it carries the live type handle).
       HeapType::Concrete { .. } | HeapType::Exact { .. } => Err(napi::Error::from_reason(
-        "concrete/indexed ref types cannot be resolved without module access; use the module-aware conversion path",
+        "concrete/indexed ref types cannot be resolved without module access; use a module-aware consume site (e.g. WasmType.refNull() for a `ref.null $t`)",
+      )),
+      // A rec-group sibling reference is only meaningful while a rec group is
+      // being built; it must never reach walrus outside `addRecGroup`.
+      HeapType::RecGroup { .. } => Err(napi::Error::from_reason(
+        "a RecGroup heap reference is only valid inside a types.addRecGroup member descriptor",
       )),
     }
   }
@@ -253,6 +266,11 @@ pub(crate) fn heap_type_to_walrus_in(
     HeapType::Exact { type_index } => Ok(walrus::HeapType::Exact(resolve_type_id(
       module, type_index,
     )?)),
+    // A rec-group sibling reference has no arena index yet; it is resolved only
+    // by `addRecGroup`'s bespoke two-phase converter, never here.
+    HeapType::RecGroup { .. } => Err(napi::Error::from_reason(
+      "a RecGroup heap reference is only valid inside a types.addRecGroup member descriptor",
+    )),
   }
 }
 
@@ -342,4 +360,254 @@ pub(crate) fn composite_type_to_walrus_in(
       ))
     }
   })
+}
+
+// ---------------------------------------------------------------------------
+// Rec-group members — bespoke two-phase conversion for `addRecGroup`.
+//
+// walrus's `ModuleTypes::add_rec_group(count, build)` pre-allocates `count`
+// placeholder `TypeId`s and hands them to `build` — a closure returning a plain
+// `Vec`, with NO `Result`. Anything the closure does must therefore be
+// INFALLIBLE: a panic inside it (a `Vec` out-of-bounds on `type_ids[k]`, or a
+// bogus `TypeId` reaching the panicking emit-time `get_type_index`) aborts the
+// whole process across FFI. The existing `composite_type_to_walrus_in` cannot be
+// reused here because it (correctly) rejects the `RecGroup` sibling variant, so
+// every member conversion is split in two:
+//
+//   * PREFLIGHT (`plan_*`, FALLIBLE, holds `&Module`): resolve every
+//     EXISTING-type ref to an owned `TypeId` via `resolve_type_id`, and
+//     range-check every in-group `RecGroup { rec_index }` sibling ref against
+//     `count`. Yields an owned [`MemberPlan`] carrying no borrows.
+//   * BUILD (`build_*`, INFALLIBLE, holds `&[TypeId]`): substitute the
+//     now-known `type_ids[rec_index]` for each sibling marker and hand back the
+//     finished `walrus::CompositeType`. Every lookup was guaranteed by preflight
+//     (`rec_index < count == type_ids.len()`), so it cannot panic.
+//
+// All fallible work is in preflight, which runs BEFORE `add_rec_group` allocates
+// any placeholder into the arena, so a rejected `addRecGroup` leaves the module
+// completely unchanged (all-or-nothing).
+// ---------------------------------------------------------------------------
+
+/// A value type in a rec-group member, resolved except for in-group siblings.
+enum PlanVal {
+  /// Fully resolved: a primitive, or a ref to an abstract / existing type.
+  Resolved(walrus::ValType),
+  /// A `(ref [null] $sibling)` whose target is the `rec_index`-th member (which
+  /// has no arena id yet — filled in during the infallible build phase).
+  Sibling { nullable: bool, rec_index: u32 },
+}
+
+/// A storage type in a rec-group member (the `Val` case may be a sibling ref).
+enum PlanStorage {
+  I8,
+  I16,
+  Val(PlanVal),
+}
+
+/// A field type in a rec-group member.
+struct PlanField {
+  storage: PlanStorage,
+  mutable: bool,
+}
+
+/// A composite type in a rec-group member.
+enum PlanComposite {
+  Struct(Vec<PlanField>),
+  Array(PlanField),
+  Function {
+    params: Vec<PlanVal>,
+    results: Vec<PlanVal>,
+  },
+}
+
+/// A rec-group member's supertype, resolved except for in-group siblings.
+enum PlanSuper {
+  /// An existing type in the module, already resolved to its live id.
+  Existing(walrus::TypeId),
+  /// A sibling member of the group, by position (filled in during build).
+  Sibling(u32),
+}
+
+/// A fully-resolved, owned plan for one rec-group member. Building it from the
+/// pre-allocated `type_ids` is infallible.
+pub(crate) struct MemberPlan {
+  composite: PlanComposite,
+  is_final: bool,
+  supertype: Option<PlanSuper>,
+}
+
+fn plan_val(module: &walrus::Module, ty: ValType, count: usize) -> napi::Result<PlanVal> {
+  match ty {
+    ValType::Ref {
+      nullable,
+      heap: HeapType::RecGroup { rec_index },
+    } => {
+      if rec_index as usize >= count {
+        return Err(napi::Error::from_reason(format!(
+          "rec-group reference recIndex {rec_index} is out of range for a group of {count} member(s)"
+        )));
+      }
+      Ok(PlanVal::Sibling {
+        nullable,
+        rec_index,
+      })
+    }
+    // Primitives + refs to abstract / existing types resolve fully now; the
+    // module-aware converter rejects a bad/entry-type index catchably.
+    other => Ok(PlanVal::Resolved(val_type_to_walrus_in(module, other)?)),
+  }
+}
+
+fn plan_storage(
+  module: &walrus::Module,
+  st: StorageType,
+  count: usize,
+) -> napi::Result<PlanStorage> {
+  Ok(match st {
+    StorageType::I8 => PlanStorage::I8,
+    StorageType::I16 => PlanStorage::I16,
+    StorageType::Val { value } => PlanStorage::Val(plan_val(module, value, count)?),
+  })
+}
+
+fn plan_field(module: &walrus::Module, ft: FieldType, count: usize) -> napi::Result<PlanField> {
+  Ok(PlanField {
+    storage: plan_storage(module, ft.storage, count)?,
+    mutable: ft.mutable,
+  })
+}
+
+fn plan_composite(
+  module: &walrus::Module,
+  comp: CompositeType,
+  count: usize,
+) -> napi::Result<PlanComposite> {
+  Ok(match comp {
+    CompositeType::Struct { fields } => PlanComposite::Struct(
+      fields
+        .into_iter()
+        .map(|f| plan_field(module, f, count))
+        .collect::<napi::Result<Vec<_>>>()?,
+    ),
+    CompositeType::Array { element } => PlanComposite::Array(plan_field(module, element, count)?),
+    CompositeType::Function { params, results } => PlanComposite::Function {
+      params: params
+        .into_iter()
+        .map(|v| plan_val(module, v, count))
+        .collect::<napi::Result<Vec<_>>>()?,
+      results: results
+        .into_iter()
+        .map(|v| plan_val(module, v, count))
+        .collect::<napi::Result<Vec<_>>>()?,
+    },
+  })
+}
+
+fn plan_super(module: &walrus::Module, sup: RecGroupRef, count: usize) -> napi::Result<PlanSuper> {
+  match sup {
+    RecGroupRef::RecGroup { rec_index } => {
+      if rec_index as usize >= count {
+        return Err(napi::Error::from_reason(format!(
+          "rec-group supertype recIndex {rec_index} is out of range for a group of {count} member(s)"
+        )));
+      }
+      Ok(PlanSuper::Sibling(rec_index))
+    }
+    RecGroupRef::Existing { type_index } => {
+      Ok(PlanSuper::Existing(resolve_type_id(module, type_index)?))
+    }
+  }
+}
+
+/// PREFLIGHT: resolve one napi [`RecGroupMember`] into an owned, borrow-free
+/// [`MemberPlan`], rejecting a bad existing-type index or an out-of-range
+/// sibling `rec_index` with a catchable error BEFORE `add_rec_group` runs.
+pub(crate) fn plan_rec_group_member(
+  module: &walrus::Module,
+  member: RecGroupMember,
+  count: usize,
+) -> napi::Result<MemberPlan> {
+  Ok(MemberPlan {
+    composite: plan_composite(module, member.composite, count)?,
+    is_final: member.is_final,
+    supertype: member
+      .supertype
+      .map(|s| plan_super(module, s, count))
+      .transpose()?,
+  })
+}
+
+fn build_val(plan: &PlanVal, type_ids: &[walrus::TypeId]) -> walrus::ValType {
+  match plan {
+    PlanVal::Resolved(v) => *v,
+    PlanVal::Sibling {
+      nullable,
+      rec_index,
+    } => walrus::ValType::Ref(walrus::RefType {
+      nullable: *nullable,
+      heap_type: walrus::HeapType::Concrete(type_ids[*rec_index as usize]),
+    }),
+  }
+}
+
+fn build_storage(plan: &PlanStorage, type_ids: &[walrus::TypeId]) -> walrus::StorageType {
+  match plan {
+    PlanStorage::I8 => walrus::StorageType::I8,
+    PlanStorage::I16 => walrus::StorageType::I16,
+    PlanStorage::Val(pv) => walrus::StorageType::Val(build_val(pv, type_ids)),
+  }
+}
+
+fn build_field(plan: &PlanField, type_ids: &[walrus::TypeId]) -> walrus::FieldType {
+  walrus::FieldType {
+    element_type: build_storage(&plan.storage, type_ids),
+    mutable: plan.mutable,
+  }
+}
+
+fn build_composite(plan: &PlanComposite, type_ids: &[walrus::TypeId]) -> walrus::CompositeType {
+  match plan {
+    PlanComposite::Struct(fields) => walrus::CompositeType::Struct(walrus::StructType {
+      fields: fields
+        .iter()
+        .map(|f| build_field(f, type_ids))
+        .collect::<Vec<_>>()
+        .into_boxed_slice(),
+    }),
+    PlanComposite::Array(element) => walrus::CompositeType::Array(walrus::ArrayType {
+      field: build_field(element, type_ids),
+    }),
+    PlanComposite::Function { params, results } => {
+      walrus::CompositeType::Function(walrus::FunctionType::new(
+        params
+          .iter()
+          .map(|v| build_val(v, type_ids))
+          .collect::<Vec<_>>()
+          .into_boxed_slice(),
+        results
+          .iter()
+          .map(|v| build_val(v, type_ids))
+          .collect::<Vec<_>>()
+          .into_boxed_slice(),
+      ))
+    }
+  }
+}
+
+/// BUILD (infallible): turn a preflighted [`MemberPlan`] into the
+/// `(CompositeType, is_final, supertype)` tuple walrus's `add_rec_group` closure
+/// must return, substituting the pre-allocated `type_ids` for sibling refs.
+pub(crate) fn build_rec_group_member(
+  plan: &MemberPlan,
+  type_ids: &[walrus::TypeId],
+) -> (walrus::CompositeType, bool, Option<walrus::TypeId>) {
+  let supertype = plan.supertype.as_ref().map(|s| match s {
+    PlanSuper::Existing(id) => *id,
+    PlanSuper::Sibling(rec_index) => type_ids[*rec_index as usize],
+  });
+  (
+    build_composite(&plan.composite, type_ids),
+    plan.is_final,
+    supertype,
+  )
 }
