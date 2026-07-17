@@ -3358,3 +3358,199 @@ test('C7c negative: a GC branch descriptor missing a required field throws catch
     message: /`BrOnCastFail` instruction is missing its `toRefType` field/,
   })
 })
+
+// ---------------------------------------------------------------------------
+// C8a: modern exception handling — TryTable (a Block twin + catch-clause list),
+// Throw, ThrowRef. Catch-clause labels resolve against the scope ENCLOSING the
+// try_table (NOT the try body) — the load-bearing outer-scope rule, pinned by the
+// negatives below.
+// ---------------------------------------------------------------------------
+
+// A body exercising every C8a shape. Every TryTable carries explicit `seq` AND
+// `catches` (read-back always materializes both as present arrays, so the input
+// must too for a clean deepEqual). Ill-typed at the wasm level (all four clause
+// kinds with arbitrary labels), which the in-memory read-back permits
+// (MIRROR-WALRUS) — no re-parse here.
+function ehBody(T: number): InstrDesc[] {
+  return [
+    { type: 'Throw', tag: T },
+    { type: 'ThrowRef' },
+    // catch-less try_table (a legal wasm shape: `catches: []`)
+    { type: 'TryTable', blockType: { type: 'Empty' }, seq: [], catches: [] },
+    // all four clause kinds, inside an enclosing Block so labels 0 AND 1 both
+    // resolve against the OUTER stack (0 = the Block, 1 = the function entry).
+    // Distinct label values catch any 0/1 mixup.
+    {
+      type: 'Block',
+      blockType: { type: 'Empty' },
+      seq: [
+        {
+          type: 'TryTable',
+          blockType: { type: 'Empty' },
+          seq: [{ type: 'Throw', tag: T }],
+          catches: [
+            { kind: 'Catch', tag: T, label: 0 },
+            { kind: 'CatchRef', tag: T, label: 1 },
+            { kind: 'CatchAll', label: 0 },
+            { kind: 'CatchAllRef', label: 1 },
+          ],
+        },
+      ],
+    },
+    // nested TryTable-in-TryTable: the INNER clause's `label: 0` targets the OUTER
+    // try_table's block (at the inner instruction the outer stack is [entry,
+    // outerSeq], so 0 = outerSeq). If emit/read wrongly counted the inner's own
+    // seq, 0 would name the inner block instead — the round-trip proves the
+    // outer-scope resolution end-to-end.
+    {
+      type: 'TryTable',
+      blockType: { type: 'Empty' },
+      catches: [{ kind: 'CatchAll', label: 0 }],
+      seq: [
+        {
+          type: 'TryTable',
+          blockType: { type: 'Empty' },
+          catches: [{ kind: 'CatchAll', label: 0 }],
+          seq: [],
+        },
+      ],
+    },
+  ]
+}
+
+test('C8a: TryTable (4 clause kinds + catch-less + nested inner-targets-outer) + Throw/ThrowRef round-trip in memory', (t) => {
+  const m = empty()
+  const tag = m.tags.add(m.types.add([], []))
+  const body = ehBody(tag.index)
+  const idx = m.buildFunction([], [], [], body)
+  // In-memory read-back (no re-parse: the 4-kinds shape is ill-typed at the wasm
+  // level, which MIRROR-WALRUS permits) must reproduce the descriptors exactly,
+  // proving emit and read are exact inverses for every clause kind and for the
+  // outer-scope label resolution (nested inner-targets-outer).
+  t.deepEqual(m.functions.getByIndex(idx)!.instructions(), body)
+})
+
+test('C8a: a well-typed try_table (catch_all wrapping a throw) round-trips emitWasm -> parse -> instructions', (t) => {
+  const m = empty()
+  const tag = m.tags.add(m.types.add([], []))
+  const body: InstrDesc[] = [
+    {
+      type: 'TryTable',
+      blockType: { type: 'Empty' },
+      seq: [{ type: 'Throw', tag: tag.index }],
+      catches: [{ kind: 'CatchAll', label: 0 }],
+    },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  m.functions.getByIndex(idx)!.name = 'eh'
+  const bytes = m.emitWasm(false)
+  // Node's WebAssembly.validate accepts the modern EH (exnref/try_table) feature.
+  t.true(WebAssembly.validate(bytes))
+  // walrus' own parse (default config: onlyStableFeatures=false) is the oracle:
+  // the emitted bytes re-parse to the SAME descriptors, so the catch label
+  // resolved against the outer scope on both the emit and the read side.
+  const read = WasmModule.fromBuffer(bytes).functions.byName('eh')!.instructions()
+  t.deepEqual(read, body)
+})
+
+test('C8a negatives: out-of-range tag/label, the outer-scope pin, unknown kind, and missing fields all throw catchably', (t) => {
+  const m = empty()
+  m.tags.add(m.types.add([], [])) // tag 0 now exists; 99 does not
+  const TT = (catches: unknown): InstrDesc[] =>
+    [{ type: 'TryTable', blockType: { type: 'Empty' }, seq: [], catches }] as unknown as InstrDesc[]
+
+  // Out-of-range tag — Throw AND a Catch clause both resolve through `tag_id_at`.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Throw', tag: 99 }]), { message: /no tag at index 99/ })
+  t.throws(() => m.buildFunction([], [], [], TT([{ kind: 'Catch', tag: 99, label: 0 }])), {
+    message: /no tag at index 99/,
+  })
+
+  // Out-of-range clause label.
+  t.throws(() => m.buildFunction([], [], [], TT([{ kind: 'CatchAll', label: 5 }])), {
+    message: /branch label depth 5 is out of range/,
+  })
+
+  // SCOPING PIN: at an entry-level try_table the enclosing scope has depth 1, so a
+  // clause label of 1 (== label_len) is out of range — it would ONLY resolve if
+  // the try_table's OWN seq wrongly counted (making the len 2). This nails the
+  // outer-scope rule: the clauses are validated at label_len, NOT label_len + 1.
+  t.throws(() => m.buildFunction([], [], [], TT([{ kind: 'CatchAll', label: 1 }])), {
+    message: /branch label depth 1 is out of range: only 1 enclosing block/,
+  })
+  // ...while label 0 (the enclosing entry block) IS valid at that same instruction.
+  t.notThrows(() => empty().buildFunction([], [], [], TT([{ kind: 'CatchAll', label: 0 }])))
+
+  // Unknown clause kind.
+  t.throws(() => m.buildFunction([], [], [], TT([{ kind: 'Bogus', label: 0 }])), {
+    message: /unknown catch clause kind `Bogus`/,
+  })
+
+  // Missing required fields (tag on the tag-carrying kinds, label on every kind).
+  t.throws(() => m.buildFunction([], [], [], TT([{ kind: 'Catch', label: 0 }])), {
+    message: /`Catch` instruction is missing its `tag` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], TT([{ kind: 'CatchAll' }])), {
+    message: /`CatchAll` instruction is missing its `label` field/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Throw' }]), {
+    message: /`Throw` instruction is missing its `tag` field/,
+  })
+
+  // The process survived every catchable throw: the (untouched) module still emits.
+  t.notThrows(() => m.emitWasm(false))
+})
+
+// C8a: `catches` is a NEW leaf `Option<Vec<CatchClause>>` on InstrDesc. napi's
+// DERIVED `Vec::<CatchClause>::from_napi_value` pre-allocates
+// `Vec::with_capacity(catches.length)` from the untrusted JS length BEFORE
+// inspecting any element, so a sparse `length ≈ 2**32` (own OR inherited via
+// `Object.prototype.catches`) would request billions of slots → capacity-overflow
+// / handle_alloc_error → the UNCATCHABLE abort class CH removed (fatal under WASI
+// panic=abort). The iterative marshalling driver shadows `catches` as own
+// `undefined` and decodes the OWN value with a non-preallocating loop — the exact
+// `labels` fix, extended to `catches`.
+test('C8a (sparse-wide catches, own): a 2**32-1-length sparse own `catches` throws catchably (no huge alloc/abort), module survives', (t) => {
+  const m = empty()
+  const sparse: unknown[] = []
+  sparse.length = 2 ** 32 - 1
+  // The leaf decode grows from the ACTUAL elements: it hits the first hole
+  // immediately and fails CATCHABLY (a `CatchClause` decode error on `undefined`)
+  // — never a `Vec::with_capacity(2**32-1)` abort.
+  const body = [{ type: 'TryTable', blockType: { type: 'Empty' }, seq: [], catches: sparse }] as unknown as InstrDesc[]
+  t.throws(() => m.buildFunction([], [], [], body))
+  // The process survived: the (untouched) module still emits valid wasm.
+  t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+test('C8a (sparse-wide catches, inherited): a polluted `Object.prototype.catches` is ignored — catch-less build succeeds, no abort, module survives', (t) => {
+  const saved = Object.getOwnPropertyDescriptor(Object.prototype, 'catches')
+  t.is(saved, undefined) // sanity: nothing owned this key before us
+  try {
+    const sparse: unknown[] = []
+    sparse.length = 2 ** 32 - 1
+    // Pre-fix the derived read of `catches` was a prototype-traversing `[[Get]]`,
+    // so this INHERITED sparse array reached `Vec::with_capacity` and aborted.
+    // Post-fix the own-`undefined` shadow makes the derived read `None` and the
+    // leaf decode reads OWN `catches` only, so the inherited value is ignored: the
+    // try_table ends up catch-less (a legal shape) and the build SUCCEEDS.
+    Object.defineProperty(Object.prototype, 'catches', {
+      value: sparse,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    })
+    const m = empty()
+    const body = [{ type: 'TryTable', blockType: { type: 'Empty' }, seq: [] }] as unknown as InstrDesc[]
+    const idx = m.buildFunction([], [], [], body)
+    // The inherited sparse `catches` was ignored: the read-back is an empty list.
+    t.deepEqual(m.functions.getByIndex(idx)!.instructions()[0].catches, [])
+    // The process survived: the module still emits valid wasm.
+    t.true(WebAssembly.validate(m.emitWasm(false)))
+  } finally {
+    // saved is always undefined here, so this deletes the injected key.
+    if (saved) Object.defineProperty(Object.prototype, 'catches', saved)
+    else delete (Object.prototype as Record<string, unknown>)['catches']
+  }
+  // The pollution is fully gone — no later test can observe it.
+  t.false('catches' in Object.prototype)
+})

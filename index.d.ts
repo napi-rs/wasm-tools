@@ -1722,6 +1722,45 @@ value: ValType }
 typeIndex: number }
 
 /**
+ * A single catch clause of a modern `TryTable` instruction (the wasm
+ * exception-handling phase-4 proposal), as a wide tagged record shared by both
+ * the read and build directions — the `TryTable` analogue of [`InstrDesc`].
+ *
+ * `kind` is the discriminant (the walrus `TryTableCatch` variant name verbatim):
+ * `"Catch"` (tag + label), `"CatchRef"` (tag + label), `"CatchAll"` (label
+ * only), `"CatchAllRef"` (label only). `tag`/`label` carry the immediates the
+ * kind needs; an unknown `kind` or a missing required field is a catchable error
+ * in BOTH build and preflight.
+ *
+ * LOAD-BEARING SCOPING: a clause `label` is a relative branch depth resolved
+ * against the label stack WITHOUT the `try_table`'s own body sequence — depth
+ * `0` names the innermost block ENCLOSING the `try_table` instruction, NOT the
+ * try body. walrus resolves catch labels before pushing the try_table control
+ * frame (parse) and computes their branch targets before pushing the try_table
+ * block (emit), so our emit/validate/read convert/validate/invert the clauses
+ * against the OUTER stack, then descend into the body (which walks one frame
+ * deeper). See the `TryTable` arms.
+ */
+export interface CatchClause {
+  /**
+   * The clause variant — the walrus `TryTableCatch` variant name: `"Catch"`,
+   * `"CatchRef"`, `"CatchAll"`, or `"CatchAllRef"`.
+   */
+  kind: string
+  /**
+   * The caught exception tag's stable index. Required for `"Catch"`/`"CatchRef"`,
+   * absent for the catch-all kinds.
+   */
+  tag?: number
+  /**
+   * The relative label depth of the block this clause branches to on a catch
+   * (`0` = the innermost block ENCLOSING the `try_table` — clause labels resolve
+   * against the OUTER scope, NOT the try body). Required for every kind.
+   */
+  label?: number
+}
+
+/**
  * A composite type to create via [`crate::types::WasmTypes::add_composite`],
  * mirroring the shape of `walrus::CompositeType` (`Function | Struct | Array`).
  *
@@ -2018,8 +2057,11 @@ export declare const enum ImportKindTag {
  * label-free ops (`RefAsNonNull`/`CallRef`/`ReturnCallRef`/`RefI31`/`I31GetS`/
  * `I31GetU`/`RefTest`/`RefCast`/`AnyConvertExtern`/`ExternConvertAny`/`RefEq`),
  * and the C7c GC branch subset — the label-carrying ops (`BrOnNull`/
- * `BrOnNonNull`/`BrOnCast`/`BrOnCastFail`). Any other instruction is rejected
- * catchably by both directions (a later task adds EH).
+ * `BrOnNonNull`/`BrOnCast`/`BrOnCastFail`), and the C8a modern
+ * exception-handling subset — the `TryTable` control construct (a `Block` twin
+ * carrying a `catches` clause list, [`CatchClause`]), `Throw` (`tag`), and
+ * `ThrowRef`. Any other instruction (incl. the legacy `Try`/`Rethrow`) is
+ * rejected catchably by both directions.
  */
 export interface InstrDesc {
   /** The instruction discriminant — the walrus variant name. */
@@ -2163,6 +2205,14 @@ export interface InstrDesc {
    * `to_nullable` + `to_heap_type`); the source/input pair uses `refType`.
    */
   toRefType?: RefType
+  /** `Throw`: the thrown exception tag's stable index. */
+  tag?: number
+  /**
+   * `TryTable`: the catch clauses of the try block, in order. Absent (or empty)
+   * is a legal catch-less `try_table`. `TryTable` reuses `block_type` + `seq`
+   * (the try body) — it is a `Block` twin — so those are NOT re-declared here.
+   */
+  catches?: Array<CatchClause>
 }
 
 /**

@@ -67,7 +67,11 @@
 //!   `FromNapiValue`), setting the field on the returned `desc`.
 //!
 //! It is a LEAF (decoded inline), NOT a frame-stack edge — do not add it to the
-//! edge lists. Today the only such field is `labels`; `catches` (C8a) is next.
+//! edge lists. Two such fields exist today: `labels` (a `BrTable`'s `Vec<u32>`)
+//! and `catches` (a `TryTable`'s `Vec<CatchClause>`, C8a) — each `CatchClause` is
+//! itself FLAT (a `kind`/`tag`/`label` record, no inner `InstrDesc`), so it is
+//! decoded element-for-element by the derived `CatchClause::from_napi_value`
+//! inside the non-preallocating leaf loop.
 //!
 //! The generated `index.d.ts` is UNCHANGED: `build_function` keeps
 //! `body: Array<InstrDesc>` via `#[napi(ts_arg_type = "Array<InstrDesc>")]` and
@@ -83,7 +87,7 @@ use napi::bindgen_prelude::{
 };
 use napi::{check_status, sys, Error, Result, Status, ValueType};
 
-use crate::ir::{nesting_too_deep, ConstValue, InstrDesc, MAX_NESTING_DEPTH};
+use crate::ir::{nesting_too_deep, CatchClause, ConstValue, InstrDesc, MAX_NESTING_DEPTH};
 
 /// The self-referential edge fields of [`InstrDesc`], in DECLARATION order (the
 /// order the derived decode reads fields and the derived encode sets
@@ -387,12 +391,13 @@ struct DecodeFrame {
 }
 
 /// Decode ONE array element via the shallow-copy-except-edges trick: onto a
-/// fresh empty object, shadow the three edge names AND `labels` as own
-/// `undefined` and copy every OWN enumerable non-edge, non-`labels` property of
-/// `elem`, then run the DERIVED `InstrDesc::from_napi_value` on that copy and
-/// finally decode `labels` ourselves as a leaf. The derived impl reads every
-/// field via a prototype-traversing `[[Get]]`, so both steps are hardened
-/// against an adversarial prototype chain:
+/// fresh empty object, shadow the three edge names AND the leaf `Vec` fields
+/// (`labels`, `catches`) as own `undefined` and copy every OWN enumerable
+/// non-edge, non-leaf-`Vec` property of `elem`, then run the DERIVED
+/// `InstrDesc::from_napi_value` on that copy and finally decode `labels` and
+/// `catches` ourselves as leaves. The derived impl reads every field via a
+/// prototype-traversing `[[Get]]`, so both steps are hardened against an
+/// adversarial prototype chain:
 ///
 /// * The edge shadows make the derived read of `seq`/`consequent`/`alternative`
 ///   find an own `undefined` FIRST — so a polluted `Object.prototype.seq` (etc.)
@@ -400,10 +405,11 @@ struct DecodeFrame {
 ///   the native call stack. That inherited-edge recursion is an UNCATCHABLE stack
 ///   overflow, exactly the abort class this module exists to remove; the shadow
 ///   closes it on ANY prototype chain, and the driver still walks the real edges.
-/// * The `labels` shadow makes the derived read of `labels` yield `None` on any
-///   prototype chain, so the untrusted-length `Vec::<u32>::with_capacity` in the
-///   derived `Vec` decode is never reached (own OR inherited sparse `labels`).
-///   The real OWN `labels` is then decoded below by a non-preallocating loop.
+/// * The `labels`/`catches` shadows make the derived read of those leaf `Vec`
+///   fields yield `None` on any prototype chain, so the untrusted-length
+///   `Vec::<_>::with_capacity` in the derived `Vec` decode is never reached (own
+///   OR inherited sparse `labels`/`catches`). The real OWN `labels`/`catches` are
+///   then decoded below by non-preallocating loops.
 /// * Copying is OWN-only and via `napi_define_property` (a data descriptor), so
 ///   no inherited property is smuggled onto the copy, no accessor/setter runs,
 ///   and an own `"__proto__"` key can never retarget the copy's prototype.
@@ -442,6 +448,14 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
   // prototype chain) and decode the original's OWN `labels` ourselves below with
   // a NON-preallocating loop.
   descriptors.push(data_descriptor_cstr(c"labels", undefined));
+  // `catches` is the SAME shape of hazard as `labels` — a leaf `Vec<CatchClause>`
+  // (a `TryTable`'s clause list), NOT a recursive edge (a `CatchClause` is flat:
+  // no inner `InstrDesc`), but the derived `Vec::<CatchClause>::from_napi_value`
+  // still calls `Vec::with_capacity(catches.length)` from the untrusted JS length
+  // BEFORE inspecting any element, so a sparse `catches.length ≈ 2**32` (own OR
+  // inherited via `Object.prototype.catches`) aborts. Shadow it as own `undefined`
+  // and decode the original's OWN `catches` ourselves below (non-preallocating).
+  descriptors.push(data_descriptor_cstr(c"catches", undefined));
 
   // Enumerate the ORIGINAL's OWN enumerable string property names only (never the
   // prototype chain, never symbols). On a `null`/`undefined` element this raises
@@ -464,9 +478,9 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
   let names_len = unsafe { array_length(env, names)? };
 
   // A property name only needs enough buffer to distinguish it from the edge
-  // names (max 11 bytes, "alternative"), "labels" (6 bytes), and "__proto__"
-  // (9 bytes): a name that fills the buffer is longer than any of those and is
-  // copied without further inspection.
+  // names (max 11 bytes, "alternative"), "labels" (6 bytes), "catches" (7 bytes),
+  // and "__proto__" (9 bytes): a name that fills the buffer is longer than any of
+  // those and is copied without further inspection.
   let mut buf = [0u8; 16];
   for i in 0..names_len {
     let name = unsafe { get_element(env, names, i)? };
@@ -480,10 +494,14 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
     if written < buf.len() - 1 {
       let nm = &buf[..written];
       // Edges keep their own-`undefined` shadow (the driver walks the real ones);
-      // `labels` keeps its own-`undefined` shadow too (decoded as a leaf below,
-      // never via the untrusted-length derived `Vec` prealloc); `"__proto__"` is
-      // dropped so it can never retarget the copy's prototype.
-      if EDGE_NAMES.iter().any(|e| e.as_bytes() == nm) || nm == b"labels" || nm == b"__proto__" {
+      // `labels`/`catches` keep their own-`undefined` shadow too (decoded as
+      // leaves below, never via the untrusted-length derived `Vec` prealloc);
+      // `"__proto__"` is dropped so it can never retarget the copy's prototype.
+      if EDGE_NAMES.iter().any(|e| e.as_bytes() == nm)
+        || nm == b"labels"
+        || nm == b"catches"
+        || nm == b"__proto__"
+      {
         continue;
       }
     }
@@ -562,6 +580,36 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
       labels.push(n);
     }
     desc.labels = Some(labels);
+  }
+
+  // Decode the LEAF `catches: Option<Vec<CatchClause>>` ourselves, from the
+  // ORIGINAL's OWN `catches` only — the SAME non-preallocating pattern as
+  // `labels`, so a sparse-wide `catches.length` (own OR inherited via
+  // `Object.prototype.catches`) never reaches `Vec::<CatchClause>::with_capacity`:
+  // it fails CATCHABLY on its first hole (a `CatchClause` object decode error, the
+  // SAME error the derived `Vec` decode surfaces), never a panic/abort. A
+  // `CatchClause` is FLAT (a `kind`/`tag`/`label` record, no inner huge `Vec`), so
+  // the per-element derived `CatchClause::from_napi_value` is itself abort-safe.
+  // `get_own_named_property` never traverses the prototype, so an inherited
+  // `Object.prototype.catches` is ignored (stays `None`), in lockstep with the
+  // own-`undefined` shadow. Absent/`undefined` own `catches` leaves it at `None`.
+  if let Some(arr) = unsafe { get_own_named_property(env, elem, c"catches")? } {
+    let len = unsafe { array_length(env, arr) }.map_err(|e| decorate(e, "catches"))?;
+    let mut catches: Vec<CatchClause> = Vec::new();
+    for i in 0..len {
+      let el = unsafe { get_element(env, arr, i) }.map_err(|e| decorate(e, "catches"))?;
+      let clause =
+        unsafe { CatchClause::from_napi_value(env, el) }.map_err(|e| decorate(e, "catches"))?;
+      // FALLIBLE growth: `len` is the untrusted `Array.length` of `arr`. A `Proxy`
+      // returning a valid `CatchClause` for EVERY numeric index (no hole to fail
+      // on) can report ~`2**32`; `try_reserve` maps that exhaustion to a CATCHABLE
+      // error rather than an infallible `push` aborting the process.
+      catches
+        .try_reserve(1)
+        .map_err(|_| decorate(too_large("catch clause list"), "catches"))?;
+      catches.push(clause);
+    }
+    desc.catches = Some(catches);
   }
 
   Ok(desc)

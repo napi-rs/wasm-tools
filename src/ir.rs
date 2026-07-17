@@ -47,7 +47,7 @@ use walrus::ir as wir;
 use walrus::ir::{BinaryOp, TernaryOp, UnaryOp};
 use walrus::{
   DataId, ElementId, FunctionBuilder, FunctionId, GlobalId, LocalFunction, LocalId, MemoryId,
-  Module, TableId,
+  Module, TableId, TagId,
 };
 
 use crate::convert::{heap_type_to_walrus_in, resolve_type_id, val_type_to_walrus_in};
@@ -522,6 +522,45 @@ pub struct RefType {
   pub heap: HeapType,
 }
 
+/// A single catch clause of a modern `TryTable` instruction (the wasm
+/// exception-handling phase-4 proposal), as a wide tagged record shared by both
+/// the read and build directions — the `TryTable` analogue of [`InstrDesc`].
+///
+/// `kind` is the discriminant (the walrus `TryTableCatch` variant name verbatim):
+/// `"Catch"` (tag + label), `"CatchRef"` (tag + label), `"CatchAll"` (label
+/// only), `"CatchAllRef"` (label only). `tag`/`label` carry the immediates the
+/// kind needs; an unknown `kind` or a missing required field is a catchable error
+/// in BOTH build and preflight.
+///
+/// LOAD-BEARING SCOPING: a clause `label` is a relative branch depth resolved
+/// against the label stack WITHOUT the `try_table`'s own body sequence — depth
+/// `0` names the innermost block ENCLOSING the `try_table` instruction, NOT the
+/// try body. walrus resolves catch labels before pushing the try_table control
+/// frame (parse) and computes their branch targets before pushing the try_table
+/// block (emit), so our emit/validate/read convert/validate/invert the clauses
+/// against the OUTER stack, then descend into the body (which walks one frame
+/// deeper). See the `TryTable` arms.
+//
+// MAINTENANCE (plain comment so the generated .d.ts is unchanged): `catches`
+// crosses the FFI through the ITERATIVE marshalling driver in
+// `src/ir_marshal.rs` (a LEAF `Vec`, decoded by a non-preallocating loop), NOT
+// napi's derived `Vec` decode — see the `catches` handling there. C8b will
+// extend this struct additively (a `seq`/`relativeDepth` for legacy handlers);
+// any handler `seq` that can hold `InstrDesc`s must join the edge lists there.
+#[napi(object)]
+pub struct CatchClause {
+  /// The clause variant — the walrus `TryTableCatch` variant name: `"Catch"`,
+  /// `"CatchRef"`, `"CatchAll"`, or `"CatchAllRef"`.
+  pub kind: String,
+  /// The caught exception tag's stable index. Required for `"Catch"`/`"CatchRef"`,
+  /// absent for the catch-all kinds.
+  pub tag: Option<u32>,
+  /// The relative label depth of the block this clause branches to on a catch
+  /// (`0` = the innermost block ENCLOSING the `try_table` — clause labels resolve
+  /// against the OUTER scope, NOT the try body). Required for every kind.
+  pub label: Option<u32>,
+}
+
 /// A single wasm instruction, as a wide tagged record shared by both the read
 /// (`WasmFunction::instructions`) and build (`WasmModule::buildFunction`)
 /// directions.
@@ -555,8 +594,11 @@ pub struct RefType {
 /// label-free ops (`RefAsNonNull`/`CallRef`/`ReturnCallRef`/`RefI31`/`I31GetS`/
 /// `I31GetU`/`RefTest`/`RefCast`/`AnyConvertExtern`/`ExternConvertAny`/`RefEq`),
 /// and the C7c GC branch subset — the label-carrying ops (`BrOnNull`/
-/// `BrOnNonNull`/`BrOnCast`/`BrOnCastFail`). Any other instruction is rejected
-/// catchably by both directions (a later task adds EH).
+/// `BrOnNonNull`/`BrOnCast`/`BrOnCastFail`), and the C8a modern
+/// exception-handling subset — the `TryTable` control construct (a `Block` twin
+/// carrying a `catches` clause list, [`CatchClause`]), `Throw` (`tag`), and
+/// `ThrowRef`. Any other instruction (incl. the legacy `Try`/`Rethrow`) is
+/// rejected catchably by both directions.
 //
 // MAINTENANCE (plain comment so the generated .d.ts is unchanged): the three
 // self-referential edge fields (`seq`/`consequent`/`alternative`) do NOT cross
@@ -674,6 +716,12 @@ pub struct InstrDesc {
   /// `BrOnCast`/`BrOnCastFail`: the TARGET pair of the cast (walrus'
   /// `to_nullable` + `to_heap_type`); the source/input pair uses `refType`.
   pub to_ref_type: Option<RefType>,
+  /// `Throw`: the thrown exception tag's stable index.
+  pub tag: Option<u32>,
+  /// `TryTable`: the catch clauses of the try block, in order. Absent (or empty)
+  /// is a legal catch-less `try_table`. `TryTable` reuses `block_type` + `seq`
+  /// (the try body) — it is a `Block` twin — so those are NOT re-declared here.
+  pub catches: Option<Vec<CatchClause>>,
 }
 
 impl InstrDesc {
@@ -715,6 +763,8 @@ impl InstrDesc {
       len: None,
       src_type_index: None,
       to_ref_type: None,
+      tag: None,
+      catches: None,
     }
   }
 }
@@ -820,6 +870,22 @@ pub(crate) fn element_id_at(module: &Module, index: u32) -> Result<ElementId> {
         "no element segment at index {index} in this module"
       ))
     })
+}
+
+/// Resolve a tag's stable index to its live `TagId`, or a catchable error.
+///
+/// This is an ABORT GUARD, exactly like [`memory_id_at`]: a foreign/deleted tag
+/// index reaching emit panics walrus (`IdsToIndices::get_tag_index`), and a panic
+/// across the FFI boundary is uncatchable under `panic = abort`. `Throw` and the
+/// tag-carrying catch clauses (`Catch`/`CatchRef`) resolve through here, turning
+/// a bad index into an ordinary JS exception before emit (and in the preflight).
+pub(crate) fn tag_id_at(module: &Module, index: u32) -> Result<TagId> {
+  module
+    .tags
+    .iter()
+    .find(|t| t.id().index() as u32 == index)
+    .map(|t| t.id())
+    .ok_or_else(|| Error::from_reason(format!("no tag at index {index} in this module")))
 }
 
 // ---------------------------------------------------------------------------
@@ -1432,6 +1498,111 @@ fn emit_one(
   d: InstrDesc,
   label_stack: &mut Vec<wir::InstrSeqId>,
 ) -> Result<()> {
+  // Only the four recursive control constructs stay on the recursion stack; every
+  // other (leaf / non-recursive) instruction is delegated to `emit_leaf`
+  // (`#[inline(never)]`), so the summed frame of ~50 leaf arms AND the full
+  // `InstrDesc` destructure live in `emit_leaf`'s frame — live one instruction at
+  // a time, NEVER accumulating on the depth-`MAX_NESTING_DEPTH` recursion stack.
+  // This is the exact `read_one`/`read_leaf` split applied to emit, and it is what
+  // keeps the at-cap canary green as `InstrDesc` widens (each new field would
+  // otherwise widen THIS recursive frame). The recursion (`emit_desc`) stays here.
+  if !matches!(d.r#type.as_str(), "Block" | "Loop" | "IfElse" | "TryTable") {
+    return emit_leaf(fb, module, seq_id, d, label_stack);
+  }
+  // Destructure ONLY the control-construct fields (the rest are dropped via `..`),
+  // so the recursion frame holds a handful of `Option`s, not all ~35 fields.
+  let InstrDesc {
+    r#type,
+    block_type,
+    seq,
+    consequent,
+    alternative,
+    catches,
+    ..
+  } = d;
+
+  match r#type.as_str() {
+    "Block" => {
+      let ty = to_instr_seq_type(module, block_type)?;
+      let child = fb.dangling_instr_seq(ty).id();
+      emit_desc(fb, module, child, seq.unwrap_or_default(), label_stack)?;
+      fb.instr_seq(seq_id).instr(wir::Block { seq: child });
+    }
+    "Loop" => {
+      let ty = to_instr_seq_type(module, block_type)?;
+      let child = fb.dangling_instr_seq(ty).id();
+      emit_desc(fb, module, child, seq.unwrap_or_default(), label_stack)?;
+      fb.instr_seq(seq_id).instr(wir::Loop { seq: child });
+    }
+    "IfElse" => {
+      // Both arms share the block type; each arm is its OWN label frame (see the
+      // module-level note), so recurse into each with its own sequence id.
+      let ty = to_instr_seq_type(module, block_type)?;
+      let consequent_id = fb.dangling_instr_seq(ty).id();
+      let alternative_id = fb.dangling_instr_seq(ty).id();
+      emit_desc(
+        fb,
+        module,
+        consequent_id,
+        consequent.unwrap_or_default(),
+        label_stack,
+      )?;
+      emit_desc(
+        fb,
+        module,
+        alternative_id,
+        alternative.unwrap_or_default(),
+        label_stack,
+      )?;
+      fb.instr_seq(seq_id).instr(wir::IfElse {
+        consequent: consequent_id,
+        alternative: alternative_id,
+      });
+    }
+    // Modern exception handling (C8a). `TryTable` is a `Block` twin — a control
+    // construct with its OWN child `seq` (the try body) PLUS a catch-clause list.
+    // LOAD-BEARING SCOPING: the clause labels resolve against the CURRENT (outer)
+    // label stack — the try_table's own seq is NOT pushed yet — so we convert them
+    // FIRST (walrus computes catch branch targets BEFORE pushing the try_table
+    // block; see `emit.rs`), THEN descend into the body via `emit_desc` (which
+    // pushes `child`, so inside the body `br 0` targets the try_table block). The
+    // per-clause work lives in `try_table_catches_to_walrus` (`#[inline(never)]`),
+    // keeping this recursive arm `Block`-slim. Missing `catches` = catch-less
+    // (empty), a legal `try_table` — mirror `seq.unwrap_or_default()`.
+    "TryTable" => {
+      let catches =
+        try_table_catches_to_walrus(module, catches.as_deref().unwrap_or(&[]), label_stack)?;
+      let ty = to_instr_seq_type(module, block_type)?;
+      let child = fb.dangling_instr_seq(ty).id();
+      emit_desc(fb, module, child, seq.unwrap_or_default(), label_stack)?;
+      fb.instr_seq(seq_id).instr(wir::TryTable {
+        seq: child,
+        catches,
+      });
+    }
+    // The `matches!` guard above admits only the four control types.
+    _ => unreachable!("emit_one handles only control constructs"),
+  }
+  Ok(())
+}
+
+/// Emit one NON-CONTROL (leaf / non-recursive) descriptor. Split out of
+/// [`emit_one`] and marked `#[inline(never)]` so this large match — ~50 arms plus
+/// the full `InstrDesc` destructure — keeps its frame OFF the depth-
+/// [`MAX_NESTING_DEPTH`] recursion stack (the mirror image of [`read_leaf`]). It
+/// is called once per leaf and never recurses, so its frame is live for a single
+/// instruction at a time. `Br`/`BrIf`/`BrTable` (and the GC branches) read
+/// `label_stack` to resolve their targets; no leaf recurses into `emit_desc`.
+#[inline(never)]
+fn emit_leaf(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  seq_id: wir::InstrSeqId,
+  d: InstrDesc,
+  // Immutable slice: a leaf never recurses, so it only READS the label stack to
+  // resolve `Br`/`BrIf`/`BrTable`/`BrOn*` targets — no push/pop.
+  label_stack: &[wir::InstrSeqId],
+) -> Result<()> {
   let InstrDesc {
     r#type,
     value,
@@ -1439,10 +1610,6 @@ fn emit_one(
     global,
     func,
     select_type,
-    block_type,
-    seq,
-    consequent,
-    alternative,
     label,
     labels,
     default_label,
@@ -1468,6 +1635,10 @@ fn emit_one(
     len,
     src_type_index,
     to_ref_type,
+    tag,
+    // `block_type`/`seq`/`consequent`/`alternative`/`catches` are control-only
+    // (handled in `emit_one`, never reached here) — dropped via `..`.
+    ..
   } = d;
 
   match r#type.as_str() {
@@ -1539,42 +1710,14 @@ fn emit_one(
       };
       fb.instr_seq(seq_id).instr(wir::Select { ty });
     }
-    "Block" => {
-      let ty = to_instr_seq_type(module, block_type)?;
-      let child = fb.dangling_instr_seq(ty).id();
-      emit_desc(fb, module, child, seq.unwrap_or_default(), label_stack)?;
-      fb.instr_seq(seq_id).instr(wir::Block { seq: child });
-    }
-    "Loop" => {
-      let ty = to_instr_seq_type(module, block_type)?;
-      let child = fb.dangling_instr_seq(ty).id();
-      emit_desc(fb, module, child, seq.unwrap_or_default(), label_stack)?;
-      fb.instr_seq(seq_id).instr(wir::Loop { seq: child });
-    }
-    "IfElse" => {
-      // Both arms share the block type; each arm is its OWN label frame (see the
-      // module-level note), so recurse into each with its own sequence id.
-      let ty = to_instr_seq_type(module, block_type)?;
-      let consequent_id = fb.dangling_instr_seq(ty).id();
-      let alternative_id = fb.dangling_instr_seq(ty).id();
-      emit_desc(
-        fb,
-        module,
-        consequent_id,
-        consequent.unwrap_or_default(),
-        label_stack,
-      )?;
-      emit_desc(
-        fb,
-        module,
-        alternative_id,
-        alternative.unwrap_or_default(),
-        label_stack,
-      )?;
-      fb.instr_seq(seq_id).instr(wir::IfElse {
-        consequent: consequent_id,
-        alternative: alternative_id,
-      });
+    // The four recursive control constructs (`Block`/`Loop`/`IfElse`/`TryTable`)
+    // are handled inline in `emit_one` and never reach this leaf helper.
+    // `Throw`/`ThrowRef` are leaf EH ops: delegated to `emit_eh` (`#[inline(never)]`)
+    // for the SAME frame-size reason as `emit_gc_ref` (keep their locals out of
+    // this recursive walker's frame). `Throw` resolves its `tag` via `tag_id_at`
+    // (the abort guard); `ThrowRef` is fieldless.
+    "Throw" | "ThrowRef" => {
+      emit_eh(fb, module, seq_id, r#type.as_str(), tag)?;
     }
     "Br" => {
       let target = label_target(label.ok_or_else(|| missing("Br", "label"))?, label_stack)?;
@@ -1875,7 +2018,8 @@ fn emit_one(
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
          C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
-         atomic, table, reference/tail-call, and GC struct/array/reference/branch subset)"
+         atomic, table, reference/tail-call, GC struct/array/reference/branch, and modern \
+         exception-handling subset)"
       )));
     }
   }
@@ -1885,6 +2029,96 @@ fn emit_one(
 /// The error for a descriptor missing a payload field its `type` requires.
 fn missing(ty: &str, field: &str) -> Error {
   Error::from_reason(format!("`{ty}` instruction is missing its `{field}` field"))
+}
+
+/// The catchable error for a catch clause `kind` that names no `TryTableCatch`
+/// variant. Shared by emit ([`try_table_catches_to_walrus`]) and preflight
+/// ([`validate_try_table_catches`]) so both reject an unknown kind identically.
+fn unknown_catch_kind(kind: &str) -> Error {
+  Error::from_reason(format!(
+    "unknown catch clause kind `{kind}` (expected `Catch`, `CatchRef`, `CatchAll`, or \
+     `CatchAllRef`)"
+  ))
+}
+
+/// Convert JS catch clauses into walrus `TryTableCatch`es, resolving each tag via
+/// [`tag_id_at`] and each `label` via [`label_target`] against the CURRENT (outer)
+/// label stack — the try_table's own seq is deliberately NOT on the stack yet, so
+/// depth `0` names the block ENCLOSING the try_table (walrus computes these branch
+/// targets BEFORE pushing the try_table block; see `emit.rs`). Split out of
+/// [`emit_one`]'s `TryTable` arm and marked `#[inline(never)]` so the per-clause
+/// locals stay OFF the recursive walker's frame (see [`MAX_NESTING_DEPTH`]).
+/// Mirrors [`validate_try_table_catches`]'s kind/required-field checks exactly.
+#[inline(never)]
+fn try_table_catches_to_walrus(
+  module: &Module,
+  catches: &[CatchClause],
+  label_stack: &[wir::InstrSeqId],
+) -> Result<Vec<wir::TryTableCatch>> {
+  let mut out = Vec::with_capacity(catches.len());
+  for c in catches {
+    let clause = match c.kind.as_str() {
+      "Catch" => wir::TryTableCatch::Catch {
+        tag: tag_id_at(module, c.tag.ok_or_else(|| missing("Catch", "tag"))?)?,
+        label: label_target(
+          c.label.ok_or_else(|| missing("Catch", "label"))?,
+          label_stack,
+        )?,
+      },
+      "CatchRef" => wir::TryTableCatch::CatchRef {
+        tag: tag_id_at(module, c.tag.ok_or_else(|| missing("CatchRef", "tag"))?)?,
+        label: label_target(
+          c.label.ok_or_else(|| missing("CatchRef", "label"))?,
+          label_stack,
+        )?,
+      },
+      "CatchAll" => wir::TryTableCatch::CatchAll {
+        label: label_target(
+          c.label.ok_or_else(|| missing("CatchAll", "label"))?,
+          label_stack,
+        )?,
+      },
+      "CatchAllRef" => wir::TryTableCatch::CatchAllRef {
+        label: label_target(
+          c.label.ok_or_else(|| missing("CatchAllRef", "label"))?,
+          label_stack,
+        )?,
+      },
+      other => return Err(unknown_catch_kind(other)),
+    };
+    out.push(clause);
+  }
+  Ok(out)
+}
+
+/// Emit one leaf exception-handling instruction (`Throw`/`ThrowRef`). Split out of
+/// [`emit_one`] and marked `#[inline(never)]` for the same frame-size reason as
+/// [`emit_gc_ref`] (keep its locals out of the recursive walker's frame). `Throw`
+/// resolves its `tag` via [`tag_id_at`] (the abort guard); `ThrowRef` is
+/// fieldless. The caller only routes those two discriminants here.
+#[inline(never)]
+fn emit_eh(
+  fb: &mut FunctionBuilder,
+  module: &Module,
+  seq_id: wir::InstrSeqId,
+  ty: &str,
+  tag: Option<u32>,
+) -> Result<()> {
+  match ty {
+    "Throw" => {
+      let id = tag_id_at(module, tag.ok_or_else(|| missing("Throw", "tag"))?)?;
+      fb.instr_seq(seq_id).instr(wir::Throw { tag: id });
+    }
+    "ThrowRef" => {
+      fb.instr_seq(seq_id).instr(wir::ThrowRef {});
+    }
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not an EH leaf op"
+      )))
+    }
+  }
+  Ok(())
 }
 
 /// Emit one atomic (threads) instruction. Split out of [`emit_one`] and marked
@@ -2525,6 +2759,24 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
         label_len + 1,
       )?;
     }
+    // Modern exception handling (C8a). `TryTable` mirrors emit: validate the block
+    // type, then EVERY clause against the OUTER `label_len` (NO `+1` — the clause
+    // labels resolve against the scope ENCLOSING the try_table, the load-bearing
+    // rule), then the body at `label_len + 1` (one frame deeper, like `Block`).
+    // The clause checks live in `validate_try_table_catches` (`#[inline(never)]`),
+    // keeping this recursive arm slim.
+    "TryTable" => {
+      validate_block_type(module, &d.block_type)?;
+      validate_try_table_catches(module, d.catches.as_deref().unwrap_or(&[]), label_len)?;
+      validate_body(module, d.seq.as_deref().unwrap_or(&[]), label_len + 1)?;
+    }
+    // `Throw`/`ThrowRef` preflight via `validate_eh` (`#[inline(never)]`), mirroring
+    // `emit_eh`: `Throw` resolves its `tag` via `tag_id_at` (a missing preflight
+    // resolution re-opens the emit-abort / partial-mutation defect); `ThrowRef`
+    // needs nothing.
+    "Throw" | "ThrowRef" => {
+      validate_eh(module, d)?;
+    }
     "Br" => {
       validate_label(d.label.ok_or_else(|| missing("Br", "label"))?, label_len)?;
     }
@@ -2814,8 +3066,74 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
       return Err(Error::from_reason(format!(
         "unknown or unsupported instruction type `{other}` (buildFunction handles only the \
          C1a/C1b/C2/C3/C4/C5 core, control-flow, numeric-operator, memory/load-store, \
-         atomic, table, reference/tail-call, and GC struct/array/reference/branch subset)"
+         atomic, table, reference/tail-call, GC struct/array/reference/branch, and modern \
+         exception-handling subset)"
       )));
+    }
+  }
+  Ok(())
+}
+
+/// Preflight the catch clauses of a `TryTable`. Split out of [`validate_one`] and
+/// marked `#[inline(never)]` for the same frame-size reason as [`validate_atomic`]
+/// (keep the per-clause locals out of the recursive walker's frame). Mirrors
+/// [`try_table_catches_to_walrus`] arm-for-arm: the SAME kind/required-field
+/// checks, `tag_id_at` for the tag-carrying kinds, and `validate_label` against
+/// the OUTER `label_len` (NO `+1` — the load-bearing outer-scope rule) — a missing
+/// preflight resolution re-opens the emit-abort / partial-mutation defect.
+#[inline(never)]
+fn validate_try_table_catches(
+  module: &Module,
+  catches: &[CatchClause],
+  label_len: usize,
+) -> Result<()> {
+  for c in catches {
+    match c.kind.as_str() {
+      "Catch" => {
+        tag_id_at(module, c.tag.ok_or_else(|| missing("Catch", "tag"))?)?;
+        validate_label(c.label.ok_or_else(|| missing("Catch", "label"))?, label_len)?;
+      }
+      "CatchRef" => {
+        tag_id_at(module, c.tag.ok_or_else(|| missing("CatchRef", "tag"))?)?;
+        validate_label(
+          c.label.ok_or_else(|| missing("CatchRef", "label"))?,
+          label_len,
+        )?;
+      }
+      "CatchAll" => {
+        validate_label(
+          c.label.ok_or_else(|| missing("CatchAll", "label"))?,
+          label_len,
+        )?;
+      }
+      "CatchAllRef" => {
+        validate_label(
+          c.label.ok_or_else(|| missing("CatchAllRef", "label"))?,
+          label_len,
+        )?;
+      }
+      other => return Err(unknown_catch_kind(other)),
+    }
+  }
+  Ok(())
+}
+
+/// Preflight one leaf exception-handling descriptor (`Throw`/`ThrowRef`). Split
+/// out of [`validate_one`] and marked `#[inline(never)]` for the same frame-size
+/// reason as [`validate_atomic`]. Mirrors [`emit_eh`]: `Throw` resolves its `tag`
+/// via `tag_id_at` (the abort guard); `ThrowRef` needs nothing. The caller only
+/// routes those two discriminants here.
+#[inline(never)]
+fn validate_eh(module: &Module, d: &InstrDesc) -> Result<()> {
+  match d.r#type.as_str() {
+    "Throw" => {
+      tag_id_at(module, d.tag.ok_or_else(|| missing("Throw", "tag"))?)?;
+    }
+    "ThrowRef" => {}
+    other => {
+      return Err(Error::from_reason(format!(
+        "`{other}` is not an EH leaf op"
+      )))
     }
   }
   Ok(())
@@ -3351,8 +3669,65 @@ fn read_one(
       d.alternative = Some(alternative);
       d
     }
+    // Modern exception handling (C8a). `TryTable` is the 4th recursive control
+    // construct (a `Block` twin with a `catches` list). LOAD-BEARING SCOPING:
+    // invert the clause labels via `read_try_table_catches` (`label_depth` against
+    // the CURRENT/outer stack — the try_table's own seq is NOT pushed here) BEFORE
+    // descending into the body via `read_instr_seq` (which pushes `t.seq`), exactly
+    // mirroring walrus' emit order. The per-clause work lives in the
+    // `#[inline(never)]` helper, keeping this arm `Block`-slim.
+    wir::Instr::TryTable(t) => {
+      let catches = read_try_table_catches(&t.catches, label_stack)?;
+      let inner = read_instr_seq(lf, t.seq, label_stack)?;
+      let mut d = InstrDesc::new("TryTable");
+      d.block_type = Some(from_instr_seq_type(lf.block(t.seq).ty)?);
+      d.seq = Some(inner);
+      d.catches = Some(catches);
+      d
+    }
     _ => read_leaf(instr, label_stack)?,
   })
+}
+
+/// Invert a `TryTable`'s walrus catch clauses back into [`CatchClause`]s. Split
+/// out of [`read_one`]'s `TryTable` arm and marked `#[inline(never)]` so its
+/// per-clause `String`/`InstrDesc`-free locals stay OFF the recursion stack (see
+/// [`read_one`]). Each tag becomes its stable `.index()`; each `label` inverts via
+/// [`label_depth`] against the CURRENT (outer) `label_stack` — the exact inverse
+/// of [`try_table_catches_to_walrus`], and called BEFORE the body descent so the
+/// try_table's own seq is not yet on the stack (the load-bearing outer-scope rule).
+#[inline(never)]
+fn read_try_table_catches(
+  catches: &[wir::TryTableCatch],
+  label_stack: &[wir::InstrSeqId],
+) -> Result<Vec<CatchClause>> {
+  let mut out = Vec::with_capacity(catches.len());
+  for c in catches {
+    let clause = match c {
+      wir::TryTableCatch::Catch { tag, label } => CatchClause {
+        kind: "Catch".to_string(),
+        tag: Some(tag.index() as u32),
+        label: Some(label_depth(*label, label_stack)?),
+      },
+      wir::TryTableCatch::CatchRef { tag, label } => CatchClause {
+        kind: "CatchRef".to_string(),
+        tag: Some(tag.index() as u32),
+        label: Some(label_depth(*label, label_stack)?),
+      },
+      wir::TryTableCatch::CatchAll { label } => CatchClause {
+        kind: "CatchAll".to_string(),
+        tag: None,
+        label: Some(label_depth(*label, label_stack)?),
+      },
+      wir::TryTableCatch::CatchAllRef { label } => CatchClause {
+        kind: "CatchAllRef".to_string(),
+        tag: None,
+        label: Some(label_depth(*label, label_stack)?),
+      },
+    };
+    out.push(clause);
+  }
+  Ok(out)
 }
 
 /// Read a single NON-CONTROL (leaf) walrus instruction into a descriptor. Split
@@ -3852,6 +4227,15 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
       d.elem = Some(e.elem.index() as u32);
       d
     }
+    // Modern exception handling (C8a) leaf ops. `TryTable` is NOT here — it is a
+    // recursive control construct handled in `read_one`. `Throw` surfaces its tag's
+    // stable `.index()`; `ThrowRef` is fieldless.
+    wir::Instr::Throw(t) => {
+      let mut d = InstrDesc::new("Throw");
+      d.tag = Some(t.tag.index() as u32);
+      d
+    }
+    wir::Instr::ThrowRef(_) => InstrDesc::new("ThrowRef"),
     other => {
       // MIRROR-WALRUS: never panic on an out-of-subset variant — surface a
       // catchable error naming it. Later C-tasks replace these arms with real
@@ -3861,7 +4245,8 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
       return Err(Error::from_reason(format!(
         "instruction `{name}` is not yet supported by instructions() (only the C1a/C1b/C2/C3/C4/C5 \
          core, control-flow, numeric-operator, memory/load-store, atomic, table, \
-         reference/tail-call, and GC struct/array/reference/branch subset is)"
+         reference/tail-call, GC struct/array/reference/branch, and modern exception-handling \
+         subset is)"
       )));
     }
   })
