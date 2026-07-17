@@ -79,11 +79,11 @@
 use std::ffi::CStr;
 
 use napi::bindgen_prelude::{
-  set_named_property_raw, FromNapiValue, ToNapiValue, TypeName, ValidateNapiValue,
+  set_named_property_raw, FromNapiValue, ToNapiValue, TypeName, Uint8Array, ValidateNapiValue,
 };
 use napi::{check_status, sys, Error, Result, Status, ValueType};
 
-use crate::ir::{nesting_too_deep, InstrDesc, MAX_NESTING_DEPTH};
+use crate::ir::{nesting_too_deep, ConstValue, InstrDesc, MAX_NESTING_DEPTH};
 
 /// The self-referential edge fields of [`InstrDesc`], in DECLARATION order (the
 /// order the derived decode reads fields and the derived encode sets
@@ -259,6 +259,85 @@ fn decorate(err: Error, field: &str) -> Error {
   napi::decorate_field_error(err, "InstrDesc", field)
 }
 
+/// A CATCHABLE error for an allocation that failed while growing a decode-side
+/// `Vec` whose element count is bounded ONLY by an untrusted JS length (a plain
+/// `Array.length`, or a `Proxy`'s `length`/`ownKeys` trap). The push-loops on
+/// the decode path grow with a fallible `try_reserve` and map its
+/// `TryReserveError` here, so a hostile huge-but-hole-free length exhausts memory
+/// CATCHABLY (process survives) instead of an infallible `push` aborting via
+/// capacity-overflow / `handle_alloc_error` — uncatchable under WASI
+/// `panic=abort`, the exact abort class this module exists to remove.
+fn too_large(what: &str) -> Error {
+  Error::new(
+    Status::GenericFailure,
+    format!("{what} too large to decode"),
+  )
+}
+
+/// Copy a decoded typed-array field into Rust-OWNED bytes, defusing a
+/// retained-JS-pointer use-after-free.
+///
+/// napi 3.10.5's `Uint8Array::from_napi_value` CACHES the backing ArrayBuffer's
+/// data pointer + length at decode time (arraybuffer.rs:762), and its
+/// `as_ref`/`Deref`/`to_vec` rebuild a slice from that STORED pointer with NO
+/// live detach re-check (arraybuffer.rs:692). So if any user JS that runs AFTER
+/// this element's derived decode — a `labels`/edge/sibling-field getter, or a
+/// child `Proxy` trap — detaches the buffer (e.g. `ArrayBuffer.prototype
+/// .transfer()`), that cached pointer DANGLES, and a later `validate_shuffle` /
+/// v128 emit that reads `shuffle_indices` / `value` (ir.rs:3037, 1348) would read
+/// freed memory (UAF/UB). We therefore copy the bytes NOW — through a FRESH
+/// `napi_get_typedarray_info` handle, NEVER the cached pointer — and rebuild an
+/// OWNED `Uint8Array` (`raw: None`, its own `Vec`), so no JS-backed typed-array
+/// pointer survives past `decode_element_shallow` and any later detach is
+/// irrelevant.
+///
+/// Already-detached safety: we NEVER dereference the struct's cached pointer.
+/// `to_napi_value` returns the ORIGINAL typed array's `napi_value` from its
+/// stored reference and runs NO user JS (no `[[Get]]`, no getter/`Proxy` trap);
+/// a fresh `napi_get_typedarray_info` on a detached view reports `length == 0`
+/// and `data == null` (V8 AND emnapi both null a detached view's info), so the
+/// copy takes the empty branch — a downstream 16-byte length check
+/// (`to_shuffle_indices` / `v128_bytes_to_u128`) then rejects it CATCHABLY. Uses
+/// only napi6 calls (`napi_is_detached_arraybuffer` is napi7, not enabled here);
+/// re-querying the live info makes an explicit detach check unnecessary for
+/// safety.
+unsafe fn snapshot_uint8array(env: sys::napi_env, u: Uint8Array) -> Result<Uint8Array> {
+  // A decoded (`raw: Some`) `Uint8Array` hands back the ORIGINAL typed array's
+  // `napi_value` via its stored reference — no `[[Get]]` runs — and consuming `u`
+  // here guarantees its cached pointer is never dereferenced (its `Drop`
+  // early-returns on the null ref `to_napi_value` leaves behind).
+  let napi_val = unsafe { Uint8Array::to_napi_value(env, u)? };
+  let mut ta_type = 0;
+  let mut length = 0usize;
+  let mut data = std::ptr::null_mut();
+  let mut arraybuffer = std::ptr::null_mut();
+  let mut byte_offset = 0usize;
+  check_status!(
+    unsafe {
+      sys::napi_get_typedarray_info(
+        env,
+        napi_val,
+        &mut ta_type,
+        &mut length,
+        &mut data,
+        &mut arraybuffer,
+        &mut byte_offset,
+      )
+    },
+    "Failed to get typedarray info"
+  )?;
+  // Copy from the FRESH pointer (`napi_get_typedarray_info` returns `data`
+  // already adjusted by `byte_offset`, matching napi's own `as_ref`). A detached
+  // view reports `length == 0` / `data == null`, so this takes the empty branch
+  // and never dereferences a freed pointer — on native or WASI.
+  let bytes: Vec<u8> = if length == 0 || data.is_null() {
+    Vec::new()
+  } else {
+    unsafe { std::slice::from_raw_parts(data.cast::<u8>(), length) }.to_vec()
+  };
+  Ok(Uint8Array::from(bytes))
+}
+
 // ---------------------------------------------------------------------------
 // Decode: JS `Array<InstrDesc>` -> `InstrBody` (iterative, depth-guarded).
 // ---------------------------------------------------------------------------
@@ -393,6 +472,13 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
       unsafe { sys::napi_get_property(env, elem, name, &mut val) },
       "Failed to get property"
     )?;
+    // FALLIBLE growth: `names_len` is `napi_get_all_property_names`' count, driven
+    // by the element's own keys — a `Proxy` `ownKeys` trap can inflate it. Grow
+    // `descriptors` with `try_reserve` so an exhausting key count is CATCHABLE,
+    // not an infallible `push` abort.
+    descriptors
+      .try_reserve(1)
+      .map_err(|_| too_large("object property set"))?;
     descriptors.push(data_descriptor_named(name, val));
   }
 
@@ -402,6 +488,31 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
   )?;
 
   let mut desc = unsafe { InstrDesc::from_napi_value(env, copy)? };
+
+  // SNAPSHOT every JS-backed typed-array field of `desc` into Rust-OWNED bytes,
+  // RIGHT NOW — after the derived decode captured its pointers, but BEFORE the
+  // `labels` decode below (a `labels` getter is user JS) and before this returns
+  // into the caller's edge walk (the `seq`/`consequent`/`alternative` getters are
+  // user JS too) or any child `Proxy` trap. See `snapshot_uint8array`: napi caches
+  // the ArrayBuffer data pointer at decode time and derefs it later WITHOUT a
+  // detach re-check, so any of that later user JS could detach the buffer and
+  // dangle the pointer a subsequent `validate_shuffle` / v128 emit reads (UAF/UB).
+  // Copying the bytes here makes every later detach irrelevant, and an
+  // already-detached buffer degrades to a catchable length error, never UB.
+  //
+  // These two are the ONLY pointer-retaining fields: a decoded `InstrDesc` has
+  // exactly two `Uint8Array` fields (`shuffle_indices` and the `V128` const's
+  // `value`); every other field is a scalar / `String` / `BigInt` / owned enum
+  // decoded to owned Rust values. ANY future typed-array (or other pointer-
+  // retaining) field MUST be snapshotted here too.
+  if let Some(u) = desc.shuffle_indices.take() {
+    desc.shuffle_indices =
+      Some(unsafe { snapshot_uint8array(env, u) }.map_err(|e| decorate(e, "shuffleIndices"))?);
+  }
+  if let Some(ConstValue::V128 { value }) = &mut desc.value {
+    let taken = std::mem::replace(value, Uint8Array::new(Vec::new()));
+    *value = unsafe { snapshot_uint8array(env, taken) }.map_err(|e| decorate(e, "value"))?;
+  }
 
   // Decode the LEAF `labels: Option<Vec<u32>>` ourselves, from the ORIGINAL's
   // OWN `labels` only. `get_own_named_property` never traverses the prototype, so
@@ -419,6 +530,13 @@ unsafe fn decode_element_shallow(env: sys::napi_env, elem: sys::napi_value) -> R
     for i in 0..len {
       let el = unsafe { get_element(env, arr, i) }.map_err(|e| decorate(e, "labels"))?;
       let n = unsafe { u32::from_napi_value(env, el) }.map_err(|e| decorate(e, "labels"))?;
+      // FALLIBLE growth: `len` is the untrusted `Array.length` of `arr`, which a
+      // `Proxy` returning a valid `u32` for EVERY numeric index (no hole to fail
+      // on) can report as ~`2**32`. `try_reserve` maps that exhaustion to a
+      // CATCHABLE error rather than an infallible `push` aborting the process.
+      labels
+        .try_reserve(1)
+        .map_err(|_| decorate(too_large("branch table"), "labels"))?;
       labels.push(n);
     }
     desc.labels = Some(labels);
@@ -486,6 +604,15 @@ impl FromNapiValue for InstrBody {
         .map_err(|e| decorate_ancestors(e, &frames, f))?;
       let desc = unsafe { decode_element_shallow(env, elem) }
         .map_err(|e| decorate_ancestors(e, &frames, f))?;
+      // FALLIBLE growth: `out` grows to the ACTUAL element count of a frame whose
+      // `len` is the untrusted `Array.length` (root body or an edge sequence). A
+      // `Proxy` returning a valid descriptor for EVERY index (no hole to fail on)
+      // could drive this toward ~`2**32` elements; `try_reserve` maps that
+      // exhaustion to a CATCHABLE error instead of an infallible `push` abort.
+      frames[f]
+        .out
+        .try_reserve(1)
+        .map_err(|_| decorate_ancestors(too_large("instruction sequence"), &frames, f))?;
       frames[f].out.push(desc);
       let elem_idx = frames[f].out.len() - 1;
 

@@ -731,25 +731,34 @@ test('CH-fix (__proto__ injection): an own `__proto__` data property carrying a 
   const cyc: unknown[] = []
   cyc.push({ type: 'Block', blockType: { type: 'Empty' }, seq: cyc })
   const evil = { type: 'Drop' } as Record<string, unknown>
-  Object.defineProperty(evil, '__proto__', {
-    value: { seq: cyc },
-    writable: true,
-    configurable: true,
-    enumerable: true,
-  })
-  // Sanity: it is an OWN property and evil's REAL prototype is untouched.
-  t.true(Object.hasOwn(evil, '__proto__'))
-  t.is(Object.getPrototypeOf(evil), Object.prototype)
+  try {
+    Object.defineProperty(evil, '__proto__', {
+      value: { seq: cyc },
+      writable: true,
+      configurable: true,
+      enumerable: true,
+    })
+    // Sanity: it is an OWN property and evil's REAL prototype is untouched.
+    t.true(Object.hasOwn(evil, '__proto__'))
+    t.is(Object.getPrototypeOf(evil), Object.prototype)
 
-  const m = empty()
-  const body = [{ type: 'Const', value: { type: 'I32', value: 1 } }, evil] as unknown as InstrDesc[]
-  const idx = m.buildFunction([], [], [], body)
-  const read = m.functions.getByIndex(idx)!.instructions()
-  // Neutralized: the leaf is a plain Drop with no smuggled edge, and the module
-  // still emits — the process did not recurse or abort.
-  t.deepEqual(read, [{ type: 'Const', value: { type: 'I32', value: 1 } }, { type: 'Drop' }])
-  t.false(Object.hasOwn(read[1], 'seq'))
-  t.true(WebAssembly.validate(m.emitWasm(false)))
+    const m = empty()
+    const body = [{ type: 'Const', value: { type: 'I32', value: 1 } }, evil] as unknown as InstrDesc[]
+    const idx = m.buildFunction([], [], [], body)
+    const read = m.functions.getByIndex(idx)!.instructions()
+    // Neutralized: the leaf is a plain Drop with no smuggled edge, and the module
+    // still emits — the process did not recurse or abort.
+    t.deepEqual(read, [{ type: 'Const', value: { type: 'I32', value: 1 } }, { type: 'Drop' }])
+    t.false(Object.hasOwn(read[1], 'seq'))
+    t.true(WebAssembly.validate(m.emitWasm(false)))
+  } finally {
+    // Remove the injected own `__proto__` data property even if an assertion threw
+    // (`evil` is local, so this is hygiene — not a global-prototype leak fix).
+    // `delete` on the own key does NOT invoke the `__proto__` setter.
+    delete evil['__proto__']
+  }
+  // The injected property is fully gone.
+  t.false(Object.hasOwn(evil, '__proto__'))
 })
 
 test('CH-fix (sparse-wide body): a 2**32-1-length sparse body throws catchably (no huge alloc/abort), module survives', (t) => {
@@ -858,6 +867,229 @@ test('CH-fix2 (normal BrTable): a real small `labels` + `defaultLabel` round-tri
   const read = m.functions.getByIndex(idx)!.instructions()
   t.deepEqual(read, body)
   t.true(WebAssembly.validate(m.emitWasm(false)))
+})
+
+// ---------------------------------------------------------------------------
+// CH-fix3: two MORE adversarial `buildFunction(body)` inputs that, before this
+// fix, STILL reached uncatchable UB / a process abort inside the JS→Rust decode.
+//
+//   A. A retained-typed-array-pointer USE-AFTER-FREE. napi's `Uint8Array` caches
+//      the backing ArrayBuffer's data pointer at decode time and later derefs it
+//      WITHOUT a detach re-check. `InstrDesc` has two such fields — `shuffleIndices`
+//      and the `V128` const's `value`. A `labels`/edge/sibling getter (or a child
+//      `Proxy` trap) that runs AFTER the derived per-element decode can
+//      `ArrayBuffer.prototype.transfer()` the buffer, dangling that cached pointer;
+//      a later `validate_shuffle` / v128 emit then reads freed memory. Fix:
+//      `decode_element_shallow` SNAPSHOTS both typed-array fields into Rust-owned
+//      bytes (via a FRESH `napi_get_typedarray_info`, never the cached pointer)
+//      right after the derived decode — before any of that later user JS — so a
+//      detach is irrelevant and an already-detached buffer degrades to a catchable
+//      length error, never UB.
+//   B. A `Proxy`-backed array with a huge HOLE-FREE length. On WASI (emnapi)
+//      `napi_get_array_length` accepts a `Proxy` of an array and reads its `length`
+//      trap (native V8 rejects it catchably), so a `Proxy` returning a valid value
+//      for EVERY index drove the `labels` / root-`out` / edge-`out` push-loops
+//      toward ~2**32 elements — an infallible `Vec` grow that OOM-aborts
+//      (uncatchable under WASI `panic=abort`). Fix: every such push is now
+//      `try_reserve`-guarded, so exhaustion is CATCHABLE and the process survives.
+//
+// The WASI run is the real proof for BOTH: a genuine UAF or OOM abort there tears
+// down the whole test run, so a full green suite under `NAPI_RS_FORCE_WASI=1` is
+// the evidence the holes are closed on the `panic=abort` target, not just native.
+// ---------------------------------------------------------------------------
+
+// Detach `buf` in place: `ArrayBuffer.prototype.transfer` (Node 21+) frees the old
+// backing store; `structuredClone` transfer is the portable fallback. Both native
+// and WASI runs execute under the same host Node, so `transfer` is present.
+function detach(buf: ArrayBuffer): void {
+  const t = buf as ArrayBuffer & { transfer?: () => ArrayBuffer }
+  if (typeof t.transfer === 'function') t.transfer()
+  else structuredClone(buf, { transfer: [buf] })
+}
+
+test('CH-fix3 (detaching `labels` getter, shuffle): a sibling getter that detaches shuffleIndices AFTER the decode cannot dangle it — snapshot wins', (t) => {
+  const pattern = [15, 0, 14, 1, 13, 2, 12, 3, 11, 4, 10, 5, 9, 6, 8, 7]
+  const buf = new ArrayBuffer(16)
+  new Uint8Array(buf).set(pattern)
+  let getterRan = false
+  // `decode_element_shallow` reads `labels` (via an own-only get) AFTER the derived
+  // decode and AFTER the typed-array snapshot. So this getter fires post-snapshot:
+  // pre-fix it would `transfer()` the buffer and dangle the pointer `validate_shuffle`
+  // later reads; post-fix the 16 bytes are already Rust-owned.
+  const shuffle = {
+    type: 'I8x16Shuffle',
+    shuffleIndices: new Uint8Array(buf),
+    get labels() {
+      getterRan = true
+      detach(buf)
+      return undefined
+    },
+  }
+  const m = empty()
+  const idx = m.buildFunction([], [], [], [shuffle] as unknown as InstrDesc[])
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.true(getterRan) // the hostile getter really ran
+  t.is(buf.byteLength, 0) // and really detached the buffer
+  // The snapshot captured the bytes BEFORE the detach: exact, correct round-trip
+  // (NOT freed/garbage memory, NOT a crash).
+  t.deepEqual(Array.from(read[0].shuffleIndices as Uint8Array), pattern)
+  // Process intact: a fresh build still works.
+  t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
+})
+
+test('CH-fix3 (detaching `seq` edge getter, shuffle): the edge walk (AFTER decode_element_shallow returns) that detaches shuffleIndices cannot dangle it', (t) => {
+  const pattern = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  const buf = new ArrayBuffer(16)
+  new Uint8Array(buf).set(pattern)
+  let getterRan = false
+  // The `seq`/`consequent`/`alternative` edges are walked by the DRIVER in the
+  // caller, AFTER `decode_element_shallow` returns (and thus after the snapshot).
+  // A detaching edge getter therefore also fires post-snapshot — proving the
+  // edge-walk path is covered too, not just the in-element `labels` read.
+  const shuffle = {
+    type: 'I8x16Shuffle',
+    shuffleIndices: new Uint8Array(buf),
+    get seq() {
+      getterRan = true
+      detach(buf)
+      return undefined
+    },
+  }
+  const m = empty()
+  const idx = m.buildFunction([], [], [], [shuffle] as unknown as InstrDesc[])
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.true(getterRan)
+  t.is(buf.byteLength, 0)
+  t.deepEqual(Array.from(read[0].shuffleIndices as Uint8Array), pattern)
+  t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
+})
+
+test('CH-fix3 (detaching getter, V128 const): a sibling getter that detaches the V128 const buffer AFTER the decode cannot dangle it — snapshot wins', (t) => {
+  const pattern = [0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb]
+  const buf = new ArrayBuffer(16)
+  new Uint8Array(buf).set(pattern)
+  let getterRan = false
+  const desc = {
+    type: 'Const',
+    value: { type: 'V128', value: new Uint8Array(buf) },
+    get labels() {
+      getterRan = true
+      detach(buf)
+      return undefined
+    },
+  }
+  const m = empty()
+  const idx = m.buildFunction([], [], [], [desc] as unknown as InstrDesc[])
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.true(getterRan)
+  t.is(buf.byteLength, 0)
+  const v = read[0].value as { type: 'V128'; value: Uint8Array }
+  t.is(v.type, 'V128')
+  t.deepEqual(Array.from(v.value), pattern)
+  t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
+})
+
+test('CH-fix3 (already-detached at snapshot, V128): a buffer detached DURING the derived decode degrades to a catchable length error, never a UAF', (t) => {
+  const buf = new ArrayBuffer(16)
+  new Uint8Array(buf).fill(0xaa)
+  let trapRan = false
+  // `detachTrap` is an own getter enumerated by the copy loop, which runs it
+  // (invoking `transfer()`) BEFORE the derived decode reads `value.value`. So the
+  // derived decode captures an ALREADY-detached (length-0) view. The snapshot
+  // re-queries the LIVE typed-array info — sees length 0 — and copies nothing,
+  // NEVER dereferencing the freed pointer; a downstream 16-byte check then rejects
+  // it CATCHABLY ("got 0"). Property order (`type`, `value`, `detachTrap`) makes
+  // the trap fire after `value` is shallow-copied.
+  const desc = {
+    type: 'Const',
+    value: { type: 'V128', value: new Uint8Array(buf) },
+    get detachTrap() {
+      trapRan = true
+      detach(buf)
+      return 1
+    },
+  }
+  const m = empty()
+  t.throws(() => m.buildFunction([], [], [], [desc] as unknown as InstrDesc[]), {
+    message: /v128 const requires exactly 16 bytes, got 0/,
+  })
+  t.true(trapRan)
+  t.is(buf.byteLength, 0)
+  // Process intact: a fresh build still works.
+  t.notThrows(() => empty().buildFunction([], [], [], [{ type: 'Drop' }]))
+})
+
+test('CH-fix3 (snapshot transparency): a NORMAL shuffle + V128 const round-trip byte-identically (the snapshot is transparent for legit input)', (t) => {
+  const shufPattern = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3]
+  const v128Pattern = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+  const body: InstrDesc[] = [
+    { type: 'Const', value: { type: 'V128', value: new Uint8Array(v128Pattern) } },
+    { type: 'I8x16Shuffle', shuffleIndices: new Uint8Array(shufPattern) },
+  ]
+  const m = empty()
+  const idx = m.buildFunction([], [], [], body)
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body) // owned-copy bytes are identical to the input bytes
+})
+
+// Finding B: a Proxy whose `length` trap reports a large HOLE-FREE count. On WASI
+// (emnapi) `napi_get_array_length` accepts a Proxy-of-array and reads that trap,
+// so the decode push-loops actually run — pre-fix an infallible grow toward the
+// reported length OOM-aborts; post-fix the `try_reserve` guard keeps it bounded
+// and catchable. On native V8 the Proxy is rejected catchably at the length read.
+// Either way the process must SURVIVE. A moderate length keeps the run fast while
+// proving boundedness (a real 2**32 would exhaust memory, which the fix's whole
+// point is to avoid). Each test proves survival with an independent fresh build.
+const PROXY_LABELS_LEN = 1 << 16 // 65536: cheap `u32` pushes
+const PROXY_ELEM_LEN = 1 << 13 // 8192: each element is a full descriptor decode
+
+function survives(t: import('ava').ExecutionContext, run: () => void): void {
+  // `run` must either complete or throw CATCHABLY — never abort. If it aborted,
+  // the whole (native or WASI) process would die and tear down the run.
+  try {
+    run()
+  } catch {
+    // a catchable error is an acceptable outcome; the point is no abort
+  }
+  // Independent proof the process is intact: a fresh module still builds + emits.
+  const ok = empty()
+  ok.buildFunction([], [], [], [])
+  t.true(WebAssembly.validate(ok.emitWasm(false)))
+}
+
+test('CH-fix3 (proxy `labels` length): a Proxy `labels` with a huge hole-free length is bounded/fallible — no OOM abort, process survives', (t) => {
+  const labels = new Proxy([], { get: (_t, k) => (k === 'length' ? PROXY_LABELS_LEN : 0) })
+  const m = empty()
+  const body = [
+    { type: 'Block', blockType: { type: 'Empty' }, seq: [{ type: 'BrTable', labels, defaultLabel: 0 }] },
+  ] as unknown as InstrDesc[]
+  survives(t, () => {
+    const idx = m.buildFunction([], [], [], body)
+    m.functions.getByIndex(idx)!.instructions()
+  })
+})
+
+test('CH-fix3 (proxy body length): a Proxy body with a huge hole-free length is bounded/fallible — no OOM abort, process survives', (t) => {
+  const body = new Proxy([], {
+    get: (_t, k) => (k === 'length' ? PROXY_ELEM_LEN : { type: 'Drop' }),
+  }) as unknown as InstrDesc[]
+  const m = empty()
+  survives(t, () => {
+    const idx = m.buildFunction([], [], [], body)
+    m.functions.getByIndex(idx)!.instructions()
+  })
+})
+
+test('CH-fix3 (proxy edge length): a Proxy `seq` edge with a huge hole-free length is bounded/fallible — no OOM abort, process survives', (t) => {
+  const seq = new Proxy([], {
+    get: (_t, k) => (k === 'length' ? PROXY_ELEM_LEN : { type: 'Drop' }),
+  })
+  const body = [{ type: 'Block', blockType: { type: 'Empty' }, seq }] as unknown as InstrDesc[]
+  const m = empty()
+  survives(t, () => {
+    const idx = m.buildFunction([], [], [], body)
+    m.functions.getByIndex(idx)!.instructions()
+  })
 })
 
 // ---------------------------------------------------------------------------
