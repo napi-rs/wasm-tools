@@ -3290,6 +3290,52 @@ test('C7a negative: a struct/array descriptor missing a required field throws ca
   })
 })
 
+// F-fix4 (Codex P2): `ArrayNewFixed.len` is the element count for `array.new_fixed`,
+// carried as `f64` and narrowed LOSSLESSLY through `checked_index` (reject
+// NaN/fraction/negative/>u32::MAX) in BOTH the preflight and emit. Under the OLD
+// `u32` wire type napi applied ToUint32 FIRST, so an out-of-domain `len` silently
+// ALIASED a different valid immediate: `-1` -> 4294967295, `2**32` -> 0, `1.5` -> 1.
+// That silent value corruption is now a catchable throw, matching every other
+// numeric immediate (guard-silent-corruption — still MIRROR-WALRUS, no wasm
+// semantic bound is checked, only lossless u32 fit).
+test('F-fix4 (Codex P2): an out-of-domain ArrayNewFixed len (-1 / 2**32 / 1.5) throws catchably instead of aliasing (arena unchanged)', (t) => {
+  const m = empty()
+  const a = m.types.addArray({ ...ARRAY_ELEMENT }).index
+  // Capture the arena size AFTER adding the array type: a valid typeIndex is
+  // needed so the preflight reaches the `len` check (typeIndex resolves first).
+  const before = m.types.length
+  // -1 ToUint32-aliased to 4294967295 under the old u32 decode; the lossless f64
+  // path rejects it in the PREFLIGHT (checked_index: negative).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNewFixed', typeIndex: a, len: -1 }]), {
+    message: /len must be an integer in 0\.\.=4294967295/,
+  })
+  // 2**32 aliased to 0 (an empty array.new_fixed) under the old decode; now rejected
+  // (> u32::MAX).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNewFixed', typeIndex: a, len: 2 ** 32 }]), {
+    message: /len must be an integer in 0\.\.=4294967295/,
+  })
+  // 1.5 truncated to 1 under the old decode; now rejected (fraction).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'ArrayNewFixed', typeIndex: a, len: 1.5 }]), {
+    message: /len must be an integer in 0\.\.=4294967295/,
+  })
+  // All-or-nothing: every failure was in the preflight (BEFORE FunctionBuilder::new),
+  // so no signature/entry type leaked into the arena...
+  t.is(m.types.length, before)
+  // ...and the process is alive and the module still emits (the WASI proof the bad
+  // len was caught pre-emit, not aborted).
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F-fix4 (Codex P2): a valid ArrayNewFixed len round-trips through the in-memory build/read', (t) => {
+  const m = empty()
+  const a = m.types.addArray({ ...ARRAY_ELEMENT }).index
+  const body: InstrDesc[] = [{ type: 'ArrayNewFixed', typeIndex: a, len: 3 }]
+  const idx = m.buildFunction([], [], [], body)
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+  t.is(read.find((dd) => dd.type === 'ArrayNewFixed')!.len, 3)
+})
+
 // ---------------------------------------------------------------------------
 // C7b: GC reference instructions — the 11 label-free ops (the `br_on_*`
 // label-carriers are C7c). NO new InstrDesc field: CallRef/ReturnCallRef REUSE

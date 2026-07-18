@@ -2468,8 +2468,12 @@ export interface InstrDesc {
    */
   field?: number
   /**
-   * `ArrayNewFixed`: the number of elements taken from the stack (a statically
-   * known immediate). MIRROR-WALRUS: stored verbatim, not validated.
+   * `ArrayNewFixed`: the element count for `array.new_fixed` (a statically known
+   * immediate). Validated LOSSLESSLY (`checked_index`) in BOTH the preflight and
+   * emit, so an out-of-domain JS number is a catchable error, NOT a silent u32
+   * alias — matching every other numeric immediate. (Guard-silent-corruption,
+   * still MIRROR-WALRUS: walrus takes a `u32`; we only reject numbers that don't
+   * LOSSLESSLY fit `u32`, we do NOT range-check against any wasm semantic bound.)
    */
   len?: number
   /**

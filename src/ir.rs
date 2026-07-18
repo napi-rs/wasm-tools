@@ -743,9 +743,13 @@ pub struct InstrDesc {
   /// the GC struct. MIRROR-WALRUS: a plain immediate, stored verbatim and NOT
   /// range-checked against the struct's field count.
   pub field: Option<f64>,
-  /// `ArrayNewFixed`: the number of elements taken from the stack (a statically
-  /// known immediate). MIRROR-WALRUS: stored verbatim, not validated.
-  pub len: Option<u32>,
+  /// `ArrayNewFixed`: the element count for `array.new_fixed` (a statically known
+  /// immediate). Validated LOSSLESSLY (`checked_index`) in BOTH the preflight and
+  /// emit, so an out-of-domain JS number is a catchable error, NOT a silent u32
+  /// alias — matching every other numeric immediate. (Guard-silent-corruption,
+  /// still MIRROR-WALRUS: walrus takes a `u32`; we only reject numbers that don't
+  /// LOSSLESSLY fit `u32`, we do NOT range-check against any wasm semantic bound.)
+  pub len: Option<f64>,
   /// `ArrayCopy`: the SOURCE array type's stable index (the DESTINATION array
   /// type uses `type_index`), mirroring walrus' `ArrayCopy { dst_ty, src_ty }`.
   pub src_type_index: Option<f64>,
@@ -2758,9 +2762,10 @@ fn emit_struct(
 /// guard); `ArrayCopy` resolves BOTH `dst_ty` (`type_index`) and `src_ty`
 /// (`src_type_index`); the data/elem ops additionally resolve a `DataId`/
 /// `ElementId` via [`data_id_at`]/[`element_id_at`]. `ArrayNewFixed`'s `len` is a
-/// plain immediate (MIRROR-WALRUS: verbatim) and `ArrayLen` is fieldless. The
-/// caller only routes the fourteen array discriminants here, so the final arm is
-/// unreachable.
+/// plain immediate (never an arena index) but is still narrowed LOSSLESSLY via
+/// [`checked_index`] so an out-of-domain JS number is a catchable error, not a
+/// silent u32 alias; `ArrayLen` is fieldless. The caller only routes the fourteen
+/// array discriminants here, so the final arm is unreachable.
 #[inline(never)]
 #[allow(clippy::too_many_arguments)]
 fn emit_array(
@@ -2774,10 +2779,11 @@ fn emit_array(
   // data ops, `elem` ONLY in the elem ops — so an irrelevant poisoned index
   // (e.g. `ArrayLen.typeIndex`, `ArrayGet.data`) is ignored by BOTH emit and
   // preflight (`validate_array`). `len` is a plain immediate (never an arena
-  // index), left as `Option<u32>` and emitted verbatim.
+  // index) but is likewise carried as `f64` and narrowed via `checked_index` in
+  // the `ArrayNewFixed` arm (lossless: reject NaN/fraction/negative/>u32::MAX).
   type_index: Option<f64>,
   src_type_index: Option<f64>,
-  len: Option<u32>,
+  len: Option<f64>,
   data: Option<f64>,
   elem: Option<f64>,
 ) -> Result<()> {
@@ -2810,7 +2816,7 @@ fn emit_array(
           "typeIndex",
         )?,
       )?;
-      let len = len.ok_or_else(|| missing("ArrayNewFixed", "len"))?;
+      let len = checked_index(len.ok_or_else(|| missing("ArrayNewFixed", "len"))?, "len")?;
       fb.instr_seq(seq_id).instr(wir::ArrayNewFixed { ty, len });
     }
     "ArrayNewData" => {
@@ -4137,9 +4143,11 @@ fn validate_struct(module: &Module, d: &InstrDesc) -> Result<()> {
 /// destination (`type_index`) THEN the source (`src_type_index`); the data/elem
 /// ops resolve `ty` THEN the `DataId`/`ElementId` (via [`data_id_at`]/
 /// [`element_id_at`]) — a missing preflight resolution re-opens the emit-abort /
-/// partial-mutation defect. `ArrayNewFixed` requires `len` present; `ArrayLen` is
-/// fieldless. The caller only routes the fourteen array discriminants here, so the
-/// final arm is unreachable.
+/// partial-mutation defect. `ArrayNewFixed` requires `len` present AND narrows it
+/// LOSSLESSLY via [`checked_index`] (arm-for-arm with emit, so a bad `len` is
+/// rejected before any `FunctionBuilder` mutation); `ArrayLen` is fieldless. The
+/// caller only routes the fourteen array discriminants here, so the final arm is
+/// unreachable.
 #[inline(never)]
 fn validate_array(module: &Module, d: &InstrDesc) -> Result<()> {
   match d.r#type.as_str() {
@@ -4172,7 +4180,7 @@ fn validate_array(module: &Module, d: &InstrDesc) -> Result<()> {
           "typeIndex",
         )?,
       )?;
-      d.len.ok_or_else(|| missing("ArrayNewFixed", "len"))?;
+      checked_index(d.len.ok_or_else(|| missing("ArrayNewFixed", "len"))?, "len")?;
     }
     "ArrayNewData" => {
       resolve_type_id(
@@ -5192,7 +5200,8 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
     wir::Instr::ArrayNewFixed(e) => {
       let mut d = InstrDesc::new("ArrayNewFixed");
       d.type_index = Some(e.ty.index() as f64);
-      d.len = Some(e.len);
+      // `wir::ArrayNewFixed.len` is a `u32`; widening u32 -> f64 is always lossless.
+      d.len = Some(e.len as f64);
       d
     }
     wir::Instr::ArrayNewData(e) => {
