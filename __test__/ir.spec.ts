@@ -1729,6 +1729,76 @@ test('C6a: reading a module containing a lane-carrier op yields `op` + `lane` (n
   ])
 })
 
+// F-fix2 (Finding 3): the SIMD `lane` immediate is carried as `f64` and narrowed
+// through `checked_lane` (lossless: reject NaN/fraction/negative/>u32, then
+// reject 256..=u32::MAX on the u8 narrow). Under the OLD `u8` decode napi applied
+// ToUint32 first, so `2**32 + k` silently ALIASED lane `k`; that alias is now a
+// catchable throw. Covers BOTH lane surfaces: the operator lane (`Binop`/`Unop`
+// `*ExtractLane*`/`*ReplaceLane`) and the `LoadSimd` load-lane/store-lane kinds.
+test('F-fix2 (Finding 3): an operator lane of 2**32+7 / 1.5 / 300 throws catchably instead of aliasing (arena unchanged)', (t) => {
+  const m = empty()
+  const before = m.types.length
+  // 2**32 + 7 ToUint32-aliased to lane 7 under the old u8 decode; the lossless
+  // f64 path rejects it in the PREFLIGHT (checked_index: > u32::MAX).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Unop', op: 'I8x16ExtractLaneS', lane: 2 ** 32 + 7 }]), {
+    message: /lane must be an integer in 0\.\.=4294967295/,
+  })
+  // A fractional lane is rejected (checked_index rejects the fraction).
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Binop', op: 'I8x16ReplaceLane', lane: 1.5 }]), {
+    message: /lane must be an integer in 0\.\.=4294967295/,
+  })
+  // 300 is a valid u32 but out of the u8 lane domain — rejected on the narrow.
+  t.throws(() => m.buildFunction([], [], [], [{ type: 'Unop', op: 'I8x16ExtractLaneS', lane: 300 }]), {
+    message: /lane must be an integer in 0\.\.=255/,
+  })
+  // All-or-nothing: every failure was in the preflight, so no signature/entry
+  // type leaked into the arena.
+  t.is(m.types.length, before)
+})
+
+test('F-fix2 (Finding 3): a valid operator lane (7) round-trips through the in-memory build/read', (t) => {
+  const m = empty()
+  const idx = m.buildFunction([], [], [], [{ type: 'Unop', op: 'I8x16ExtractLaneS', lane: 7 }])
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, [{ type: 'Unop', op: 'I8x16ExtractLaneS', lane: 7 }])
+})
+
+test('F-fix2 (Finding 3): a LoadSimd load/store-lane kind with a coerced lane throws catchably (arena unchanged)', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null) // memory 0 exists (resolved before the lane check)
+  const before = m.types.length
+  const loadLane = (lane: number): InstrDesc => ({
+    type: 'LoadSimd',
+    memory: 0,
+    loadSimdKind: { type: 'V128Load8Lane', lane },
+    memArg: { align: 1, offset: 0n },
+  })
+  // 2**32 + 3 aliased to lane 3 under the old u8 decode; now a catchable throw.
+  t.throws(() => m.buildFunction([], [], [], [loadLane(2 ** 32 + 3)]), {
+    message: /lane must be an integer in 0\.\.=4294967295/,
+  })
+  t.throws(() => m.buildFunction([], [], [], [loadLane(1.5)]), {
+    message: /lane must be an integer in 0\.\.=4294967295/,
+  })
+  // A store-lane variant, and the 256..=u32::MAX u8-narrow rejection.
+  t.throws(
+    () =>
+      m.buildFunction(
+        [],
+        [],
+        [],
+        [{ type: 'LoadSimd', memory: 0, loadSimdKind: { type: 'V128Store8Lane', lane: 256 }, memArg: { align: 1, offset: 0n } }],
+      ),
+    { message: /lane must be an integer in 0\.\.=255/ },
+  )
+  // All-or-nothing: the lane check runs in the LoadSimd preflight, so the failed
+  // builds left the type arena untouched...
+  t.is(m.types.length, before)
+  // ...and the process is alive and the module still emits (the WASI proof the
+  // bad lane was caught pre-emit, not aborted).
+  t.notThrows(() => m.emitWasm(false))
+})
+
 // ---------------------------------------------------------------------------
 // C2: memory instructions (MemorySize/Grow/Init/Fill/Copy, DataDrop) + the
 // general Load/Store instructions.

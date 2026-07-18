@@ -122,6 +122,22 @@ test('fromBufferWithConfig honors the supplied ModuleConfig', (t) => {
   t.is(customSectionCount(emitted, 'producers'), 0)
 })
 
+// F-fix2 (1-A): the two `&ModuleConfig` factory params carry `#[napi(factory,
+// strict)]`, so the generated instanceof runs BEFORE the type-blind
+// `napi_unwrap` + pointer cast. Passing a DIFFERENT wrapped `#[napi]` class (a
+// WasmModule) — which `napi_unwrap` would otherwise reinterpret as a
+// `walrus::ModuleConfig` (type-confusion UB) — must now throw a CATCHABLE error.
+// ava reaching the next test is itself proof the throw was caught, not an abort.
+test('F-fix2 (1-A): fromBufferWithConfig rejects a wrong wrapped class as config catchably', (t) => {
+  const notAConfig = WasmModule.fromBuffer(emptyModuleBytes())
+  t.throws(() => WasmModule.fromBufferWithConfig(fixtureBytes, notAConfig as unknown as ModuleConfig))
+})
+
+test('F-fix2 (1-A): fromFileWithConfig rejects a wrong wrapped class as config catchably', (t) => {
+  const notAConfig = WasmModule.fromBuffer(emptyModuleBytes())
+  t.throws(() => WasmModule.fromFileWithConfig(FIXTURE, notAConfig as unknown as ModuleConfig))
+})
+
 test('start getter returns the module start function handle', (t) => {
   const m = loadLinks()
   t.truthy(m.start)

@@ -30,7 +30,7 @@ impl WasmModule {
     })
   }
 
-  #[napi(factory)]
+  #[napi(factory, strict)]
   /// Construct a new module from the given path and configuration.
   pub fn from_file_with_config(path: String, config: &ModuleConfig) -> Result<Self> {
     Ok(Self {
@@ -47,7 +47,7 @@ impl WasmModule {
     })
   }
 
-  #[napi(factory)]
+  #[napi(factory, strict)]
   /// Construct a new module from the in-memory wasm buffer and configuration.
   pub fn from_buffer_with_config(bytes: Uint8Array, config: &ModuleConfig) -> Result<Self> {
     Ok(Self {

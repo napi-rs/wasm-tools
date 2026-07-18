@@ -410,42 +410,42 @@ pub enum LoadSimdKind {
   /// Load an 8-bit value into a single lane (`v128.load8_lane`).
   V128Load8Lane {
     /// The lane index the value is loaded into.
-    lane: u8,
+    lane: f64,
   },
   /// Load a 16-bit value into a single lane (`v128.load16_lane`).
   V128Load16Lane {
     /// The lane index the value is loaded into.
-    lane: u8,
+    lane: f64,
   },
   /// Load a 32-bit value into a single lane (`v128.load32_lane`).
   V128Load32Lane {
     /// The lane index the value is loaded into.
-    lane: u8,
+    lane: f64,
   },
   /// Load a 64-bit value into a single lane (`v128.load64_lane`).
   V128Load64Lane {
     /// The lane index the value is loaded into.
-    lane: u8,
+    lane: f64,
   },
   /// Store the 8-bit value of a single lane (`v128.store8_lane`).
   V128Store8Lane {
     /// The lane index whose value is stored.
-    lane: u8,
+    lane: f64,
   },
   /// Store the 16-bit value of a single lane (`v128.store16_lane`).
   V128Store16Lane {
     /// The lane index whose value is stored.
-    lane: u8,
+    lane: f64,
   },
   /// Store the 32-bit value of a single lane (`v128.store32_lane`).
   V128Store32Lane {
     /// The lane index whose value is stored.
-    lane: u8,
+    lane: f64,
   },
   /// Store the 64-bit value of a single lane (`v128.store64_lane`).
   V128Store64Lane {
     /// The lane index whose value is stored.
-    lane: u8,
+    lane: f64,
   },
 }
 
@@ -687,7 +687,7 @@ pub struct InstrDesc {
   /// exactly for the 14 lane ops, paired with `op`; absent for every fieldless
   /// operator. A lane op missing this field is rejected catchably (a lane index
   /// is part of its representation, not a wasm semantic check).
-  pub lane: Option<u8>,
+  pub lane: Option<f64>,
   /// The referenced memory's stable index, for
   /// `MemorySize`/`MemoryGrow`/`MemoryInit`/`MemoryFill`/`Load`/`Store`/
   /// `LoadSimd`, and the DESTINATION memory of `MemoryCopy`.
@@ -1109,8 +1109,12 @@ fn store_kind_from_walrus(kind: wir::StoreKind) -> StoreKind {
 /// `LoadSimdKind` -> walrus. Total 1:1 mapping (the 8 lane variants surface our
 /// named `lane` field as walrus' tuple `(u8)` immediate).
 #[inline(never)]
-fn load_simd_kind_to_walrus(kind: &LoadSimdKind) -> wir::LoadSimdKind {
-  match kind {
+fn load_simd_kind_to_walrus(kind: &LoadSimdKind) -> Result<wir::LoadSimdKind> {
+  // The 8 lane variants carry `lane` as `f64` (decoded losslessly, no ToUint32
+  // coercion); `checked_lane` narrows it to the `u8` walrus stores, rejecting an
+  // out-of-domain lane catchably. Fallible only for those; the 12 fieldless
+  // arms never fail.
+  Ok(match kind {
     LoadSimdKind::Splat8 => wir::LoadSimdKind::Splat8,
     LoadSimdKind::Splat16 => wir::LoadSimdKind::Splat16,
     LoadSimdKind::Splat32 => wir::LoadSimdKind::Splat32,
@@ -1123,15 +1127,29 @@ fn load_simd_kind_to_walrus(kind: &LoadSimdKind) -> wir::LoadSimdKind {
     LoadSimdKind::V128Load32x2U => wir::LoadSimdKind::V128Load32x2U,
     LoadSimdKind::V128Load32Zero => wir::LoadSimdKind::V128Load32Zero,
     LoadSimdKind::V128Load64Zero => wir::LoadSimdKind::V128Load64Zero,
-    LoadSimdKind::V128Load8Lane { lane } => wir::LoadSimdKind::V128Load8Lane(*lane),
-    LoadSimdKind::V128Load16Lane { lane } => wir::LoadSimdKind::V128Load16Lane(*lane),
-    LoadSimdKind::V128Load32Lane { lane } => wir::LoadSimdKind::V128Load32Lane(*lane),
-    LoadSimdKind::V128Load64Lane { lane } => wir::LoadSimdKind::V128Load64Lane(*lane),
-    LoadSimdKind::V128Store8Lane { lane } => wir::LoadSimdKind::V128Store8Lane(*lane),
-    LoadSimdKind::V128Store16Lane { lane } => wir::LoadSimdKind::V128Store16Lane(*lane),
-    LoadSimdKind::V128Store32Lane { lane } => wir::LoadSimdKind::V128Store32Lane(*lane),
-    LoadSimdKind::V128Store64Lane { lane } => wir::LoadSimdKind::V128Store64Lane(*lane),
-  }
+    LoadSimdKind::V128Load8Lane { lane } => wir::LoadSimdKind::V128Load8Lane(checked_lane(*lane)?),
+    LoadSimdKind::V128Load16Lane { lane } => {
+      wir::LoadSimdKind::V128Load16Lane(checked_lane(*lane)?)
+    }
+    LoadSimdKind::V128Load32Lane { lane } => {
+      wir::LoadSimdKind::V128Load32Lane(checked_lane(*lane)?)
+    }
+    LoadSimdKind::V128Load64Lane { lane } => {
+      wir::LoadSimdKind::V128Load64Lane(checked_lane(*lane)?)
+    }
+    LoadSimdKind::V128Store8Lane { lane } => {
+      wir::LoadSimdKind::V128Store8Lane(checked_lane(*lane)?)
+    }
+    LoadSimdKind::V128Store16Lane { lane } => {
+      wir::LoadSimdKind::V128Store16Lane(checked_lane(*lane)?)
+    }
+    LoadSimdKind::V128Store32Lane { lane } => {
+      wir::LoadSimdKind::V128Store32Lane(checked_lane(*lane)?)
+    }
+    LoadSimdKind::V128Store64Lane { lane } => {
+      wir::LoadSimdKind::V128Store64Lane(checked_lane(*lane)?)
+    }
+  })
 }
 
 /// walrus `LoadSimdKind` -> our enum. Total 1:1 mapping.
@@ -1150,14 +1168,14 @@ fn load_simd_kind_from_walrus(kind: wir::LoadSimdKind) -> LoadSimdKind {
     wir::LoadSimdKind::V128Load32x2U => LoadSimdKind::V128Load32x2U,
     wir::LoadSimdKind::V128Load32Zero => LoadSimdKind::V128Load32Zero,
     wir::LoadSimdKind::V128Load64Zero => LoadSimdKind::V128Load64Zero,
-    wir::LoadSimdKind::V128Load8Lane(lane) => LoadSimdKind::V128Load8Lane { lane },
-    wir::LoadSimdKind::V128Load16Lane(lane) => LoadSimdKind::V128Load16Lane { lane },
-    wir::LoadSimdKind::V128Load32Lane(lane) => LoadSimdKind::V128Load32Lane { lane },
-    wir::LoadSimdKind::V128Load64Lane(lane) => LoadSimdKind::V128Load64Lane { lane },
-    wir::LoadSimdKind::V128Store8Lane(lane) => LoadSimdKind::V128Store8Lane { lane },
-    wir::LoadSimdKind::V128Store16Lane(lane) => LoadSimdKind::V128Store16Lane { lane },
-    wir::LoadSimdKind::V128Store32Lane(lane) => LoadSimdKind::V128Store32Lane { lane },
-    wir::LoadSimdKind::V128Store64Lane(lane) => LoadSimdKind::V128Store64Lane { lane },
+    wir::LoadSimdKind::V128Load8Lane(lane) => LoadSimdKind::V128Load8Lane { lane: lane as f64 },
+    wir::LoadSimdKind::V128Load16Lane(lane) => LoadSimdKind::V128Load16Lane { lane: lane as f64 },
+    wir::LoadSimdKind::V128Load32Lane(lane) => LoadSimdKind::V128Load32Lane { lane: lane as f64 },
+    wir::LoadSimdKind::V128Load64Lane(lane) => LoadSimdKind::V128Load64Lane { lane: lane as f64 },
+    wir::LoadSimdKind::V128Store8Lane(lane) => LoadSimdKind::V128Store8Lane { lane: lane as f64 },
+    wir::LoadSimdKind::V128Store16Lane(lane) => LoadSimdKind::V128Store16Lane { lane: lane as f64 },
+    wir::LoadSimdKind::V128Store32Lane(lane) => LoadSimdKind::V128Store32Lane { lane: lane as f64 },
+    wir::LoadSimdKind::V128Store64Lane(lane) => LoadSimdKind::V128Store64Lane { lane: lane as f64 },
   }
 }
 
@@ -1293,6 +1311,21 @@ fn missing_lane(name: &str) -> Error {
   Error::from_reason(format!("SIMD lane op `{name}` requires a `lane` index"))
 }
 
+/// Losslessly validate a SIMD `lane` immediate carried as `f64` and narrow it to
+/// the `u8` walrus stores it as. Mirrors `checked_index` (rejects
+/// NaN/fraction/negative/`> u32::MAX`), then rejects `256..=u32::MAX` on the `u8`
+/// narrow — so an out-of-domain lane throws catchably instead of silently
+/// aliasing via the old ToUint32 `u8` decode (`2**32 + k` -> `k`). A valid lane
+/// `0..=255` passes through losslessly. Consumed at BOTH the emit and the
+/// preflight sites of every lane-carrying op (operator `*_from_str` lane arm +
+/// `load_simd_kind_to_walrus`), so a bad lane is rejected in the preflight with
+/// the arena unchanged.
+fn checked_lane(lane: f64) -> Result<u8> {
+  let n = checked_index(lane, "lane")?;
+  u8::try_from(n)
+    .map_err(|_| Error::from_reason(format!("lane must be an integer in 0..=255, got {n}")))
+}
+
 /// Generate the two string-conversion functions (and test-only slices of the
 /// fieldless and lane variants) for one walrus operator enum from a single
 /// variant list — the single source of truth for both directions.
@@ -1331,13 +1364,17 @@ macro_rules! str_enum {
       }
     }
 
+    // `lane` is carried as `Option<f64>` (decoded losslessly, no ToUint32
+    // coercion). A fieldless name ignores it entirely (a spurious lane on a
+    // fieldless op is dropped, unchanged); a lane name narrows it through
+    // `checked_lane`, which rejects an out-of-domain lane catchably.
     #[inline(never)]
     #[allow(unused_variables)]
-    fn $from_str(s: &str, lane: Option<u8>) -> Result<$Enum> {
+    fn $from_str(s: &str, lane: Option<f64>) -> Result<$Enum> {
       Ok(match s {
         $( stringify!($fl) => $Enum::$fl, )*
         $( stringify!($ln) => $Enum::$ln {
-          idx: lane.ok_or_else(|| missing_lane(stringify!($ln)))?,
+          idx: checked_lane(lane.ok_or_else(|| missing_lane(stringify!($ln)))?)?,
         }, )*
         other => return Err(unknown_op($kind, other)),
       })
@@ -2581,8 +2618,11 @@ fn emit_shuffle(
 /// the converted `wir::LoadSimdKind`, and the `wir::MemArg` live in this
 /// function's OWN frame, not the recursive `emit_one` frame. Resolves `memory`
 /// (the abort guard), converts the `MemArg` (offset losslessness) and the
-/// `LoadSimdKind` (a plain value — no id to resolve). MIRROR-WALRUS: the lane
-/// index and alignment are emitted verbatim, unchecked.
+/// `LoadSimdKind` (a plain value — no id to resolve; the lane variants' `lane`
+/// is narrowed losslessly by `checked_lane`, so an out-of-domain lane throws
+/// catchably). MIRROR-WALRUS: the (in-range) lane index and the alignment are
+/// still emitted verbatim — no wasm semantic check against the vector's lane
+/// count.
 #[inline(never)]
 fn emit_load_simd(
   fb: &mut FunctionBuilder,
@@ -2602,7 +2642,7 @@ fn emit_load_simd(
     )?,
   )?;
   let kind =
-    load_simd_kind_to_walrus(&load_simd_kind.ok_or_else(|| missing("LoadSimd", "loadSimdKind"))?);
+    load_simd_kind_to_walrus(&load_simd_kind.ok_or_else(|| missing("LoadSimd", "loadSimdKind"))?)?;
   let arg = mem_arg_to_walrus(&mem_arg.ok_or_else(|| missing("LoadSimd", "memArg"))?)?;
   fb.instr_seq(seq_id)
     .instr(wir::LoadSimd { memory, kind, arg });
@@ -3484,9 +3524,12 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
     // SIMD vector load / load-lane / store-lane. Mirrors emit exactly (the abort
     // guard + the missing-field + offset-losslessness checks): `memory` resolves,
     // `loadSimdKind` is present, and the `MemArg` offset is a lossless `u64`. The
-    // kind is a value (its lane index needs no resolution), so nothing else is
-    // checked — this arm's shape matches `Store`, so it does not grow the walker's
-    // frame; the 20-arm kind conversion stays behind `emit_load_simd`.
+    // kind carries no ids, but a lane variant's `lane` is a VERBATIM immediate
+    // walrus never range-checks — so `load_simd_kind_to_walrus` (which narrows it
+    // through `checked_lane`) MUST run HERE in the preflight too, so an
+    // out-of-domain lane is rejected before `FunctionBuilder::new` with the arena
+    // unchanged (all-or-nothing), not only at emit. This arm's shape still matches
+    // `Store`; the 20-arm kind conversion stays behind the helper.
     "LoadSimd" => {
       memory_id_at(
         module,
@@ -3495,9 +3538,11 @@ fn validate_one(module: &Module, d: &InstrDesc, label_len: usize) -> Result<()> 
           "memory",
         )?,
       )?;
-      d.load_simd_kind
-        .as_ref()
-        .ok_or_else(|| missing("LoadSimd", "loadSimdKind"))?;
+      load_simd_kind_to_walrus(
+        d.load_simd_kind
+          .as_ref()
+          .ok_or_else(|| missing("LoadSimd", "loadSimdKind"))?,
+      )?;
       mem_arg_to_walrus(
         d.mem_arg
           .as_ref()
@@ -4806,14 +4851,14 @@ fn read_leaf(instr: &wir::Instr, label_stack: &[wir::InstrSeqId]) -> Result<Inst
       let mut d = InstrDesc::new("Binop");
       let (name, lane) = binop_to_str(&b.op);
       d.op = Some(name.to_string());
-      d.lane = lane;
+      d.lane = lane.map(|l| l as f64);
       d
     }
     wir::Instr::Unop(u) => {
       let mut d = InstrDesc::new("Unop");
       let (name, lane) = unop_to_str(&u.op);
       d.op = Some(name.to_string());
-      d.lane = lane;
+      d.lane = lane.map(|l| l as f64);
       d
     }
     wir::Instr::TernOp(t) => {
@@ -5264,7 +5309,7 @@ mod tests {
   fn check_roundtrip<T: std::fmt::Debug>(
     all: &[T],
     to_str: fn(&T) -> (&'static str, Option<u8>),
-    from_str: fn(&str, Option<u8>) -> Result<T>,
+    from_str: fn(&str, Option<f64>) -> Result<T>,
   ) {
     let mut names = HashSet::new();
     for v in all {
@@ -5289,7 +5334,7 @@ mod tests {
   fn check_lane_roundtrip<T: std::fmt::Debug>(
     all: &[T],
     to_str: fn(&T) -> (&'static str, Option<u8>),
-    from_str: fn(&str, Option<u8>) -> Result<T>,
+    from_str: fn(&str, Option<f64>) -> Result<T>,
   ) {
     let mut names = HashSet::new();
     for v in all {
@@ -5301,7 +5346,7 @@ mod tests {
         from_str(name, None).is_err(),
         "lane op `{name}` must require a lane"
       );
-      let back = from_str(name, Some(7)).expect("a lane name + lane must build the variant");
+      let back = from_str(name, Some(7.0)).expect("a lane name + lane must build the variant");
       assert_eq!(
         format!("{v:?}"),
         format!("{back:?}"),
@@ -5345,6 +5390,6 @@ mod tests {
     // and a spurious lane on a fieldless name is simply ignored.
     assert!(binop_from_str("NotARealOp", None).is_err());
     assert!(ternop_from_str("", None).is_err());
-    assert!(binop_from_str("I32Add", Some(3)).is_ok());
+    assert!(binop_from_str("I32Add", Some(3.0)).is_ok());
   }
 }
