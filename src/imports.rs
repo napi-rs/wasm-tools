@@ -101,7 +101,7 @@ impl WasmImports {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Delete an import from the module. Takes the handle itself: a JS number can
   /// never be turned back into a walrus id, so the wrapper is the only way to
   /// name an item for removal.
@@ -136,7 +136,7 @@ impl WasmImports {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Add an imported function under `moduleName`/`name`, returning a live handle
   /// to the newly created (imported) function. The import record itself is
   /// reachable via the returned handle's `import()`.
@@ -304,7 +304,7 @@ impl WasmImports {
     })
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Add an imported tag under `moduleName`/`name`, returning a live handle to
   /// the newly created (imported) tag. `ty` is the tag's (function) type
   /// signature — for an exception tag its params are the exception's payload

@@ -91,7 +91,7 @@ impl WasmGlobals {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Delete a global from the module. Takes the handle itself: a JS number can
   /// never be turned back into a walrus id, so the wrapper is the only way to
   /// name an item for removal.
@@ -120,7 +120,7 @@ impl WasmGlobals {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Add a new locally defined global, returning a live handle to it.
   ///
   /// `ty` is the global's value type (e.g. `{ type: 'I32' }` or a `Ref`), and

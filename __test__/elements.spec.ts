@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 import test from 'ava'
 
-import { ConstExpr, WasmModule } from '../index'
+import { ConstExpr, WasmFunction, WasmGlobal, WasmModule, WasmTable, WasmType } from '../index'
 
 const __dirname = join(fileURLToPath(import.meta.url), '..')
 
@@ -219,7 +219,7 @@ const FUNC_HEAP = { type: 'Abstract', kind: 'Func' } as const
 test('addFunctions(Active) writes through emit + re-parse as an active Functions segment', (t) => {
   const m = load()
   const table = m.tables.items()[0]
-  const seg = m.elements.addFunctions('Active', table, ConstExpr.i32(0), [0])
+  const seg = m.elements.addFunctions('Active', [0], table, ConstExpr.i32(0))
   seg.name = 'added_active'
   t.is(seg.kind, 'Active')
   t.is(seg.itemsKind, 'Functions')
@@ -248,7 +248,7 @@ test('addFunctions(Active) writes through emit + re-parse as an active Functions
 test('addFunctions(Active) inserts the elem_segments back-link so the segment survives gc()', (t) => {
   const m = loadRooted()
   const table = m.tables.items()[0]
-  const seg = m.elements.addFunctions('Active', table, ConstExpr.i32(0), [0])
+  const seg = m.elements.addFunctions('Active', [0], table, ConstExpr.i32(0))
   seg.name = 'survivor'
   t.is(m.elements.length, 2)
 
@@ -263,7 +263,7 @@ test('addFunctions(Active) inserts the elem_segments back-link so the segment su
 
 test('addFunctions(Passive) writes through emit + re-parse as a passive Functions segment', (t) => {
   const m = load()
-  const seg = m.elements.addFunctions('Passive', null, null, [0])
+  const seg = m.elements.addFunctions('Passive', [0])
   seg.name = 'added_passive'
   t.is(seg.kind, 'Passive')
   t.is(seg.table(), null)
@@ -287,10 +287,7 @@ test('addFunctions(Passive) writes through emit + re-parse as a passive Function
 test('addExpressions(Passive) writes through emit + re-parse as a passive Expressions segment', (t) => {
   const m = load()
   const func = m.functions.items()[0]
-  const seg = m.elements.addExpressions('Passive', null, null, FUNCREF, [
-    ConstExpr.refFunc(func),
-    ConstExpr.refNull(FUNC_HEAP),
-  ])
+  const seg = m.elements.addExpressions('Passive', FUNCREF, [ConstExpr.refFunc(func), ConstExpr.refNull(FUNC_HEAP)])
   seg.name = 'passive_exprs'
   t.is(seg.kind, 'Passive')
   t.is(seg.itemsKind, 'Expressions')
@@ -313,7 +310,7 @@ test('addExpressions(Passive) writes through emit + re-parse as a passive Expres
 
 test('addFunctions(Active) without a table/offset throws catchably and leaves the module unchanged', (t) => {
   const m = load()
-  const err = t.throws(() => m.elements.addFunctions('Active', null, null, [0]))
+  const err = t.throws(() => m.elements.addFunctions('Active', [0]))
   t.regex(err!.message, /active element segment requires a table and offset/)
   t.is(m.elements.length, 2)
 })
@@ -321,21 +318,21 @@ test('addFunctions(Active) without a table/offset throws catchably and leaves th
 test('addFunctions(Passive) WITH a table/offset throws catchably (no silent corruption) and leaves the module unchanged', (t) => {
   const m = load()
   const table = m.tables.items()[0]
-  const err = t.throws(() => m.elements.addFunctions('Passive', table, ConstExpr.i32(0), [0]))
+  const err = t.throws(() => m.elements.addFunctions('Passive', [0], table, ConstExpr.i32(0)))
   t.regex(err!.message, /only valid for an active element segment/)
   t.is(m.elements.length, 2)
 })
 
 test('addFunctions rejects a funcIndex naming no live function and leaves the module unchanged', (t) => {
   const m = load()
-  const err = t.throws(() => m.elements.addFunctions('Passive', null, null, [999]))
+  const err = t.throws(() => m.elements.addFunctions('Passive', [999]))
   t.regex(err!.message, /no function at index 999/)
   t.is(m.elements.length, 2)
 })
 
 test('addExpressions rejects a non-reference elementTy and leaves the module unchanged', (t) => {
   const m = load()
-  const err = t.throws(() => m.elements.addExpressions('Passive', null, null, { type: 'I32' }, []))
+  const err = t.throws(() => m.elements.addExpressions('Passive', { type: 'I32' }, []))
   t.regex(err!.message, /reference type/)
   t.is(m.elements.length, 2)
 })
@@ -351,7 +348,16 @@ function sparseHuge(): never[] {
 
 test('addFunctions rejects a huge sparse funcIndices array instead of aborting', (t) => {
   const m = load()
-  t.throws(() => m.elements.addFunctions('Passive', null, null, sparseHuge()))
+  t.throws(() => m.elements.addFunctions('Passive', sparseHuge()))
+  t.is(m.elements.length, 2)
+})
+
+test('addExpressions rejects a huge sparse exprs array instead of aborting', (t) => {
+  const m = load()
+  // Same abort-safety guard for the ConstExpr list: SafeVec grows
+  // non-preallocating, so the untrusted ~2**32 `.length` never reaches a
+  // `with_capacity`; the first sparse hole fails catchably at decode.
+  t.throws(() => m.elements.addExpressions('Passive', FUNCREF, sparseHuge()))
   t.is(m.elements.length, 2)
 })
 
@@ -373,7 +379,7 @@ test('a refFunc off a DELETED function is rejected catchably at the consume site
   // module is not emitted here — only the consume-site guard is exercised.)
   m.functions.delete(func)
 
-  const err = t.throws(() => m.elements.addExpressions('Passive', null, null, FUNCREF, [rf]))
+  const err = t.throws(() => m.elements.addExpressions('Passive', FUNCREF, [rf]))
   t.regex(err!.message, /function that is not in this module/)
   t.is(m.elements.length, 2)
 })
@@ -382,6 +388,110 @@ test('addExpressions rejects a non-ConstExpr array element instead of type-confu
   const m = load()
   const table = m.tables.items()[0]
   // A WasmTable is a different #[napi] class; the instanceof guard must reject it.
-  t.throws(() => m.elements.addExpressions('Passive', null, null, FUNCREF, [table as unknown as ConstExpr]))
+  t.throws(() => m.elements.addExpressions('Passive', FUNCREF, [table as unknown as ConstExpr]))
+  t.is(m.elements.length, 2)
+})
+
+// ---------------------------------------------------------------------------
+// F1 (whole-binding hardening): every SCALAR handle-ref param (`&Wasm*` /
+// `&ConstExpr`) is `#[napi(strict)]`, so the generated instanceof runs BEFORE
+// the type-blind `napi_unwrap` + pointer cast. Passing a DIFFERENT wrapped
+// `#[napi]` class — which `napi_unwrap` would reinterpret as the wrong Rust
+// type (UB), unlike a plain object which fails catchably in `napi_unwrap` — must
+// now throw a CATCHABLE error. A representative spread of handle classes at
+// scalar positions; ava reaching the next test is itself proof the throw was
+// catchable, not a process abort. (The list-element `&ConstExpr` case is
+// covered by the addExpressions non-ConstExpr test above.)
+// ---------------------------------------------------------------------------
+
+test('F1: scalar &WasmTable param rejects a wrong wrapped class catchably (exports.addTable)', (t) => {
+  const m = load()
+  const notATable = m.functions.items()[0] // a WasmFunction, a different wrapped class
+  t.throws(() => m.exports.addTable('x', notATable as unknown as WasmTable))
+})
+
+test('F1: scalar &WasmFunction param rejects a wrong wrapped class catchably (ConstExpr.refFunc)', (t) => {
+  const m = load()
+  const notAFunction = m.tables.items()[0] // a WasmTable
+  t.throws(() => ConstExpr.refFunc(notAFunction as unknown as WasmFunction))
+})
+
+test('F1: scalar &WasmGlobal param rejects a wrong wrapped class catchably (ConstExpr.globalGet)', (t) => {
+  const m = load()
+  const notAGlobal = m.tables.items()[0] // a WasmTable
+  t.throws(() => ConstExpr.globalGet(notAGlobal as unknown as WasmGlobal))
+})
+
+test('F1: scalar &WasmType param rejects a wrong wrapped class catchably (tags.add)', (t) => {
+  const m = load()
+  const notAType = m.functions.items()[0] // a WasmFunction
+  t.throws(() => m.tags.add(notAType as unknown as WasmType))
+})
+
+test('F1: scalar &ConstExpr param rejects a wrong wrapped class catchably (addFunctions offset)', (t) => {
+  const m = load()
+  const table = m.tables.items()[0]
+  // `offset` expects a ConstExpr; a WasmTable is a different wrapped class. It is
+  // rejected at decode (strict validate), so the module is left untouched.
+  t.throws(() => m.elements.addFunctions('Active', [0], table, table as unknown as ConstExpr))
+  t.is(m.elements.length, 2)
+})
+
+// ---------------------------------------------------------------------------
+// F2 (element re-entrancy): the item list decodes BEFORE the `table`/`offset`
+// handle refs, so no borrowed `&WasmTable` is held live while `SafeVec`'s
+// per-element getter runs arbitrary JS. A getter that synchronously calls a
+// `&mut` setter on the same table (`table.name = ...`) therefore cannot form a
+// `&`/`&mut` alias. The call must complete (or throw) WITHOUT aborting the
+// worker — this test finishing, and later tests running, is the proof.
+// ---------------------------------------------------------------------------
+
+test('F2: a re-entrant funcIndices getter mutating the table during decode does not abort', (t) => {
+  const m = load()
+  const table = m.tables.items()[0]
+  const offset = ConstExpr.i32(0)
+
+  // A real array (Array.isArray stays true, passing SafeVec's validate) with an
+  // integer-indexed accessor at [0] that re-enters a &mut setter on the SAME
+  // table handle mid-decode.
+  const arr: number[] = []
+  Object.defineProperty(arr, 0, {
+    enumerable: true,
+    configurable: true,
+    get() {
+      table.name = 'reentrant'
+      return 0
+    },
+  })
+  t.is(arr.length, 1) // defining index 0 bumped the array length
+
+  const seg = m.elements.addFunctions('Active', arr, table, offset)
+  t.is(seg.kind, 'Active')
+  t.is(seg.itemsKind, 'Functions')
+  // The getter's &mut side effect landed and the process is intact.
+  t.is(table.name, 'reentrant')
+})
+
+// ---------------------------------------------------------------------------
+// F3 (ConstExprArg Extended deep-clone): `Extended` is the sole heap-owning
+// ConstExpr variant; `ConstExprArg::from_napi_value` now rejects it BEFORE the
+// infallible `handle.inner.clone()`, closing the unbounded-deep-clone abort. It
+// is invalid at this consume site anyway (`validate_const_expr` rejects it), so
+// the early reject is behavior-preserving and CATCHABLE.
+// ---------------------------------------------------------------------------
+
+const EXTENDED_FIXTURE = join(__dirname, 'fixtures', 'extended-const.wasm')
+const extendedBytes = readFileSync(EXTENDED_FIXTURE)
+
+test('F3: an Extended const expr handle is rejected catchably in addExpressions (no clone abort)', (t) => {
+  const m = load()
+  // A genuine Extended ConstExpr: the fixture's exported global has a multi-op
+  // (array.new_fixed) initializer, which walrus parses to ConstExpr::Extended.
+  const src = WasmModule.fromBuffer(extendedBytes)
+  const extended = src.globals.items()[0].init()!
+  t.is(extended.kind, 'Extended') // it really is the heap-owning variant
+
+  const err = t.throws(() => m.elements.addExpressions('Passive', FUNCREF, [extended]))
+  t.regex(err!.message, /extended const expression/)
   t.is(m.elements.length, 2)
 })

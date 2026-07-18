@@ -74,7 +74,7 @@ impl WasmDataSegments {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Delete a data segment from the module. Takes the handle itself: a JS number
   /// can never be turned back into a walrus id, so the wrapper is the only way to
   /// name an item for removal.
@@ -146,7 +146,7 @@ impl WasmDataSegments {
     })
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Add a new active data segment, returning a live handle to it.
   ///
   /// An active segment is copied into `memory` at `offset` (a constant

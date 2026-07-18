@@ -91,7 +91,7 @@ impl ConstExpr {
 
   /// A constant that reads the current value of another global
   /// (`global.get $g`).
-  #[napi(factory)]
+  #[napi(factory, strict)]
   pub fn global_get(global: &WasmGlobal) -> Self {
     Self {
       inner: walrus::ConstExpr::Global(global.id),
@@ -110,7 +110,7 @@ impl ConstExpr {
   /// off a foreign/deleted function handle is caught catchably where it is used,
   /// never as a process-aborting emit-time panic. Adds no new abort surface
   /// (identical risk profile to `global_get`).
-  #[napi(factory)]
+  #[napi(factory, strict)]
   pub fn ref_func(func: &WasmFunction) -> Self {
     Self {
       inner: walrus::ConstExpr::RefFunc(func.id),
@@ -180,6 +180,23 @@ impl FromNapiValue for ConstExprArg {
     unsafe { <&ConstExpr as ValidateNapiValue>::validate(env, napi_val)? };
     let handle: &ConstExpr =
       unsafe { <&ConstExpr as FromNapiValue>::from_napi_value(env, napi_val)? };
+    // Reject `Extended` BEFORE the clone below. `Extended(Vec<ConstOp>)` is the
+    // ONLY heap-owning `walrus::ConstExpr` variant, so this per-element clone is
+    // O(1) for every other variant but an unbounded, INFALLIBLE heap allocation
+    // for `Extended`. `SafeVec`'s `try_reserve` guards only its own backing
+    // array, NOT this inner `Vec<ConstOp>` clone — so a hostile array whose
+    // getter returns an `Extended`-bearing handle for every index could drive
+    // `handle_alloc_error` (an uncatchable process abort, worse under WASI
+    // `panic=abort`) BEFORE the post-decode `validate_const_expr`
+    // (`add_expressions`) ever runs. Extended const exprs are invalid at that
+    // consume site anyway (`crate::handle::validate_const_expr` rejects them) and
+    // this newtype is used ONLY by `add_expressions`, so a fast catchable reject
+    // here is behavior-preserving and removes the deep-clone abort surface.
+    if matches!(handle.inner, walrus::ConstExpr::Extended(_)) {
+      return Err(napi::Error::from_reason(
+        "an extended const expression is not valid as an element expression",
+      ));
+    }
     Ok(ConstExprArg(handle.inner.clone()))
   }
 }

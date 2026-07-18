@@ -410,7 +410,7 @@ export declare class WasmElements {
    * matched to `table64`); a stored-but-invalid module is the caller's
    * responsibility, catchable via `WebAssembly.validate` / re-parse.
    */
-  addFunctions(kind: ElementKindTag, table: WasmTable | undefined | null, offset: ConstExpr | undefined | null, funcIndices: Array<number>): WasmElement
+  addFunctions(kind: ElementKindTag, funcIndices: Array<number>, table?: WasmTable | undefined | null, offset?: ConstExpr | undefined | null): WasmElement
   /**
    * Add a new element segment whose items are constant EXPRESSIONS
    * (`ElementItems::Expressions`), returning a live handle to it.
@@ -431,7 +431,7 @@ export declare class WasmElements {
    * the caller's responsibility, catchable via `WebAssembly.validate` /
    * re-parse.
    */
-  addExpressions(kind: ElementKindTag, table: WasmTable | undefined | null, offset: ConstExpr | undefined | null, elementTy: ValType, exprs: Array<ConstExpr>): WasmElement
+  addExpressions(kind: ElementKindTag, elementTy: ValType, exprs: Array<ConstExpr>, table?: WasmTable | undefined | null, offset?: ConstExpr | undefined | null): WasmElement
 }
 
 /**

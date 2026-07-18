@@ -103,7 +103,7 @@ impl WasmExports {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Delete an export from the module. Takes the handle itself: a JS number can
   /// never be turned back into a walrus id, so the wrapper is the only way to
   /// name an item for removal.
@@ -131,7 +131,7 @@ impl WasmExports {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Export the given function under `name`, returning a live handle to the new
   /// export.
   ///
@@ -159,7 +159,7 @@ impl WasmExports {
     })
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Export the given table under `name`, returning a live handle to the new
   /// export. The table must belong to THIS module (id-ref guard; see
   /// [`WasmExports::add_function`]).
@@ -176,7 +176,7 @@ impl WasmExports {
     })
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Export the given memory under `name`, returning a live handle to the new
   /// export. The memory must belong to THIS module (id-ref guard; see
   /// [`WasmExports::add_function`]).
@@ -199,7 +199,7 @@ impl WasmExports {
     })
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Export the given global under `name`, returning a live handle to the new
   /// export. The global must belong to THIS module (id-ref guard; see
   /// [`WasmExports::add_function`]).
@@ -222,7 +222,7 @@ impl WasmExports {
     })
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Export the given tag under `name`, returning a live handle to the new
   /// export. The tag must belong to THIS module (id-ref guard; see
   /// [`WasmExports::add_function`]).

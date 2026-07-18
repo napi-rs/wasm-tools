@@ -100,7 +100,7 @@ impl WasmElements {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Delete an element segment from the module. Takes the handle itself: a JS
   /// number can never be turned back into a walrus id, so the wrapper is the
   /// only way to name an item for removal.
@@ -157,7 +157,7 @@ impl WasmElements {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Add a new element segment whose items are FUNCTION references
   /// (`ElementItems::Functions`), returning a live handle to it.
   ///
@@ -182,13 +182,23 @@ impl WasmElements {
     &mut self,
     env: Env,
     kind: ElementKindTag,
-    table: Option<&WasmTable>,
-    offset: Option<&ConstExpr>,
     // `SafeVec` decodes NON-preallocating (see `src/safevec.rs`), so a
     // sparse-huge JS `.length` fails catchably instead of aborting on
     // `with_capacity`; `ts_arg_type` keeps the generated `.d.ts` reading
     // `Array<number>`.
+    //
+    // Declared BEFORE `table`/`offset` so it decodes FIRST: napi materializes
+    // args in declaration order and holds each live until the body. This list's
+    // per-element `napi_get_element` runs any user-defined integer-indexed
+    // array getter (arbitrary JS), which could synchronously re-enter a `&mut`
+    // setter on `table` (`table.name = ...`). If a borrowed `&WasmTable` were
+    // held live across this decode, that re-entrant `&mut WasmTable` would alias
+    // it — Rust aliasing UB. Decoding the list before the handle refs closes the
+    // window: no handle is live while the getter runs, and the handles unwrap
+    // afterward with no JS callback in flight.
     #[napi(ts_arg_type = "Array<number>")] func_indices: SafeVec<f64>,
+    table: Option<&WasmTable>,
+    offset: Option<&ConstExpr>,
   ) -> Result<WasmElement> {
     // Resolve + validate the kind (table liveness, offset provenance) BEFORE any
     // mutation, so a rejected add leaves the module completely unchanged.
@@ -218,7 +228,7 @@ impl WasmElements {
     })
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Add a new element segment whose items are constant EXPRESSIONS
   /// (`ElementItems::Expressions`), returning a live handle to it.
   ///
@@ -241,14 +251,25 @@ impl WasmElements {
     &mut self,
     env: Env,
     kind: ElementKindTag,
-    table: Option<&WasmTable>,
-    offset: Option<&ConstExpr>,
     element_ty: ValType,
     // Each element is decoded through the abort-safe [`ConstExprArg`] (the same
     // instanceof-guarded unwrap as a derived `&ConstExpr` param), and `SafeVec`
     // grows non-preallocating (see `src/safevec.rs`); `ts_arg_type` keeps the
     // generated `.d.ts` reading `Array<ConstExpr>`.
+    //
+    // `element_ty` and `exprs` are declared BEFORE `table`/`offset` so they
+    // decode FIRST (napi materializes args in declaration order, each held live
+    // until the body). Both run user JS during decode — the `SafeVec` element
+    // getter (`napi_get_element`) and `element_ty`'s object property reads
+    // (`napi_get_named_property`, which fire any user-defined accessor) — either
+    // of which could synchronously re-enter a `&mut` setter on `table`. Holding
+    // a borrowed `&WasmTable` live across them would let that re-entrant
+    // `&mut WasmTable` alias it (Rust aliasing UB). Decoding them before the
+    // handle refs closes the window: the handles unwrap afterward with no JS
+    // callback in flight.
     #[napi(ts_arg_type = "Array<ConstExpr>")] exprs: SafeVec<ConstExprArg>,
+    table: Option<&WasmTable>,
+    offset: Option<&ConstExpr>,
   ) -> Result<WasmElement> {
     // Resolve + validate the kind BEFORE any mutation.
     let (element_kind, active_table) = self.resolve_element_kind(kind, table, offset)?;

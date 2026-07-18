@@ -98,7 +98,7 @@ impl WasmFunctions {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Delete a function from the module. Takes the handle itself: a JS number can
   /// never be turned back into a walrus id, so the wrapper is the only way to
   /// name an item for removal.

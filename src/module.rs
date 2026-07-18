@@ -459,7 +459,7 @@ impl WasmModule {
     }
   }
 
-  #[napi(setter)]
+  #[napi(setter, strict)]
   /// Set (or clear, with `null`) this module's start function.
   ///
   /// Id-ref guarded: walrus stores the raw `FunctionId` and resolves it to an

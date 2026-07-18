@@ -71,7 +71,7 @@ impl WasmTags {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Delete a tag from the module. Takes the handle itself: a JS number can
   /// never be turned back into a walrus id, so the wrapper is the only way to
   /// name an item for removal.
@@ -99,7 +99,7 @@ impl WasmTags {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Add a new locally defined tag with the given type, returning a live handle
   /// to it. `ty` is the tag's (function) type signature — for an exception tag
   /// its params are the exception's payload value types.

@@ -161,7 +161,7 @@ impl WasmTypes {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Delete a type from the module. Takes the handle itself: a JS number can
   /// never be turned back into a walrus id, so the wrapper is the only way to
   /// name an item for removal.
@@ -298,7 +298,7 @@ impl WasmTypes {
     })
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Add a composite type — a `Struct`, `Array`, or `Function` — with explicit
   /// subtyping controls, returning a live handle. This generalizes
   /// [`WasmTypes::add_struct`] / [`WasmTypes::add_array`] (which hardcode

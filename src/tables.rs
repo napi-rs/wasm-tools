@@ -76,7 +76,7 @@ impl WasmTables {
     }
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Delete a table from the module. Takes the handle itself: a JS number can
   /// never be turned back into a walrus id, so the wrapper is the only way to
   /// name an item for removal.
@@ -158,7 +158,7 @@ impl WasmTables {
     })
   }
 
-  #[napi]
+  #[napi(strict)]
   /// Add a new locally defined table WITH an optional initializer expression,
   /// returning a live handle to it.
   ///
