@@ -1,3 +1,34 @@
+//! Shared helpers for the item-handle wrappers (`WasmGlobal`, `WasmFunction`,
+//! `WasmType`, …) and their arena-id validation.
+//!
+//! # Known limitation: `&T` handle-param type confusion (findings 1-B / 1-C)
+//!
+//! Every method that takes a handle by reference — `delete(&WasmGlobal)`,
+//! `addLocal(init: &ConstExpr)`, the `&ModuleConfig` factories, … — is marked
+//! `#[napi(strict)]`, so napi-rs inserts an `napi_instanceof` check before it
+//! unwraps the JS object to its Rust `Box<T>`. That rejects a plain wrong-class
+//! argument, which is finding 1-B (a non-strict `&T` param blind-unwraps and
+//! casts `*mut c_void -> *mut T` with no check at all).
+//!
+//! It does NOT close the prototype-spoof hole, finding 1-C: `instanceof` is
+//! prototype-based, so a REAL wrapped instance of the wrong class, re-parented
+//! with `Object.setPrototypeOf(wrongInstance, RightClass.prototype)`, passes the
+//! `instanceof` check while its wrapped pointer is still the wrong Rust type — a
+//! type-confused cast.
+//!
+//! ```text
+//!   wrong-class arg            -> rejected by strict `instanceof`   (1-B closed)
+//!   setPrototypeOf-forged arg  -> passes `instanceof`, blind-cast   (1-C open)
+//! ```
+//!
+//! The complete fix is unforgeable per-class identity inside napi-rs itself (a
+//! Node-API object type tag stamped at wrap time and checked before every cast,
+//! unreachable from JS). It is submitted upstream as napi-rs/napi-rs#3405
+//! (<https://github.com/napi-rs/napi-rs/pull/3405>). Once that ships and this
+//! package bumps its `napi` dependency, every `#[napi]` class param is
+//! tag-checked automatically with no source change here. Until then,
+//! `#[napi(strict)]` is the strongest in-tree mitigation.
+
 use napi::bindgen_prelude::{BigInt, Error, Result};
 
 /// Convert a JS `BigInt` to a `u64` wasm size, rejecting a negative or
