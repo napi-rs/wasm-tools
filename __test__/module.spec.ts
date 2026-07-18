@@ -115,7 +115,7 @@ test('writeGraphvizDot writes a non-empty dot graph', (t) => {
 
 test('fromBufferWithConfig honors the supplied ModuleConfig', (t) => {
   const config = new ModuleConfig().generateProducersSection(false)
-  const m = WasmModule.fromBufferWithConfig(fixtureBytes, config)
+  const m = WasmModule.fromBufferWithConfig(config, fixtureBytes)
   const emitted = m.emitWasm(false)
   assertValid(t, emitted)
   // With the producers section disabled the emitted module drops it entirely.
@@ -130,12 +130,54 @@ test('fromBufferWithConfig honors the supplied ModuleConfig', (t) => {
 // ava reaching the next test is itself proof the throw was caught, not an abort.
 test('F-fix2 (1-A): fromBufferWithConfig rejects a wrong wrapped class as config catchably', (t) => {
   const notAConfig = WasmModule.fromBuffer(emptyModuleBytes())
-  t.throws(() => WasmModule.fromBufferWithConfig(fixtureBytes, notAConfig as unknown as ModuleConfig))
+  t.throws(() => WasmModule.fromBufferWithConfig(notAConfig as unknown as ModuleConfig, fixtureBytes))
 })
 
 test('F-fix2 (1-A): fromFileWithConfig rejects a wrong wrapped class as config catchably', (t) => {
   const notAConfig = WasmModule.fromBuffer(emptyModuleBytes())
   t.throws(() => WasmModule.fromFileWithConfig(FIXTURE, notAConfig as unknown as ModuleConfig))
+})
+
+// F-fix3 (reentrancy UAF): `fromBufferWithConfig(config, bytes)` decodes `config`
+// FIRST — its strict `napi_instanceof` runs JS, so a `Symbol.hasInstance` trap on
+// ModuleConfig can detach `bytes.buffer` mid-validation. Because napi decodes
+// arguments in source order and `bytes` is LAST, the zero-copy Uint8Array pointer
+// is cached only AFTER that JS runs, never left live across it. The call must
+// therefore either succeed (buffer decoded fresh) or throw a catchable Error
+// (detached buffer decoded as empty/invalid) — never a UAF/abort. Reaching the
+// assert at all is the proof the process did not go down.
+test('F-fix3 (reentrancy UAF): a hasInstance trap detaching bytes.buffer cannot crash fromBufferWithConfig', (t) => {
+  const config = new ModuleConfig()
+  // Fresh copy so we own its backing ArrayBuffer and can detach it freely.
+  const bytes = new Uint8Array(fixtureBytes)
+  const original = Object.getOwnPropertyDescriptor(ModuleConfig, Symbol.hasInstance)
+  try {
+    Object.defineProperty(ModuleConfig, Symbol.hasInstance, {
+      configurable: true,
+      value() {
+        // Detach the buffer during config validation; the reorder means the
+        // buffer is decoded only after this returns.
+        try {
+          structuredClone(bytes.buffer, { transfer: [bytes.buffer] })
+        } catch {
+          // Transfer unavailable here — irrelevant; we only assert no abort.
+        }
+        return true
+      },
+    })
+    try {
+      WasmModule.fromBufferWithConfig(config, bytes)
+    } catch {
+      // A catchable throw (empty/invalid detached buffer) is an acceptable outcome.
+    }
+    t.pass()
+  } finally {
+    if (original) {
+      Object.defineProperty(ModuleConfig, Symbol.hasInstance, original)
+    } else {
+      delete (ModuleConfig as unknown as Record<PropertyKey, unknown>)[Symbol.hasInstance]
+    }
+  }
 })
 
 test('start getter returns the module start function handle', (t) => {

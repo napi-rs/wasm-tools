@@ -1079,8 +1079,18 @@ export declare class WasmModule {
    * configuration.
    */
   static fromBuffer(bytes: Uint8Array): WasmModule
-  /** Construct a new module from the in-memory wasm buffer and configuration. */
-  static fromBufferWithConfig(bytes: Uint8Array, config: ModuleConfig): WasmModule
+  /**
+   * Construct a new module from the in-memory wasm buffer and configuration.
+   *
+   * Parameter order is load-bearing for memory safety. `config` (a strict class
+   * ref) validates via `napi_instanceof`, which runs JS — a `Symbol.hasInstance`
+   * trap on `ModuleConfig` could detach or resize `bytes.buffer`. napi decodes
+   * arguments in source order, so `config` MUST precede `bytes`: the zero-copy
+   * `Uint8Array` backing-store pointer is then cached only AFTER every
+   * JS-running validation, never left live across it. (Same reason the data
+   * `add_active` / `add_passive` sites keep their `Uint8Array` last.)
+   */
+  static fromBufferWithConfig(config: ModuleConfig, bytes: Uint8Array): WasmModule
   /**
    * Emit this module into an in-memory wasm buffer.
    *

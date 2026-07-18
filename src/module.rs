@@ -49,7 +49,15 @@ impl WasmModule {
 
   #[napi(factory, strict)]
   /// Construct a new module from the in-memory wasm buffer and configuration.
-  pub fn from_buffer_with_config(bytes: Uint8Array, config: &ModuleConfig) -> Result<Self> {
+  ///
+  /// Parameter order is load-bearing for memory safety. `config` (a strict class
+  /// ref) validates via `napi_instanceof`, which runs JS — a `Symbol.hasInstance`
+  /// trap on `ModuleConfig` could detach or resize `bytes.buffer`. napi decodes
+  /// arguments in source order, so `config` MUST precede `bytes`: the zero-copy
+  /// `Uint8Array` backing-store pointer is then cached only AFTER every
+  /// JS-running validation, never left live across it. (Same reason the data
+  /// `add_active` / `add_passive` sites keep their `Uint8Array` last.)
+  pub fn from_buffer_with_config(config: &ModuleConfig, bytes: Uint8Array) -> Result<Self> {
     Ok(Self {
       inner: Module::from_buffer_with_config(&bytes, &config.inner)?,
     })

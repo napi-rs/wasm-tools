@@ -24,10 +24,15 @@
 //! The complete fix is unforgeable per-class identity inside napi-rs itself (a
 //! Node-API object type tag stamped at wrap time and checked before every cast,
 //! unreachable from JS). It is submitted upstream as napi-rs/napi-rs#3405
-//! (<https://github.com/napi-rs/napi-rs/pull/3405>). Once that ships and this
-//! package bumps its `napi` dependency, every `#[napi]` class param is
-//! tag-checked automatically with no source change here. Until then,
-//! `#[napi(strict)]` is the strongest in-tree mitigation.
+//! (<https://github.com/napi-rs/napi-rs/pull/3405>). That mechanism is active
+//! only under the `napi8` feature on NATIVE targets — on wasm it is a no-op (a
+//! static's address is not a process-global identity there). This crate
+//! currently builds with `napi6` (see `Cargo.toml`) and also ships a WASI target
+//! (see `package.json`), so adopting #3405 requires BOTH bumping `napi` AND
+//! enabling `napi8` for the native builds; even then the WASI build stays on the
+//! forgeable strict-`instanceof` mitigation until an upstream wasm-safe identity
+//! exists. Until all of that lands, `#[napi(strict)]` is the strongest in-tree
+//! mitigation on every target.
 
 use napi::bindgen_prelude::{BigInt, Error, Result};
 

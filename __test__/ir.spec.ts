@@ -2347,7 +2347,7 @@ test('C4: well-typed return_call / return_call_indirect emit and re-parse (tail-
   // emit rewrites the type section, so return_call_indirect's typeIndex is
   // renumbered — only the structural round-trip (kind + table) is asserted.
   const config = new ModuleConfig().onlyStableFeatures(false)
-  const rm = WasmModule.fromBufferWithConfig(bytes, config)
+  const rm = WasmModule.fromBufferWithConfig(config, bytes)
 
   const rc = rm.functions.byName('rc')!.instructions()
   t.is(rc.length, 1)
