@@ -133,6 +133,29 @@ test('addLocal rejects an out-of-range maximum before mutating', (t) => {
   t.is(m.memories.length, 2)
 })
 
+// F-fix6 (Codex P2): `pageSizeLog2` is carried as `f64` and narrowed LOSSLESSLY
+// through `checked_index` before the walrus call. Under the OLD `Option<u32>`
+// wire type napi applied ToUint32 FIRST, so an out-of-domain value silently
+// ALIASED a different valid page size (`-1` -> 4294967295, `2**32` -> 0, `1.5`
+// -> 1, `NaN` -> 0). That silent value corruption is now a catchable throw and
+// the rejected add never mutates the collection.
+test('addLocal rejects an out-of-domain pageSizeLog2 and leaves the collection unchanged', (t) => {
+  const m = load()
+  for (const bad of [-1, 2 ** 32, 1.5, NaN]) {
+    const err = t.throws(() => m.memories.addLocal(false, false, 1n, null, bad))
+    t.regex(err!.message, /pageSizeLog2 must be an integer in 0\.\.=4294967295/)
+  }
+  t.is(m.memories.length, 2)
+})
+
+test('addLocal accepts a valid pageSizeLog2 and the getter reads it back', (t) => {
+  const m = load()
+  // 16 = the default 64 KiB pages (2**16), a valid custom-page-sizes log2.
+  const mem = m.memories.addLocal(false, false, 1n, null, 16)
+  t.is(m.memories.length, 3)
+  t.is(mem.pageSizeLog2, 16)
+})
+
 test('set initial rejects a negative size and preserves the original through emit and re-parse', (t) => {
   const m = load()
   const mem = m.memories.items()[0]

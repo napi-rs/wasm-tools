@@ -177,7 +177,9 @@ impl WasmImports {
   /// `initial`/`maximum` are page counts (`bigint`, so 64-bit `memory64`
   /// memories are representable losslessly); `maximum` is `null` for an
   /// unbounded memory. `pageSizeLog2` is the custom-page-sizes proposal's log2
-  /// page size, or `null` for the default 64 KiB pages.
+  /// page size, or `null` for the default 64 KiB pages; it is validated
+  /// LOSSLESSLY (`checked_index`) so an out-of-domain JS number is a catchable
+  /// error rather than a silent ToUint32 alias.
   ///
   /// MIRROR-WALRUS: the sizes are stored verbatim — no `initial <= maximum`
   /// check (`WebAssembly.validate` is the user's tool). A negative or
@@ -192,11 +194,14 @@ impl WasmImports {
     memory64: bool,
     initial: BigInt,
     maximum: Option<BigInt>,
-    page_size_log2: Option<u32>,
+    page_size_log2: Option<f64>,
   ) -> Result<WasmMemory> {
     let initial = crate::handle::bigint_to_u64(initial, "initial")?;
     let maximum = maximum
       .map(|m| crate::handle::bigint_to_u64(m, "maximum"))
+      .transpose()?;
+    let page_size_log2 = page_size_log2
+      .map(|v| crate::convert::checked_index(v, "pageSizeLog2"))
       .transpose()?;
     let (id, _import) = self.module.inner.add_import_memory(
       &module_name,

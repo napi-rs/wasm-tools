@@ -866,7 +866,9 @@ export declare class WasmImports {
    * `initial`/`maximum` are page counts (`bigint`, so 64-bit `memory64`
    * memories are representable losslessly); `maximum` is `null` for an
    * unbounded memory. `pageSizeLog2` is the custom-page-sizes proposal's log2
-   * page size, or `null` for the default 64 KiB pages.
+   * page size, or `null` for the default 64 KiB pages; it is validated
+   * LOSSLESSLY (`checked_index`) so an out-of-domain JS number is a catchable
+   * error rather than a silent ToUint32 alias.
    *
    * MIRROR-WALRUS: the sizes are stored verbatim — no `initial <= maximum`
    * check (`WebAssembly.validate` is the user's tool). A negative or
@@ -1006,7 +1008,10 @@ export declare class WasmMemories {
    * `initial`/`maximum` are page counts (`bigint`, so 64-bit `memory64`
    * memories are representable losslessly); `maximum` is `null` for an
    * unbounded memory. `pageSizeLog2` is the custom-page-sizes proposal's log2
-   * page size, or `null` for the default 64 KiB pages.
+   * page size, or `null` for the default 64 KiB pages; it is validated
+   * LOSSLESSLY (`checked_index`) so an out-of-domain JS number is a catchable
+   * error rather than a silent ToUint32 alias (same spirit as the `initial`/
+   * `maximum` bigint validation).
    *
    * The returned handle holds its own strong reference to the module (same as
    * the accessor handles), so it stays valid as long as it is held.
@@ -2604,18 +2609,24 @@ lane: number }
  * a natural `i32.load`), NOT the log2 exponent the binary format encodes —
  * walrus converts between the two on parse (`1 << exp`) and emit (counting the
  * trailing shift), so this stores the same power-of-two value both directions.
+ * It crosses the boundary as a JS `number` and is validated LOSSLESSLY
+ * (`checked_index`) before emit, so an out-of-domain value (NaN/Infinity/
+ * negative/fraction/`> u32::MAX`) is a catchable error, NOT a silent ToUint32
+ * alias into a different valid alignment.
  * `offset` is the constant byte offset from the dynamic address; it is a wasm
  * `u64` (memory64 uses the full range), so it crosses the boundary as a JS
  * `bigint` for exactness and is rejected on build if negative or not lossless.
  *
  * MIRROR-WALRUS: neither field is validated for wasm well-formedness — `align`
  * is NOT checked to be a power of two and `offset` is NOT range-checked against
- * the memory; both are stored verbatim.
+ * the memory; both are stored verbatim (only silent value corruption is
+ * guarded, not wasm semantic validity).
  */
 export interface MemArg {
   /**
-   * The raw alignment in bytes (a power of two per wasm; stored verbatim, not
-   * validated).
+   * The raw alignment in bytes (a power of two per wasm). Validated LOSSLESSLY
+   * (`checked_index`) on build — an out-of-domain JS number throws — but NOT
+   * checked to be a power of two (mirror walrus).
    */
   align: number
   /**

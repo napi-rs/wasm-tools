@@ -426,6 +426,28 @@ test('bigint corruption guard: addMemory rejects an out-of-range (u64 overflow) 
   t.is(m.memories.length, 0)
 })
 
+// F-fix6 (Codex P2): `pageSizeLog2` is carried as `f64` and narrowed LOSSLESSLY
+// through `checked_index` before the walrus call. Under the OLD `Option<u32>`
+// wire type napi applied ToUint32 FIRST, so an out-of-domain value silently
+// ALIASED a different valid page size; it is now a catchable throw and the
+// rejected add never mutates the module.
+test('F-fix6 (Codex P2): addMemory rejects an out-of-domain pageSizeLog2 and leaves the module unchanged', (t) => {
+  const m = loadNoMemory()
+  for (const bad of [-1, 2 ** 32, 1.5, NaN]) {
+    const err = t.throws(() => m.imports.addMemory('env', 'm', false, false, 1n, null, bad))
+    t.regex(err!.message, /pageSizeLog2 must be an integer in 0\.\.=4294967295/)
+  }
+  t.is(m.memories.length, 0)
+})
+
+test('F-fix6 (Codex P2): addMemory accepts a valid pageSizeLog2 and the getter reads it back', (t) => {
+  const m = loadNoMemory()
+  // 16 = the default 64 KiB pages (2**16), a valid custom-page-sizes log2.
+  const mem = m.imports.addMemory('env', 'm', false, false, 1n, null, 16)
+  t.is(m.memories.length, 1)
+  t.is(mem.pageSizeLog2, 16)
+})
+
 test('element-type guard: addTable rejects a non-reference element type', (t) => {
   const m = load()
   const before = m.tables.length

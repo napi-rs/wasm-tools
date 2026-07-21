@@ -201,18 +201,24 @@ pub enum BlockType {
 /// a natural `i32.load`), NOT the log2 exponent the binary format encodes —
 /// walrus converts between the two on parse (`1 << exp`) and emit (counting the
 /// trailing shift), so this stores the same power-of-two value both directions.
+/// It crosses the boundary as a JS `number` and is validated LOSSLESSLY
+/// (`checked_index`) before emit, so an out-of-domain value (NaN/Infinity/
+/// negative/fraction/`> u32::MAX`) is a catchable error, NOT a silent ToUint32
+/// alias into a different valid alignment.
 /// `offset` is the constant byte offset from the dynamic address; it is a wasm
 /// `u64` (memory64 uses the full range), so it crosses the boundary as a JS
 /// `bigint` for exactness and is rejected on build if negative or not lossless.
 ///
 /// MIRROR-WALRUS: neither field is validated for wasm well-formedness — `align`
 /// is NOT checked to be a power of two and `offset` is NOT range-checked against
-/// the memory; both are stored verbatim.
+/// the memory; both are stored verbatim (only silent value corruption is
+/// guarded, not wasm semantic validity).
 #[napi(object)]
 pub struct MemArg {
-  /// The raw alignment in bytes (a power of two per wasm; stored verbatim, not
-  /// validated).
-  pub align: u32,
+  /// The raw alignment in bytes (a power of two per wasm). Validated LOSSLESSLY
+  /// (`checked_index`) on build — an out-of-domain JS number throws — but NOT
+  /// checked to be a power of two (mirror walrus).
+  pub align: f64,
   /// The constant byte offset of the access (a JS `bigint`, for exact `u64`
   /// range).
   pub offset: BigInt,
@@ -976,21 +982,24 @@ fn from_instr_seq_type(ty: wir::InstrSeqType) -> Result<BlockType> {
 // COMPILE error rather than a silent mismap.
 // ---------------------------------------------------------------------------
 
-/// Build a walrus `MemArg` from a JS `MemArg`, rejecting an `offset` that is
-/// negative or does not fit losslessly in a `u64` (mirror of the size-write
-/// path). `align` is stored verbatim — MIRROR-WALRUS does NOT check it is a
-/// power of two. Shared by emit and its preflight so the two never disagree.
+/// Build a walrus `MemArg` from a JS `MemArg`, validating `align` LOSSLESSLY
+/// (`checked_index`, so an out-of-domain JS number is a catchable error, not a
+/// silent u32 alias) and rejecting an `offset` that is negative or does not fit
+/// losslessly in a `u64` (mirror of the size-write path). MIRROR-WALRUS still
+/// does NOT check `align` is a power of two. Shared by emit and its preflight so
+/// the two never disagree.
 fn mem_arg_to_walrus(arg: &MemArg) -> Result<wir::MemArg> {
   Ok(wir::MemArg {
-    align: arg.align,
+    align: checked_index(arg.align, "MemArg align")?,
     offset: bigint_to_u64(arg.offset.clone(), "MemArg offset")?,
   })
 }
 
-/// Read a walrus `MemArg` back into a JS `MemArg` (`offset` as an exact bigint).
+/// Read a walrus `MemArg` back into a JS `MemArg` (`align` widens `u32` -> `f64`
+/// losslessly; `offset` as an exact bigint).
 fn mem_arg_from_walrus(arg: &wir::MemArg) -> MemArg {
   MemArg {
-    align: arg.align,
+    align: arg.align as f64,
     offset: BigInt::from(arg.offset),
   }
 }

@@ -2038,6 +2038,52 @@ test('C2 negative: a MemArg offset that is not a lossless u64 throws catchably',
   t.is(1 + 1, 2)
 })
 
+// F-fix6 (Codex P2): `MemArg.align` is the raw alignment carried as `f64` and
+// narrowed LOSSLESSLY through `checked_index` (reject NaN/Infinity/fraction/
+// negative/>u32::MAX) in `mem_arg_to_walrus`, which is SHARED by the preflight
+// and emit. Under the OLD `u32` wire type napi applied ToUint32 FIRST, so an
+// out-of-domain `align` silently ALIASED a different valid alignment: `-1` ->
+// 4294967295, `2**32` -> 0, `1.5` -> 1, `NaN` -> 0. That silent value corruption
+// is now a catchable throw, matching every other numeric immediate.
+// MIRROR-WALRUS: `align` is still NOT checked to be a power of two.
+test('F-fix6 (Codex P2): an out-of-domain MemArg align (-1 / 2**32 / 1.5 / NaN) throws catchably instead of aliasing (arena unchanged)', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null) // memory 0 exists (resolved before the align check)
+  const before = m.types.length
+  const load = (align: number): InstrDesc => ({
+    type: 'Load',
+    memory: 0,
+    loadKind: { type: 'I32', atomic: false },
+    memArg: { align, offset: 0n },
+  })
+  for (const bad of [-1, 2 ** 32, 1.5, NaN]) {
+    t.throws(() => m.buildFunction([], [], [], [load(bad)]), {
+      message: /MemArg align must be an integer in 0\.\.=4294967295/,
+    })
+  }
+  // All-or-nothing: the align check runs in the preflight (via the shared
+  // mem_arg_to_walrus), so every failed build left the type arena untouched...
+  t.is(m.types.length, before)
+  // ...and the process is alive and the module still emits (WASI proof the bad
+  // align was caught pre-emit, not aborted).
+  t.notThrows(() => m.emitWasm(false))
+})
+
+test('F-fix6 (Codex P2): a valid MemArg align round-trips through the in-memory build/read', (t) => {
+  const m = empty()
+  m.memories.addLocal(false, false, 1n, null, null)
+  // align 4 = the natural i32 alignment; a build/read must return it verbatim.
+  const body: InstrDesc[] = [
+    { type: 'Const', value: { type: 'I32', value: 0 } },
+    { type: 'Load', memory: 0, loadKind: { type: 'I32', atomic: false }, memArg: { align: 4, offset: 0n } },
+    { type: 'Drop' },
+  ]
+  const idx = m.buildFunction([], [], [], body)
+  const read = m.functions.getByIndex(idx)!.instructions()
+  t.deepEqual(read, body)
+  t.is(read.find((dd) => dd.type === 'Load')!.memArg!.align, 4)
+})
+
 // ---------------------------------------------------------------------------
 // C3: table instructions (TableGet/Set/Grow/Size/Fill/Init/Copy, ElemDrop) +
 // call_indirect.
