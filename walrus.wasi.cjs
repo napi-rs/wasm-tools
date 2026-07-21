@@ -39,7 +39,7 @@ if (__nodeFs.existsSync(__wasmDebugFilePath)) {
   __wasmFilePath = __wasmDebugFilePath
 } else if (!__nodeFs.existsSync(__wasmFilePath)) {
   try {
-    __wasmFilePath = __nodePath.resolve('@napi-rs/wasm-tools-wasm32-wasi')
+    __wasmFilePath = require.resolve('@napi-rs/wasm-tools-wasm32-wasi/walrus.wasm32-wasi.wasm')
   } catch {
     throw new Error('Cannot find walrus.wasm32-wasi.wasm file, and @napi-rs/wasm-tools-wasm32-wasi package is not installed.')
   }
@@ -108,5 +108,44 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
   },
 })
 module.exports = __napiModule.exports
+module.exports.ConstExpr = __napiModule.exports.ConstExpr
 module.exports.ModuleConfig = __napiModule.exports.ModuleConfig
+module.exports.WasmCustomSections = __napiModule.exports.WasmCustomSections
+module.exports.WasmData = __napiModule.exports.WasmData
+module.exports.WasmDataSegments = __napiModule.exports.WasmDataSegments
+module.exports.WasmElement = __napiModule.exports.WasmElement
+module.exports.WasmElements = __napiModule.exports.WasmElements
+module.exports.WasmExport = __napiModule.exports.WasmExport
+module.exports.WasmExports = __napiModule.exports.WasmExports
+module.exports.WasmFunction = __napiModule.exports.WasmFunction
+module.exports.WasmFunctions = __napiModule.exports.WasmFunctions
+module.exports.WasmGlobal = __napiModule.exports.WasmGlobal
+module.exports.WasmGlobals = __napiModule.exports.WasmGlobals
+module.exports.WasmImport = __napiModule.exports.WasmImport
+module.exports.WasmImports = __napiModule.exports.WasmImports
+module.exports.WasmLocal = __napiModule.exports.WasmLocal
+module.exports.WasmLocals = __napiModule.exports.WasmLocals
+module.exports.WasmMemories = __napiModule.exports.WasmMemories
+module.exports.WasmMemory = __napiModule.exports.WasmMemory
 module.exports.WasmModule = __napiModule.exports.WasmModule
+module.exports.WasmProducers = __napiModule.exports.WasmProducers
+module.exports.WasmTable = __napiModule.exports.WasmTable
+module.exports.WasmTables = __napiModule.exports.WasmTables
+module.exports.WasmTag = __napiModule.exports.WasmTag
+module.exports.WasmTags = __napiModule.exports.WasmTags
+module.exports.WasmType = __napiModule.exports.WasmType
+module.exports.WasmTypes = __napiModule.exports.WasmTypes
+module.exports.AbstractHeapType = __napiModule.exports.AbstractHeapType
+module.exports.AtomicOp = __napiModule.exports.AtomicOp
+module.exports.AtomicWidth = __napiModule.exports.AtomicWidth
+module.exports.ConstExprKind = __napiModule.exports.ConstExprKind
+module.exports.DataKindTag = __napiModule.exports.DataKindTag
+module.exports.ElementItemsTag = __napiModule.exports.ElementItemsTag
+module.exports.ElementKindTag = __napiModule.exports.ElementKindTag
+module.exports.ExportItemTag = __napiModule.exports.ExportItemTag
+module.exports.ExtendedLoad = __napiModule.exports.ExtendedLoad
+module.exports.FunctionKindTag = __napiModule.exports.FunctionKindTag
+module.exports.GlobalKind = __napiModule.exports.GlobalKind
+module.exports.ImportKindTag = __napiModule.exports.ImportKindTag
+module.exports.TagKindTag = __napiModule.exports.TagKindTag
+module.exports.TypeKind = __napiModule.exports.TypeKind

@@ -1,0 +1,322 @@
+diff --git a/dist/emnapi-core.cjs.js b/dist/emnapi-core.cjs.js
+index 5838b506d32801a94f54ed393aae7001ffe42dff..4a869fab050dd9f619bdb85c8e6567ea1431a543 100644
+--- a/dist/emnapi-core.cjs.js
++++ b/dist/emnapi-core.cjs.js
+@@ -1,5 +1,15 @@
+ var wasiThreads = require('@emnapi/wasi-threads');
+ 
++var __emnapiTAProto = Object.getPrototypeOf(Uint8Array.prototype);
++var __emnapiTATagGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, Symbol.toStringTag).get;
++var __emnapiTALenGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, 'length').get;
++var __emnapiTAByteOffsetGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, 'byteOffset').get;
++var __emnapiTABufferGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, 'buffer').get;
++var __emnapiDVByteLenGet = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteLength').get;
++var __emnapiDVByteOffsetGet = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteOffset').get;
++var __emnapiDVBufferGet = Object.getOwnPropertyDescriptor(DataView.prototype, 'buffer').get;
++function __emnapiIsDataView(v) { try { __emnapiDVBufferGet.call(v); return true; } catch (_) { return false; } }
++function __emnapiViewTag(v) { try { return __emnapiTATagGet.call(v); } catch (_) { return undefined; } }
+ const _WebAssembly = typeof WebAssembly !== 'undefined'
+     ? WebAssembly
+     : typeof WXWebAssembly !== 'undefined'
+@@ -2758,54 +2768,30 @@ function createNapiModule(options) {
+             if (type) {
+                 type >>>= 0;
+                 var t = void 0;
+-                if (v instanceof Int8Array) {
+-                    t = 0;
+-                }
+-                else if (v instanceof Uint8Array) {
+-                    t = 1;
+-                }
+-                else if (v instanceof Uint8ClampedArray) {
+-                    t = 2;
+-                }
+-                else if (v instanceof Int16Array) {
+-                    t = 3;
+-                }
+-                else if (v instanceof Uint16Array) {
+-                    t = 4;
+-                }
+-                else if (v instanceof Int32Array) {
+-                    t = 5;
+-                }
+-                else if (v instanceof Uint32Array) {
+-                    t = 6;
+-                }
+-                else if (typeof Float16Array === 'function' && v instanceof Float16Array) {
+-                    t = 11;
+-                }
+-                else if (v instanceof Float32Array) {
+-                    t = 7;
+-                }
+-                else if (v instanceof Float64Array) {
+-                    t = 8;
+-                }
+-                else if (v instanceof BigInt64Array) {
+-                    t = 9;
+-                }
+-                else if (v instanceof BigUint64Array) {
+-                    t = 10;
+-                }
+-                else {
+-                    return envObject.setLastError(9);
++                switch (__emnapiViewTag(v)) {
++                    case 'Int8Array': t = 0; break;
++                    case 'Uint8Array': t = 1; break;
++                    case 'Uint8ClampedArray': t = 2; break;
++                    case 'Int16Array': t = 3; break;
++                    case 'Uint16Array': t = 4; break;
++                    case 'Int32Array': t = 5; break;
++                    case 'Uint32Array': t = 6; break;
++                    case 'Float32Array': t = 7; break;
++                    case 'Float64Array': t = 8; break;
++                    case 'BigInt64Array': t = 9; break;
++                    case 'BigUint64Array': t = 10; break;
++                    case 'Float16Array': t = 11; break;
++                    default: return envObject.setLastError(9);
+                 }
+                 HEAP_DATA_VIEW.setInt32(type, t, true);
+             }
+             if (length) {
+                 length >>>= 0;
+-                HEAP_DATA_VIEW.setUint32(length, v.length, true);
++                HEAP_DATA_VIEW.setUint32(length, __emnapiIsDataView(v) ? __emnapiDVByteLenGet.call(v) : __emnapiTALenGet.call(v), true);
+             }
+             var buffer;
+             if (data || arraybuffer) {
+-                buffer = v.buffer;
++                buffer = __emnapiIsDataView(v) ? __emnapiDVBufferGet.call(v) : __emnapiTABufferGet.call(v);
+                 if (data) {
+                     data >>>= 0;
+                     var p = emnapiExternalMemory.getViewPointer(v, true).address;
+@@ -2819,7 +2805,7 @@ function createNapiModule(options) {
+             }
+             if (byte_offset) {
+                 byte_offset >>>= 0;
+-                HEAP_DATA_VIEW.setUint32(byte_offset, v.byteOffset, true);
++                HEAP_DATA_VIEW.setUint32(byte_offset, __emnapiIsDataView(v) ? __emnapiDVByteOffsetGet.call(v) : __emnapiTAByteOffsetGet.call(v), true);
+             }
+             return envObject.clearLastError();
+         }
+diff --git a/dist/emnapi-core.esm-bundler.js b/dist/emnapi-core.esm-bundler.js
+index af3a8aaacc2b0eb1e71a3d9984169f19cd1d3744..c453394cf8eeb28cca766db53bf01d1414e4238b 100644
+--- a/dist/emnapi-core.esm-bundler.js
++++ b/dist/emnapi-core.esm-bundler.js
+@@ -3,6 +3,16 @@ export * from '@emnapi/wasi-threads';
+ import { __extends, __assign } from 'tslib';
+ 
+ /* eslint-disable no-undef */
++var __emnapiTAProto = Object.getPrototypeOf(Uint8Array.prototype);
++var __emnapiTATagGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, Symbol.toStringTag).get;
++var __emnapiTALenGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, 'length').get;
++var __emnapiTAByteOffsetGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, 'byteOffset').get;
++var __emnapiTABufferGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, 'buffer').get;
++var __emnapiDVByteLenGet = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteLength').get;
++var __emnapiDVByteOffsetGet = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteOffset').get;
++var __emnapiDVBufferGet = Object.getOwnPropertyDescriptor(DataView.prototype, 'buffer').get;
++function __emnapiIsDataView(v) { try { __emnapiDVBufferGet.call(v); return true; } catch (_) { return false; } }
++function __emnapiViewTag(v) { try { return __emnapiTATagGet.call(v); } catch (_) { return undefined; } }
+ var _WebAssembly = typeof WebAssembly !== 'undefined'
+     ? WebAssembly
+     : typeof WXWebAssembly !== 'undefined'
+@@ -3033,55 +3043,30 @@ function createNapiModule(options) {
+             if (type) {
+                 type >>>= 0;
+                 var t = void 0;
+-                if (v instanceof Int8Array) {
+-                    t = 0 /* napi_typedarray_type.napi_int8_array */;
+-                }
+-                else if (v instanceof Uint8Array) {
+-                    t = 1 /* napi_typedarray_type.napi_uint8_array */;
+-                }
+-                else if (v instanceof Uint8ClampedArray) {
+-                    t = 2 /* napi_typedarray_type.napi_uint8_clamped_array */;
+-                }
+-                else if (v instanceof Int16Array) {
+-                    t = 3 /* napi_typedarray_type.napi_int16_array */;
+-                }
+-                else if (v instanceof Uint16Array) {
+-                    t = 4 /* napi_typedarray_type.napi_uint16_array */;
+-                }
+-                else if (v instanceof Int32Array) {
+-                    t = 5 /* napi_typedarray_type.napi_int32_array */;
+-                }
+-                else if (v instanceof Uint32Array) {
+-                    t = 6 /* napi_typedarray_type.napi_uint32_array */;
+-                }
+-                else if (typeof Float16Array === 'function' && v instanceof Float16Array) {
+-                    t = 11 /* napi_typedarray_type.napi_float16_array */;
+-                }
+-                else if (v instanceof Float32Array) {
+-                    t = 7 /* napi_typedarray_type.napi_float32_array */;
+-                }
+-                else if (v instanceof Float64Array) {
+-                    t = 8 /* napi_typedarray_type.napi_float64_array */;
+-                }
+-                else if (v instanceof BigInt64Array) {
+-                    t = 9 /* napi_typedarray_type.napi_bigint64_array */;
+-                }
+-                else if (v instanceof BigUint64Array) {
+-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+-                    t = 10 /* napi_typedarray_type.napi_biguint64_array */;
+-                }
+-                else {
+-                    return envObject.setLastError(9 /* napi_status.napi_generic_failure */);
++                switch (__emnapiViewTag(v)) {
++                    case 'Int8Array': t = 0; break;
++                    case 'Uint8Array': t = 1; break;
++                    case 'Uint8ClampedArray': t = 2; break;
++                    case 'Int16Array': t = 3; break;
++                    case 'Uint16Array': t = 4; break;
++                    case 'Int32Array': t = 5; break;
++                    case 'Uint32Array': t = 6; break;
++                    case 'Float32Array': t = 7; break;
++                    case 'Float64Array': t = 8; break;
++                    case 'BigInt64Array': t = 9; break;
++                    case 'BigUint64Array': t = 10; break;
++                    case 'Float16Array': t = 11; break;
++                    default: return envObject.setLastError(9);
+                 }
+                 HEAP_DATA_VIEW.setInt32(type, t, true);
+             }
+             if (length) {
+                 length >>>= 0;
+-                HEAP_DATA_VIEW.setUint32(length, v.length, true);
++                HEAP_DATA_VIEW.setUint32(length, __emnapiIsDataView(v) ? __emnapiDVByteLenGet.call(v) : __emnapiTALenGet.call(v), true);
+             }
+             var buffer;
+             if (data || arraybuffer) {
+-                buffer = v.buffer;
++                buffer = __emnapiIsDataView(v) ? __emnapiDVBufferGet.call(v) : __emnapiTABufferGet.call(v);
+                 if (data) {
+                     data >>>= 0;
+                     // eslint-disable-next-line @typescript-eslint/no-unused-vars
+@@ -3097,7 +3082,7 @@ function createNapiModule(options) {
+             }
+             if (byte_offset) {
+                 byte_offset >>>= 0;
+-                HEAP_DATA_VIEW.setUint32(byte_offset, v.byteOffset, true);
++                HEAP_DATA_VIEW.setUint32(byte_offset, __emnapiIsDataView(v) ? __emnapiDVByteOffsetGet.call(v) : __emnapiTAByteOffsetGet.call(v), true);
+             }
+             return envObject.clearLastError();
+         }
+diff --git a/dist/emnapi-core.mjs b/dist/emnapi-core.mjs
+index 71aa2ca14604d1c0e757ef7395425b3094cf1665..4ea890d09f5099877c3dc85125b18c6e81af6e53 100644
+--- a/dist/emnapi-core.mjs
++++ b/dist/emnapi-core.mjs
+@@ -1,6 +1,16 @@
+ import { ThreadManager, WASIThreads, ThreadMessageHandler } from '@emnapi/wasi-threads';
+ export * from '@emnapi/wasi-threads';
+ 
++var __emnapiTAProto = Object.getPrototypeOf(Uint8Array.prototype);
++var __emnapiTATagGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, Symbol.toStringTag).get;
++var __emnapiTALenGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, 'length').get;
++var __emnapiTAByteOffsetGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, 'byteOffset').get;
++var __emnapiTABufferGet = Object.getOwnPropertyDescriptor(__emnapiTAProto, 'buffer').get;
++var __emnapiDVByteLenGet = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteLength').get;
++var __emnapiDVByteOffsetGet = Object.getOwnPropertyDescriptor(DataView.prototype, 'byteOffset').get;
++var __emnapiDVBufferGet = Object.getOwnPropertyDescriptor(DataView.prototype, 'buffer').get;
++function __emnapiIsDataView(v) { try { __emnapiDVBufferGet.call(v); return true; } catch (_) { return false; } }
++function __emnapiViewTag(v) { try { return __emnapiTATagGet.call(v); } catch (_) { return undefined; } }
+ const _WebAssembly = typeof WebAssembly !== 'undefined'
+     ? WebAssembly
+     : typeof WXWebAssembly !== 'undefined'
+@@ -2759,54 +2769,30 @@ function createNapiModule(options) {
+             if (type) {
+                 type >>>= 0;
+                 var t = void 0;
+-                if (v instanceof Int8Array) {
+-                    t = 0;
+-                }
+-                else if (v instanceof Uint8Array) {
+-                    t = 1;
+-                }
+-                else if (v instanceof Uint8ClampedArray) {
+-                    t = 2;
+-                }
+-                else if (v instanceof Int16Array) {
+-                    t = 3;
+-                }
+-                else if (v instanceof Uint16Array) {
+-                    t = 4;
+-                }
+-                else if (v instanceof Int32Array) {
+-                    t = 5;
+-                }
+-                else if (v instanceof Uint32Array) {
+-                    t = 6;
+-                }
+-                else if (typeof Float16Array === 'function' && v instanceof Float16Array) {
+-                    t = 11;
+-                }
+-                else if (v instanceof Float32Array) {
+-                    t = 7;
+-                }
+-                else if (v instanceof Float64Array) {
+-                    t = 8;
+-                }
+-                else if (v instanceof BigInt64Array) {
+-                    t = 9;
+-                }
+-                else if (v instanceof BigUint64Array) {
+-                    t = 10;
+-                }
+-                else {
+-                    return envObject.setLastError(9);
++                switch (__emnapiViewTag(v)) {
++                    case 'Int8Array': t = 0; break;
++                    case 'Uint8Array': t = 1; break;
++                    case 'Uint8ClampedArray': t = 2; break;
++                    case 'Int16Array': t = 3; break;
++                    case 'Uint16Array': t = 4; break;
++                    case 'Int32Array': t = 5; break;
++                    case 'Uint32Array': t = 6; break;
++                    case 'Float32Array': t = 7; break;
++                    case 'Float64Array': t = 8; break;
++                    case 'BigInt64Array': t = 9; break;
++                    case 'BigUint64Array': t = 10; break;
++                    case 'Float16Array': t = 11; break;
++                    default: return envObject.setLastError(9);
+                 }
+                 HEAP_DATA_VIEW.setInt32(type, t, true);
+             }
+             if (length) {
+                 length >>>= 0;
+-                HEAP_DATA_VIEW.setUint32(length, v.length, true);
++                HEAP_DATA_VIEW.setUint32(length, __emnapiIsDataView(v) ? __emnapiDVByteLenGet.call(v) : __emnapiTALenGet.call(v), true);
+             }
+             var buffer;
+             if (data || arraybuffer) {
+-                buffer = v.buffer;
++                buffer = __emnapiIsDataView(v) ? __emnapiDVBufferGet.call(v) : __emnapiTABufferGet.call(v);
+                 if (data) {
+                     data >>>= 0;
+                     var p = emnapiExternalMemory.getViewPointer(v, true).address;
+@@ -2820,7 +2806,7 @@ function createNapiModule(options) {
+             }
+             if (byte_offset) {
+                 byte_offset >>>= 0;
+-                HEAP_DATA_VIEW.setUint32(byte_offset, v.byteOffset, true);
++                HEAP_DATA_VIEW.setUint32(byte_offset, __emnapiIsDataView(v) ? __emnapiDVByteOffsetGet.call(v) : __emnapiTAByteOffsetGet.call(v), true);
+             }
+             return envObject.clearLastError();
+         }
+diff --git a/index.js b/index.js
+index 11764ede3cfae8847eed99c40a7e1912edff32f7..dacfcd21cc22381262a19d0e53fdb2cdc475998d 100644
+--- a/index.js
++++ b/index.js
+@@ -1,5 +1,9 @@
+-if (typeof process !== 'undefined' && process.env.NODE_ENV === 'production') {
+-  module.exports = require('./dist/emnapi-core.cjs.min.js')
+-} else {
+-  module.exports = require('./dist/emnapi-core.cjs.js')
+-}
++// CH-emnapi-wire: always load the spoof-proof (non-min) CJS build.
++// The published index.js routed NODE_ENV=production to emnapi-core.cjs.min.js,
++// which this patch does NOT rewrite — so production consumers of the binding
++// would otherwise still get the prototype-spoofable napi_get_typedarray_info
++// (the WASI type-confusion). Routing BOTH cases to the patched
++// emnapi-core.cjs.js keeps the intrinsic typed-array brand fix on every CJS
++// load path (require('@emnapi/core')), regardless of NODE_ENV. The negligible
++// footprint of the non-min build is an acceptable cost for a WASI runtime.
++module.exports = require('./dist/emnapi-core.cjs.js')

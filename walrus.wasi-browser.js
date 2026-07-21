@@ -36,6 +36,7 @@ const {
       type: 'module',
     })
 
+
     return worker
   },
   overwriteImports(importObject) {
@@ -56,5 +57,44 @@ const {
   },
 })
 export default __napiModule.exports
+export const ConstExpr = __napiModule.exports.ConstExpr
 export const ModuleConfig = __napiModule.exports.ModuleConfig
+export const WasmCustomSections = __napiModule.exports.WasmCustomSections
+export const WasmData = __napiModule.exports.WasmData
+export const WasmDataSegments = __napiModule.exports.WasmDataSegments
+export const WasmElement = __napiModule.exports.WasmElement
+export const WasmElements = __napiModule.exports.WasmElements
+export const WasmExport = __napiModule.exports.WasmExport
+export const WasmExports = __napiModule.exports.WasmExports
+export const WasmFunction = __napiModule.exports.WasmFunction
+export const WasmFunctions = __napiModule.exports.WasmFunctions
+export const WasmGlobal = __napiModule.exports.WasmGlobal
+export const WasmGlobals = __napiModule.exports.WasmGlobals
+export const WasmImport = __napiModule.exports.WasmImport
+export const WasmImports = __napiModule.exports.WasmImports
+export const WasmLocal = __napiModule.exports.WasmLocal
+export const WasmLocals = __napiModule.exports.WasmLocals
+export const WasmMemories = __napiModule.exports.WasmMemories
+export const WasmMemory = __napiModule.exports.WasmMemory
 export const WasmModule = __napiModule.exports.WasmModule
+export const WasmProducers = __napiModule.exports.WasmProducers
+export const WasmTable = __napiModule.exports.WasmTable
+export const WasmTables = __napiModule.exports.WasmTables
+export const WasmTag = __napiModule.exports.WasmTag
+export const WasmTags = __napiModule.exports.WasmTags
+export const WasmType = __napiModule.exports.WasmType
+export const WasmTypes = __napiModule.exports.WasmTypes
+export const AbstractHeapType = __napiModule.exports.AbstractHeapType
+export const AtomicOp = __napiModule.exports.AtomicOp
+export const AtomicWidth = __napiModule.exports.AtomicWidth
+export const ConstExprKind = __napiModule.exports.ConstExprKind
+export const DataKindTag = __napiModule.exports.DataKindTag
+export const ElementItemsTag = __napiModule.exports.ElementItemsTag
+export const ElementKindTag = __napiModule.exports.ElementKindTag
+export const ExportItemTag = __napiModule.exports.ExportItemTag
+export const ExtendedLoad = __napiModule.exports.ExtendedLoad
+export const FunctionKindTag = __napiModule.exports.FunctionKindTag
+export const GlobalKind = __napiModule.exports.GlobalKind
+export const ImportKindTag = __napiModule.exports.ImportKindTag
+export const TagKindTag = __napiModule.exports.TagKindTag
+export const TypeKind = __napiModule.exports.TypeKind
