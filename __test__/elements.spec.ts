@@ -438,6 +438,34 @@ test('F1: scalar &ConstExpr param rejects a wrong wrapped class catchably (addFu
 })
 
 // ---------------------------------------------------------------------------
+// F-fix5 (1-C, prototype-spoof): strict `instanceof` alone CANNOT close 1-C — a
+// REAL wrapped instance of the WRONG class, re-parented with
+// `Object.setPrototypeOf(x, RightClass.prototype)`, passes `instanceof
+// RightClass` while its wrapped pointer is still the wrong Rust type. Adopting
+// napi >= 3.11 with the `napi8` feature activates Node-API object type tags: the
+// derive stamps each instance at wrap time and checks the (unforgeable, JS-
+// invisible) tag before the `&T` cast, so the spoofed object is rejected AFTER
+// `instanceof` passes. This is native-only: on WASI the tag is a no-op (a
+// static's address is not a process-global identity there), so the spoof would
+// still blind-cast — 1-C stays open on wasm — and this test is skipped under
+// `NAPI_RS_FORCE_WASI`. ava reaching the next test proves the throw was catchable.
+// ---------------------------------------------------------------------------
+const nativeOnly = process.env.NAPI_RS_FORCE_WASI ? test.skip : test
+nativeOnly(
+  'F-fix5 (1-C): a setPrototypeOf-spoofed WasmTable that passes `instanceof WasmFunction` is still rejected by the type tag (native)',
+  (t) => {
+    const m = load()
+    const table = m.tables.items()[0] // a REAL WasmTable handle (wrong class)
+    // Re-parent so the prototype-based `instanceof` check is fully defeated.
+    Object.setPrototypeOf(table, WasmFunction.prototype)
+    t.true(table instanceof WasmFunction) // the spoof succeeds: instanceof now lies
+    // `ConstExpr.refFunc` wants `&WasmFunction`; the unforgeable type tag catches
+    // the still-WasmTable pointer that `instanceof` waved through.
+    t.throws(() => ConstExpr.refFunc(table as unknown as WasmFunction))
+  },
+)
+
+// ---------------------------------------------------------------------------
 // F2 (element re-entrancy): the item list decodes BEFORE the `table`/`offset`
 // handle refs, so no borrowed `&WasmTable` is held live while `SafeVec`'s
 // per-element getter runs arbitrary JS. A getter that synchronously calls a

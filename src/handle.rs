@@ -10,29 +10,33 @@
 //! argument, which is finding 1-B (a non-strict `&T` param blind-unwraps and
 //! casts `*mut c_void -> *mut T` with no check at all).
 //!
-//! It does NOT close the prototype-spoof hole, finding 1-C: `instanceof` is
-//! prototype-based, so a REAL wrapped instance of the wrong class, re-parented
-//! with `Object.setPrototypeOf(wrongInstance, RightClass.prototype)`, passes the
-//! `instanceof` check while its wrapped pointer is still the wrong Rust type — a
-//! type-confused cast.
+//! On its own, `instanceof` does NOT close the prototype-spoof hole, finding
+//! 1-C: `instanceof` is prototype-based, so a REAL wrapped instance of the wrong
+//! class, re-parented with `Object.setPrototypeOf(wrongInstance,
+//! RightClass.prototype)`, passes the `instanceof` check while its wrapped
+//! pointer is still the wrong Rust type — a type-confused cast. NATIVE builds now
+//! close 1-C with an unforgeable per-class identity underneath `instanceof`; the
+//! WASI build cannot yet carry that identity (see below).
 //!
 //! ```text
-//!   wrong-class arg            -> rejected by strict `instanceof`   (1-B closed)
-//!   setPrototypeOf-forged arg  -> passes `instanceof`, blind-cast   (1-C open)
+//!   wrong-class arg            -> rejected by strict `instanceof` + type tag   (1-B closed)
+//!   setPrototypeOf-forged arg  -> native: rejected by the unforgeable type tag (1-C closed on native)
+//!                                 wasm:   passes instanceof, blind-cast        (1-C open on wasm)
 //! ```
 //!
-//! The complete fix is unforgeable per-class identity inside napi-rs itself (a
-//! Node-API object type tag stamped at wrap time and checked before every cast,
-//! unreachable from JS). It is submitted upstream as napi-rs/napi-rs#3405
-//! (<https://github.com/napi-rs/napi-rs/pull/3405>). That mechanism is active
-//! only under the `napi8` feature on NATIVE targets — on wasm it is a no-op (a
-//! static's address is not a process-global identity there). This crate
-//! currently builds with `napi6` (see `Cargo.toml`) and also ships a WASI target
-//! (see `package.json`), so adopting #3405 requires BOTH bumping `napi` AND
-//! enabling `napi8` for the native builds; even then the WASI build stays on the
-//! forgeable strict-`instanceof` mitigation until an upstream wasm-safe identity
-//! exists. Until all of that lands, `#[napi(strict)]` is the strongest in-tree
-//! mitigation on every target.
+//! 1-C is CLOSED on NATIVE targets via Node-API object type tags (`napi >= 3.11`,
+//! `napi8` feature — see `Cargo.toml`; the fix is napi-rs/napi-rs#3405,
+//! <https://github.com/napi-rs/napi-rs/pull/3405>, now merged). The derive
+//! auto-emits an `impl TypeTag` for each `#[napi]` class, stamps every instance
+//! with that tag at wrap time, and checks the tag before every `&T` cast. The tag
+//! is a process-internal identity that JS cannot read or forge, so a
+//! `setPrototypeOf`-spoofed object — which passes `instanceof` — is still
+//! rejected before its pointer is reinterpreted. On the shipped WASI target (see
+//! `package.json`) the tag is a no-op: a static's address is not a process-global
+//! identity on wasm, so the WASI build keeps the forgeable strict-`instanceof`
+//! mitigation and 1-C stays open there until an upstream wasm-safe identity
+//! exists. On every target `#[napi(strict)]` remains the baseline that closes 1-B
+//! and, on native, backs the type tag that additionally closes 1-C.
 
 use napi::bindgen_prelude::{BigInt, Error, Result};
 
