@@ -95,17 +95,15 @@
     ]
   },
   "ava": {
-    "require": [
+    "nodeArguments": [
+      "--import",
       "@oxc-node/core/register"
     ],
     "extensions": [
       "ts"
     ],
     "timeout": "2m",
-    "workerThreads": false,
-    "environmentVariables": {
-      "TS_NODE_PROJECT": "./tsconfig.json"
-    }
+    "workerThreads": false
   },
   "prettier": {
     "printWidth": 120,
