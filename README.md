@@ -23,6 +23,11 @@ types, data, elements, locals, tags, custom sections, producers — is exposed a
 **live handle**. Reading a property reads through to the module; writing one writes
 back. Your edits persist when you call `emitWasm()`.
 
+Value types come as ready-made constants — `I32`, `I64`, `F32`, `F64`, `V128` and the
+nullable reference types (`FUNCREF`, `EXTERNREF`, `ANYREF`, `EQREF`, `I31REF`,
+`STRUCTREF`, `ARRAYREF`, `NULLREF`, `NULLFUNCREF`, `NULLEXTERNREF`, `EXNREF`,
+`NULLEXNREF`) — so you can `import { I32 }` instead of writing `{ type: 'I32' }` by hand.
+
 ### Parse with options and emit
 
 ```ts
@@ -123,10 +128,7 @@ Create a locally-defined function from an instruction descriptor tree, export it
 and emit a runnable module.
 
 ```ts
-import { WasmModule } from '@napi-rs/wasm-tools'
-import type { ValType } from '@napi-rs/wasm-tools'
-
-const I32: ValType = { type: 'I32' }
+import { I32, WasmModule } from '@napi-rs/wasm-tools'
 
 // Start from the 8-byte empty module (`\0asm` + version 1).
 const mod = WasmModule.fromBuffer(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0]))
@@ -165,10 +167,7 @@ console.log(fn.instructions())
 Collection `add*` methods synthesize new items and hand you a live handle.
 
 ```ts
-import { WasmModule, ConstExpr } from '@napi-rs/wasm-tools'
-import type { ValType } from '@napi-rs/wasm-tools'
-
-const I32: ValType = { type: 'I32' }
+import { ConstExpr, I32, WasmModule } from '@napi-rs/wasm-tools'
 
 const mod = WasmModule.fromBuffer(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0]))
 
