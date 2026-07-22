@@ -41,6 +41,151 @@ pub enum ValType {
   Ref { nullable: bool, heap: HeapType },
 }
 
+/// The `i32` value type — a ready-made [`ValType`] constant so callers can
+/// `import { I32 }` instead of writing `{ type: 'I32' }` by hand.
+#[napi]
+pub const I32: ValType = ValType::I32;
+
+/// The `i64` value type — a ready-made [`ValType`] constant so callers can
+/// `import { I64 }` instead of writing `{ type: 'I64' }` by hand.
+#[napi]
+pub const I64: ValType = ValType::I64;
+
+/// The `f32` value type — a ready-made [`ValType`] constant so callers can
+/// `import { F32 }` instead of writing `{ type: 'F32' }` by hand.
+#[napi]
+pub const F32: ValType = ValType::F32;
+
+/// The `f64` value type — a ready-made [`ValType`] constant so callers can
+/// `import { F64 }` instead of writing `{ type: 'F64' }` by hand.
+#[napi]
+pub const F64: ValType = ValType::F64;
+
+/// The `v128` value type — a ready-made [`ValType`] constant so callers can
+/// `import { V128 }` instead of writing `{ type: 'V128' }` by hand.
+#[napi]
+pub const V128: ValType = ValType::V128;
+
+/// The `funcref` reference type (`(ref null func)`) — a ready-made [`ValType`]
+/// constant for `import { FUNCREF }`.
+#[napi]
+pub const FUNCREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::Func,
+  },
+};
+
+/// The `externref` reference type (`(ref null extern)`) — a ready-made
+/// [`ValType`] constant for `import { EXTERNREF }`.
+#[napi]
+pub const EXTERNREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::Extern,
+  },
+};
+
+/// The `anyref` reference type (`(ref null any)`) — a ready-made [`ValType`]
+/// constant for `import { ANYREF }`.
+#[napi]
+pub const ANYREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::Any,
+  },
+};
+
+/// The `eqref` reference type (`(ref null eq)`) — a ready-made [`ValType`]
+/// constant for `import { EQREF }`.
+#[napi]
+pub const EQREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::Eq,
+  },
+};
+
+/// The `i31ref` reference type (`(ref null i31)`) — a ready-made [`ValType`]
+/// constant for `import { I31REF }`.
+#[napi]
+pub const I31REF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::I31,
+  },
+};
+
+/// The `structref` reference type (`(ref null struct)`) — a ready-made
+/// [`ValType`] constant for `import { STRUCTREF }`.
+#[napi]
+pub const STRUCTREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::Struct,
+  },
+};
+
+/// The `arrayref` reference type (`(ref null array)`) — a ready-made
+/// [`ValType`] constant for `import { ARRAYREF }`.
+#[napi]
+pub const ARRAYREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::Array,
+  },
+};
+
+/// The `nullref` reference type (`(ref null none)`) — a ready-made [`ValType`]
+/// constant for `import { NULLREF }`.
+#[napi]
+pub const NULLREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::None,
+  },
+};
+
+/// The `nullfuncref` reference type (`(ref null nofunc)`) — a ready-made
+/// [`ValType`] constant for `import { NULLFUNCREF }`.
+#[napi]
+pub const NULLFUNCREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::NoFunc,
+  },
+};
+
+/// The `nullexternref` reference type (`(ref null noextern)`) — a ready-made
+/// [`ValType`] constant for `import { NULLEXTERNREF }`.
+#[napi]
+pub const NULLEXTERNREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::NoExtern,
+  },
+};
+
+/// The `exnref` reference type (`(ref null exn)`) — a ready-made [`ValType`]
+/// constant for `import { EXNREF }`.
+#[napi]
+pub const EXNREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::Exn,
+  },
+};
+
+/// The `nullexnref` reference type (`(ref null noexn)`) — a ready-made
+/// [`ValType`] constant for `import { NULLEXNREF }`.
+#[napi]
+pub const NULLEXNREF: ValType = ValType::Ref {
+  nullable: true,
+  heap: HeapType::Abstract {
+    kind: AbstractHeapType::NoExn,
+  },
+};
+
 /// A heap type for reference (`ValType::Ref`) values.
 ///
 /// The `Concrete` and `Exact` variants carry a `type_index` — the stable

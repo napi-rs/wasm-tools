@@ -1887,6 +1887,18 @@ export declare const enum AbstractHeapType {
 }
 
 /**
+ * The `anyref` reference type (`(ref null any)`) — a ready-made [`ValType`]
+ * constant for `import { ANYREF }`.
+ */
+export const ANYREF: ValType
+
+/**
+ * The `arrayref` reference type (`(ref null array)`) — a ready-made
+ * [`ValType`] constant for `import { ARRAYREF }`.
+ */
+export const ARRAYREF: ValType
+
+/**
  * The read/modify/write operation of an `AtomicRmw`, mirroring
  * `walrus::ir::AtomicOp` (`ir/mod.rs:1665`, fieldless).
  *
@@ -2167,6 +2179,18 @@ export declare const enum ElementKindTag {
 }
 
 /**
+ * The `eqref` reference type (`(ref null eq)`) — a ready-made [`ValType`]
+ * constant for `import { EQREF }`.
+ */
+export const EQREF: ValType
+
+/**
+ * The `exnref` reference type (`(ref null exn)`) — a ready-made [`ValType`]
+ * constant for `import { EXNREF }`.
+ */
+export const EXNREF: ValType
+
+/**
  * The kind of item an export exposes from a module.
  *
  * Mirrors the discriminant of `walrus::ExportItem`
@@ -2209,6 +2233,24 @@ export declare const enum ExtendedLoad {
 }
 
 /**
+ * The `externref` reference type (`(ref null extern)`) — a ready-made
+ * [`ValType`] constant for `import { EXTERNREF }`.
+ */
+export const EXTERNREF: ValType
+
+/**
+ * The `f32` value type — a ready-made [`ValType`] constant so callers can
+ * `import { F32 }` instead of writing `{ type: 'F32' }` by hand.
+ */
+export const F32: ValType
+
+/**
+ * The `f64` value type — a ready-made [`ValType`] constant so callers can
+ * `import { F64 }` instead of writing `{ type: 'F64' }` by hand.
+ */
+export const F64: ValType
+
+/**
  * A field type for GC struct and array fields, mirroring `walrus::FieldType`.
  *
  * Combines a [`StorageType`] with a mutability flag. Generated as a TypeScript
@@ -2220,6 +2262,12 @@ export interface FieldType {
   /** Whether this field is mutable. */
   mutable: boolean
 }
+
+/**
+ * The `funcref` reference type (`(ref null func)`) — a ready-made [`ValType`]
+ * constant for `import { FUNCREF }`.
+ */
+export const FUNCREF: ValType
 
 /**
  * Whether a function is imported, locally defined, or an uninitialized
@@ -2278,6 +2326,24 @@ export type HeapType =
   | { type: 'Concrete', typeIndex: number }
   | { type: 'Exact', typeIndex: number }
   | { type: 'RecGroup', recIndex: number }
+
+/**
+ * The `i31ref` reference type (`(ref null i31)`) — a ready-made [`ValType`]
+ * constant for `import { I31REF }`.
+ */
+export const I31REF: ValType
+
+/**
+ * The `i32` value type — a ready-made [`ValType`] constant so callers can
+ * `import { I32 }` instead of writing `{ type: 'I32' }` by hand.
+ */
+export const I32: ValType
+
+/**
+ * The `i64` value type — a ready-made [`ValType`] constant so callers can
+ * `import { I64 }` instead of writing `{ type: 'I64' }` by hand.
+ */
+export const I64: ValType
 
 /**
  * The kind of item an import brings into a module.
@@ -2637,6 +2703,30 @@ export interface MemArg {
 }
 
 /**
+ * The `nullexnref` reference type (`(ref null noexn)`) — a ready-made
+ * [`ValType`] constant for `import { NULLEXNREF }`.
+ */
+export const NULLEXNREF: ValType
+
+/**
+ * The `nullexternref` reference type (`(ref null noextern)`) — a ready-made
+ * [`ValType`] constant for `import { NULLEXTERNREF }`.
+ */
+export const NULLEXTERNREF: ValType
+
+/**
+ * The `nullfuncref` reference type (`(ref null nofunc)`) — a ready-made
+ * [`ValType`] constant for `import { NULLFUNCREF }`.
+ */
+export const NULLFUNCREF: ValType
+
+/**
+ * The `nullref` reference type (`(ref null none)`) — a ready-made [`ValType`]
+ * constant for `import { NULLREF }`.
+ */
+export const NULLREF: ValType
+
+/**
  * A single field (e.g. `language`, `sdk`, `processed-by`) of the producers
  * section, along with its versioned values.
  */
@@ -2773,6 +2863,12 @@ atomic: boolean }
 atomic: boolean }
 
 /**
+ * The `structref` reference type (`(ref null struct)`) — a ready-made
+ * [`ValType`] constant for `import { STRUCTREF }`.
+ */
+export const STRUCTREF: ValType
+
+/**
  * Whether a tag is imported or locally defined.
  *
  * Mirrors the discriminant of `walrus::TagKind` (`Import(ImportId)` /
@@ -2802,6 +2898,12 @@ export declare const enum TypeKind {
   /** A GC array type. */
   Array = 'Array'
 }
+
+/**
+ * The `v128` value type — a ready-made [`ValType`] constant so callers can
+ * `import { V128 }` instead of writing `{ type: 'V128' }` by hand.
+ */
+export const V128: ValType
 
 /**
  * A wasm value type.
