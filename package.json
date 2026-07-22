@@ -3,7 +3,7 @@
   "version": "1.0.1",
   "description": "https://github.com/rustwasm/walrus bindings",
   "main": "wasm-tools.js",
-  "types": "index.d.ts",
+  "types": "wasm-tools.d.ts",
   "browser": "browser.js",
   "repository": {
     "url": "git+ssh://git@github.com/napi-rs/wasm-tools.git",
@@ -22,7 +22,8 @@
     "index.d.ts",
     "index.js",
     "browser.js",
-    "wasm-tools.js"
+    "wasm-tools.js",
+    "wasm-tools.d.ts"
   ],
   "napi": {
     "binaryName": "walrus",

@@ -203,6 +203,6 @@ const out = WasmModule.fromBuffer(mod.emitWasm(false))
 for (const field of out.producers.fields()) {
   console.log(`${field.name}: ${field.values.map((v) => `${v.name}@${v.version}`).join(', ')}`)
 }
-// processed-by: walrus@0.26.4, my-bundler@0.3.1  (walrus appends its own entry on emit)
+// processed-by: walrus@0.26.4, my-bundler@0.3.1  (walrus adds its own entry on every parse — here the fromBuffer re-parse)
 // language: Rust@1.79
 ```
