@@ -62,6 +62,46 @@ importers:
       typescript:
         specifier: ^7.0.0
         version: 7.0.2
+    optionalDependencies:
+      '@napi-rs/wasm-tools-android-arm-eabi':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-android-arm64':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-darwin-arm64':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-darwin-x64':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-freebsd-x64':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-linux-arm64-gnu':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-linux-arm64-musl':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-linux-x64-gnu':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-linux-x64-musl':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-wasm32-wasi':
+        specifier: 1.0.1
+        version: 1.0.1(@emnapi/core@1.9.2(patch_hash=43bdc87a65f01fe4836678c0f6b0eb1926ea7617ee910f95084902af2e3bf43e))(@emnapi/runtime@1.9.2)
+      '@napi-rs/wasm-tools-win32-arm64-msvc':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-win32-ia32-msvc':
+        specifier: 1.0.1
+        version: 1.0.1
+      '@napi-rs/wasm-tools-win32-x64-msvc':
+        specifier: 1.0.1
+        version: 1.0.1
 
   crates/panic:
     devDependencies:
