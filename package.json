@@ -4,16 +4,17 @@
   "description": "https://github.com/rustwasm/walrus bindings",
   "main": "wasm-tools.js",
   "types": "wasm-tools.d.ts",
-  "browser": "wasm-tools.browser.js",
+  "browser": "wasm-tools.browser.mjs",
   "exports": {
     ".": {
       "types": "./wasm-tools.d.ts",
-      "browser": "./wasm-tools.browser.js",
+      "browser": "./wasm-tools.browser.mjs",
       "import": "./wasm-tools.js",
       "require": "./wasm-tools.js",
       "default": "./wasm-tools.js"
     },
-    "./browser.js": "./wasm-tools.browser.js",
+    "./browser": "./wasm-tools.browser.mjs",
+    "./browser.js": "./wasm-tools.browser.mjs",
     "./package.json": "./package.json"
   },
   "repository": {
@@ -32,7 +33,7 @@
   "files": [
     "index.d.ts",
     "index.js",
-    "wasm-tools.browser.js",
+    "wasm-tools.browser.mjs",
     "wasm-tools.js",
     "wasm-tools.d.ts"
   ],
