@@ -5,6 +5,17 @@
   "main": "wasm-tools.js",
   "types": "wasm-tools.d.ts",
   "browser": "wasm-tools.browser.js",
+  "exports": {
+    ".": {
+      "types": "./wasm-tools.d.ts",
+      "browser": "./wasm-tools.browser.js",
+      "import": "./wasm-tools.js",
+      "require": "./wasm-tools.js",
+      "default": "./wasm-tools.js"
+    },
+    "./browser.js": "./wasm-tools.browser.js",
+    "./package.json": "./package.json"
+  },
   "repository": {
     "url": "git+ssh://git@github.com/napi-rs/wasm-tools.git",
     "type": "git"
@@ -21,7 +32,6 @@
   "files": [
     "index.d.ts",
     "index.js",
-    "browser.js",
     "wasm-tools.browser.js",
     "wasm-tools.js",
     "wasm-tools.d.ts"
@@ -53,8 +63,8 @@
   },
   "scripts": {
     "artifacts": "napi artifacts",
-    "build": "napi build --platform --release && node scripts/write-browser-entry.mjs",
-    "build:debug": "napi build --platform && node scripts/write-browser-entry.mjs",
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
     "format": "run-p format:prettier format:rs format:toml",
     "format:prettier": "prettier . -w",
     "format:toml": "taplo format",
