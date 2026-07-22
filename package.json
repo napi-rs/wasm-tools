@@ -4,7 +4,7 @@
   "description": "https://github.com/rustwasm/walrus bindings",
   "main": "wasm-tools.js",
   "types": "wasm-tools.d.ts",
-  "browser": "browser.js",
+  "browser": "wasm-tools.browser.js",
   "repository": {
     "url": "git+ssh://git@github.com/napi-rs/wasm-tools.git",
     "type": "git"
@@ -22,6 +22,7 @@
     "index.d.ts",
     "index.js",
     "browser.js",
+    "wasm-tools.browser.js",
     "wasm-tools.js",
     "wasm-tools.d.ts"
   ],
