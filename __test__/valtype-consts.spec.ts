@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module'
+
 import test from 'ava'
 
 import {
@@ -27,6 +29,25 @@ import {
 // globals-write.spec.ts): valid wasm header, zero sections, no CLI needed.
 const EMPTY_MODULE = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
 const empty = () => WasmModule.fromBuffer(EMPTY_MODULE)
+
+const nodeRequire = createRequire(import.meta.url)
+
+// The package entry (`wasm-tools.js`) deep-freezes the exported constants: they
+// are shared singleton objects, so without freezing a consumer that mutates one
+// (`FUNCREF.nullable = false`) would corrupt the shared value for every other
+// caller in the process. `../index` (the raw binding) is what these other tests
+// import; the frozen guarantee is on the published entry, so load it directly.
+test('the package entry deep-freezes the exported constants', (t) => {
+  const pkg = nodeRequire('../wasm-tools.js')
+  t.true(Object.isFrozen(pkg.I32))
+  t.true(Object.isFrozen(pkg.FUNCREF))
+  t.true(Object.isFrozen(pkg.FUNCREF.heap)) // the nested heap is frozen too
+  // Mutating a frozen constant throws under module strict mode; the value holds.
+  t.throws(() => {
+    pkg.FUNCREF.nullable = false
+  })
+  t.is(pkg.FUNCREF.nullable, true)
+})
 
 // Each exported constant deep-equals the hand-written discriminated-union shape
 // it replaces, so `import { I32 }` is interchangeable with `{ type: 'I32' }`.
