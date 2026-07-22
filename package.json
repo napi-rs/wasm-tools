@@ -21,7 +21,6 @@
   "files": [
     "index.d.ts",
     "index.js",
-    "browser.js",
     "wasm-tools.browser.js",
     "wasm-tools.js",
     "wasm-tools.d.ts"
