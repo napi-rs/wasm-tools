@@ -27,6 +27,9 @@ const SAME_COL_BOW = 24 // base bow of a same-column edge (kept < GUTTER so its 
 const LANE_STEP = 10 // extra bow per parallel edge between the same pair
 const LANE_STAGGER = 12 // vertical offset per parallel label so they don't stack
 const LABEL_PAD = 40 // right-side room a same-column edge label needs
+// Smallest downscale the canvas may take to fit its pane. 0.85 keeps the 12px node
+// label at ~10px and the 9px edge label at ~7.6px; past that the graph scrolls.
+const MIN_SCALE = 0.85
 
 type Placed = { node: GraphNode; x: number; y: number }
 type XY = { x: number; y: number }
@@ -178,11 +181,12 @@ export default function GraphView({
         height={height}
         viewBox={`0 0 ${width} ${height}`}
         // Draw at natural size when it fits, scale DOWN to the pane when it doesn't
-        // (h-auto keeps the viewBox aspect), and stop shrinking at 520px so a wide
-        // graph in a narrow pane stays legible and scrolls instead of turning to
-        // hairlines. Never scales up: a two-node module keeps its normal type size.
+        // (h-auto keeps the viewBox aspect), never up. The floor is RELATIVE, not a
+        // fixed 520px: a 536-wide graph in a 342px phone pane hit 0.445x, rendering
+        // 12px labels at 5px. Below MIN_SCALE the svg stops shrinking and the wrapper
+        // scrolls instead — a scrollbar beats an illegible one.
         className="block h-auto max-w-full"
-        style={{ minWidth: Math.min(width, 520) }}
+        style={{ minWidth: Math.round(width * MIN_SCALE) }}
         role="img"
         aria-label="Module graph"
       >
