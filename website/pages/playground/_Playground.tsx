@@ -98,6 +98,13 @@ function instrsToHtml(instrs: BuildInstrDesc[]): string {
 const STALE_WASM_NOTE =
   'Preview build — this playground runs a vendored pre-release of @napi-rs/wasm-tools with the full module-graph API. The public npm release (1.0.1) predates it; a ≥ 1.0.2 publish will replace the vendored copy.'
 
+// Upload guards: reject oversized files up front, and abort a read that never
+// settles, so a multi-GB or stalled (e.g. cloud-backed) file can't exhaust the main
+// thread or leave the UI locked with reload as the only recovery.
+const MAX_UPLOAD_MB = 64
+const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+const READ_TIMEOUT_MS = 30_000
+
 // ── Static (non-isolated) fallback: a no-wasm code tour ──────────────────────
 function StaticFallback() {
   return (
@@ -156,6 +163,8 @@ export default function Playground() {
     () => () => {
       engineRef.current?.dispose()
       engineRef.current = null
+      readerRef.current?.abort()
+      readerRef.current = null
     },
     [],
   )
@@ -171,6 +180,9 @@ export default function Playground() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // The in-flight upload reader, tracked so a superseding selection or unmount can
+  // abort it instead of letting a large/stalled read run on unattended.
+  const readerRef = useRef<FileReader | null>(null)
   // Monotonic request generation. Every engine op bumps it and captures its value;
   // a reply is applied only if it's still the latest, so an out-of-order completion
   // (e.g. a slow inspect landing after a newer inspect/build) can never overwrite
@@ -302,18 +314,42 @@ export default function Playground() {
     (files: FileList | null) => {
       if (!files || files.length === 0) return
       const file = files[0]
+      // Reject oversized files before reading a byte — no busy state is entered.
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setStatus('error')
+        setErrorMsg(`${file.name} is ${(file.size / (1024 * 1024)).toFixed(1)} MB — over the ${MAX_UPLOAD_MB} MB in-browser limit.`)
+        return
+      }
       // Stamp the generation NOW (synchronously, at selection time) so ordering is
       // decided by selection, not by which FileReader happens to finish first.
       const gen = ++genRef.current
       setStatus('running')
       setErrorMsg('')
+      // Abort a read still running from a superseded selection, then track this one.
+      readerRef.current?.abort()
       const reader = new FileReader()
+      readerRef.current = reader
+      // A read that never settles (stalled/cloud-backed file) would leave the UI
+      // busy forever; abort it after a ceiling so onabort can release the lock.
+      const timer = setTimeout(() => reader.abort(), READ_TIMEOUT_MS)
+      const settle = () => {
+        clearTimeout(timer)
+        if (readerRef.current === reader) readerRef.current = null
+      }
       reader.onerror = () => {
+        settle()
         if (gen !== genRef.current) return
         setStatus('error')
         setErrorMsg(`Could not read ${file.name}.`)
       }
+      reader.onabort = () => {
+        settle()
+        if (gen !== genRef.current) return // superseded/unmounted: a newer op owns the UI
+        setStatus('error')
+        setErrorMsg(`Reading ${file.name} was cancelled or timed out.`)
+      }
       reader.onload = (e) => {
+        settle()
         const buf = e.target?.result
         if (!(buf instanceof ArrayBuffer)) return
         void inspectWasm(buf, file.name, gen)

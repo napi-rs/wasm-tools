@@ -22,8 +22,9 @@ const NODE_H = 48
 const COL_GAP = 236 // x pitch between columns
 const ROW_GAP = 68 // y pitch within a column
 const PAD = 28
-const SAME_COL_BOW = 46 // how far a same-column edge bows to the right of the column
-const LANE_STEP = 26 // extra bow per parallel edge between the same pair
+const GUTTER = COL_GAP - NODE_W // empty space between two columns (68)
+const SAME_COL_BOW = 26 // base bow of a same-column edge (kept < GUTTER so its label fits)
+const LANE_STEP = 13 // extra bow per parallel edge between the same pair
 const LABEL_PAD = 40 // right-side room a same-column edge label needs
 
 type Placed = { node: GraphNode; x: number; y: number }
@@ -64,10 +65,13 @@ function routeEdge(from: XY, to: XY, lane: number): Omit<PlacedEdge, 'id' | 'fro
     const dx = Math.max(40, Math.abs(x2 - x1) * 0.5)
     const c1x = leftToRight ? x1 + dx : x1 - dx
     const c2x = leftToRight ? x2 - dx : x2 + dx
-    const gapOff = Math.min(COL_GAP * 0.34, Math.abs(x2 - x1) * 0.4)
+    // Anchor the label in the MIDDLE of the first inter-column gutter beside the
+    // source — always empty space, whatever column the edge ends in — so a column-
+    // skipping edge's label can never land on an intervening node.
+    const gapOff = GUTTER / 2
     return {
       path: `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`,
-      lx: x1 + (leftToRight ? gapOff : -gapOff), // in the empty gap next to the source
+      lx: x1 + (leftToRight ? gapOff : -gapOff),
       ly: y1 - 6,
       maxX: Math.max(x1, x2, c1x, c2x),
       maxY: Math.max(y1, y2),

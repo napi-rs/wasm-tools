@@ -107,6 +107,13 @@ const MAX_PER_SECTION = 250
 // segment repeating one function 20k times) can't build an unbounded edge payload that
 // stalls postMessage or the SVG. Distinct call edges are separately capped so we stop
 // reading function bodies once the call graph is already saturated.
+//
+// These bound the RESULT (node/edge counts). They do NOT bound CONSTRUCTION cost: the
+// binding only exposes whole-collection `items()`, whole-body `instructions()`, and a
+// cloning `data.value` — no bounded slice / raw-length / streaming-visitor APIs — so a
+// giant module still materializes those before we cap. Bounding construction needs new
+// binding APIs (tracked for the walrus package, out of scope for the site); here the
+// worker's 60s per-request timeout + the browser's own memory ceiling are the backstop.
 const MAX_EDGES = 4000
 const MAX_CALL_EDGES = 1500
 
@@ -250,12 +257,17 @@ function buildGraph(m: WasmModule): InspectResult {
       })
       if (tyIndex != null) edge(id, nid('type', tyIndex), 'type')
       // Local functions have a body; collect their fn→fn call references (bounded).
-      if (f.kind === 'Local' && callBudget.left > 0) {
-        const instrs = safeCall(() => f.instructions())
-        if (instrs) collectCalls(instrs, f.index, callSeen, callEdges, callBudget)
-        // null ⇒ the body was too deep for the binding to read, so its calls are
-        // omitted; flag the graph as partial rather than pretend it's complete.
-        else edgesTruncated = true
+      if (f.kind === 'Local') {
+        if (callBudget.left > 0) {
+          const instrs = safeCall(() => f.instructions())
+          if (instrs) collectCalls(instrs, f.index, callSeen, callEdges, callBudget)
+          // null ⇒ the body was too deep for the binding to read, so its calls are
+          // omitted; flag the graph as partial rather than pretend it's complete.
+          else edgesTruncated = true
+        }
+        // Once the call budget is spent (here or in an earlier function), this and
+        // every later local body's calls are dropped — so the call graph is partial.
+        if (callBudget.left <= 0) edgesTruncated = true
       }
     }
     section('function', 'Functions', ids, total, truncated)
