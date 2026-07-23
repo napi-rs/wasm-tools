@@ -524,15 +524,18 @@ function buildGraph(m: WasmModule): InspectResult {
   if (prunedEdges.length !== edges.length) edgesTruncated = true
 
   // Clip user-controlled text once, centrally, so no node inflates the payload.
+  // Flag a clipped LABEL so Edit mode won't seed an editable field with the preview.
   for (const n of nodes) {
+    if (n.label.length > MAX_TEXT) n.labelClipped = true
     n.label = clipText(n.label)
     if (n.sub) n.sub = clipText(n.sub)
     for (const p of n.props) p.value = clipText(p.value)
   }
-  const moduleName = safeGet(() => m.name, null)
+  const rawModuleName = safeGet(() => m.name, null)
 
   return {
-    moduleName: moduleName != null ? clipText(moduleName) : null,
+    moduleName: rawModuleName != null ? clipText(rawModuleName) : null,
+    moduleNameClipped: rawModuleName != null && rawModuleName.length > MAX_TEXT,
     nodes,
     edges: prunedEdges,
     sections,

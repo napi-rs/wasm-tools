@@ -41,6 +41,32 @@ test('a module with a call renders the fn→fn "calls" edge', async ({ page }) =
   await expect(page.locator('svg text', { hasText: /^calls$/ }).first()).toBeVisible({ timeout: 60_000 })
 })
 
+test('a failed re-apply removes the stale download (edit-mode integrity)', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  await page.getByRole('button', { name: 'edit', exact: true }).click()
+  // This sample has `(memory $mem 1 2)` — initial 1, max 2.
+  await page.getByLabel('Example').selectOption({ label: 'memory + mutable global + exports' })
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+
+  const initial = page.locator('input[type="number"]').first()
+  await expect(initial).toBeVisible({ timeout: 60_000 })
+
+  // Valid edit (1 → 2, within max 2): applies and produces a downloadable binary.
+  await initial.fill('2')
+  await page.getByRole('button', { name: /Apply edits/ }).click()
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toBeVisible({ timeout: 60_000 })
+
+  // Invalid re-apply (2 → 3 exceeds max 2): the emit fails on re-parse, and the
+  // previous binary must NOT remain downloadable (it wouldn't match the form).
+  await initial.fill('3')
+  await page.getByRole('button', { name: /Apply edits/ }).click()
+  await expect(page.getByText(/minimum|maximum|error/i).first()).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toHaveCount(0)
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')

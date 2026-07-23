@@ -226,12 +226,25 @@ export default function Playground() {
 
   // Pristine baseline for diffing; rebuilt whenever a fresh inspect lands.
   const baseline = useMemo(() => (result ? buildForm(result) : null), [result])
+  // Which editable names are CLIPPED previews (their full value isn't in the DTO),
+  // so those fields must be locked — editing one would write the preview back.
+  const clipInfo = useMemo(() => {
+    const exports = new Set<number>()
+    if (result) for (const n of result.nodes) if (n.kind === 'export' && n.labelClipped) exports.add(n.index)
+    return { exports, moduleName: result?.moduleNameClipped ?? false }
+  }, [result])
   // A new inspect resets the editable form and drops any prior emitted output.
   useEffect(() => {
     setForm(result ? buildForm(result) : null)
     setAfterResult(null)
     setEmitted(null)
   }, [result])
+  // Any edit to the form invalidates a previously-applied result: its after-graph and
+  // downloadable bytes no longer describe the current form, so drop them until re-apply.
+  useEffect(() => {
+    setAfterResult(null)
+    setEmitted(null)
+  }, [form])
 
   // In Edit mode the right pane shows the after-graph once edits are applied.
   const displayResult = mode === 'edit' && afterResult ? afterResult : result
@@ -381,6 +394,11 @@ export default function Playground() {
     setApplying(true)
     setStatus('running')
     setErrorMsg('')
+    // Invalidate any prior applied result up front: only a SUCCESSFUL apply below
+    // re-populates them, so a failed/superseded apply can never leave a stale
+    // "After edits" graph or a downloadable binary that doesn't match the form.
+    setAfterResult(null)
+    setEmitted(null)
     try {
       const format = sourceFormatRef.current
       let bytes: ArrayBuffer
@@ -628,10 +646,14 @@ export default function Playground() {
                   type="text"
                   value={form.moduleName}
                   placeholder="(unnamed)"
-                  disabled={applying}
+                  disabled={applying || clipInfo.moduleName}
+                  title={clipInfo.moduleName ? 'Name is too long to edit here' : undefined}
                   onChange={(e) => setForm((f) => (f ? { ...f, moduleName: e.target.value } : f))}
                   className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                 />
+                {clipInfo.moduleName ? (
+                  <span className="font-mono text-xs text-(--color-faint)">Name too long to edit here.</span>
+                ) : null}
               </label>
 
               {/* exports → rename */}
@@ -646,7 +668,8 @@ export default function Playground() {
                         <input
                           type="text"
                           value={form.exportNames[n.index] ?? ''}
-                          disabled={applying}
+                          disabled={applying || clipInfo.exports.has(n.index)}
+                          title={clipInfo.exports.has(n.index) ? 'Name is too long to edit here' : undefined}
                           onChange={(e) =>
                             setForm((f) =>
                               f ? { ...f, exportNames: { ...f.exportNames, [n.index]: e.target.value } } : f,

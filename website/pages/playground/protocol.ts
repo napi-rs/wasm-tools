@@ -28,6 +28,9 @@ export type GraphNode = {
   sub?: string // secondary line (e.g. type signature, module.name)
   props: PropPair[] // full property list for the detail panel
   edited?: boolean // reserved: amber highlight for a mutated node (Edit mode)
+  // The label is a CLIPPED preview of an over-long name — its full value is not in
+  // this DTO, so Edit mode must not treat it as a canonical, editable value.
+  labelClipped?: boolean
 }
 
 export type GraphEdge = {
@@ -53,6 +56,9 @@ export type InspectResult = {
   // true when the graph omitted edges — a global edge/call budget was hit, or a
   // function body was too deep to read — so the UI can flag the graph as partial.
   edgesTruncated?: boolean
+  // true when `moduleName` is a clipped preview of an over-long name (Edit mode must
+  // then not treat it as the canonical value to write back).
+  moduleNameClipped?: boolean
 }
 
 // ── Edits ─────────────────────────────────────────────────────────────────────
