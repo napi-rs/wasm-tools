@@ -184,6 +184,39 @@ export default function GraphView({
             )
           })}
         </g>
+
+        {/* edge labels (drawn last so they sit above nodes/edges) */}
+        <g>
+          {result.edges.map((e) => {
+            const from = pos.get(e.from)
+            const to = pos.get(e.to)
+            if (!from || !to || !e.label) return null
+            const x1 = from.x + NODE_W
+            const y1 = from.y + NODE_H / 2
+            const x2 = to.x
+            const y2 = to.y + NODE_H / 2
+            // The straight midpoint coincides with the cubic bezier's t=0.5 point
+            // (the control points are horizontal offsets), so this sits on the curve.
+            const mx = (x1 + x2) / 2
+            const my = (y1 + y2) / 2
+            const active = e.from === selectedId || e.to === selectedId
+            return (
+              <text
+                key={`${e.id}-label`}
+                x={mx}
+                y={my - 3}
+                textAnchor="middle"
+                fontSize={9}
+                fontFamily="var(--font-mono)"
+                fill={active ? 'var(--color-accent-strong)' : 'var(--color-faint)'}
+                opacity={active ? 1 : 0.7}
+                style={{ pointerEvents: 'none' }}
+              >
+                {e.label}
+              </text>
+            )
+          })}
+        </g>
       </svg>
     </div>
   )

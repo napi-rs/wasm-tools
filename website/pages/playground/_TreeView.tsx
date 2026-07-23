@@ -68,6 +68,11 @@ export default function TreeView({
               )
             })}
           </ul>
+          {section.truncated ? (
+            <p className="border-t border-(--color-border) px-4 py-2 font-mono text-xs text-(--color-faint)">
+              showing first {section.nodeIds.length} of {section.count}
+            </p>
+          ) : null}
         </details>
       ))}
     </div>

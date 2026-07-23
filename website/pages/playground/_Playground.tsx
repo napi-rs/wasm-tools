@@ -394,12 +394,14 @@ export default function Playground() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${activePreset.name}.wasm`
+    // Name the file after the artifact that was actually built, not the live
+    // selection — so the download stays correct regardless of transient UI state.
+    a.download = `${buildResult.name}.wasm`
     document.body.appendChild(a)
     a.click()
     a.remove()
     URL.revokeObjectURL(url)
-  }, [buildResult, activePreset])
+  }, [buildResult])
 
   // ----- SSR shell (before mount) -----
   if (!mounted) {
@@ -646,8 +648,9 @@ export default function Playground() {
                 <span className="font-mono text-xs text-(--color-muted)">preset</span>
                 <select
                   value={buildPreset}
+                  disabled={building}
                   onChange={(e) => selectPreset(e.target.value as BuildPresetId)}
-                  className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-accent) focus:outline-none"
+                  className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-accent) focus:outline-none disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {BUILD_PRESETS.map((p) => (
                     <option key={p.id} value={p.id}>
@@ -670,6 +673,7 @@ export default function Playground() {
                       <input
                         type="number"
                         value={buildArgs[i] ?? ''}
+                        disabled={building}
                         onChange={(e) =>
                           setBuildArgs((a) => {
                             const next = [...a]
@@ -677,7 +681,7 @@ export default function Playground() {
                             return next
                           })
                         }
-                        className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-accent) focus:outline-none"
+                        className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-accent) focus:outline-none disabled:cursor-not-allowed disabled:opacity-40"
                       />
                     </div>
                   ))}

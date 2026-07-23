@@ -92,6 +92,31 @@ function typeSig(t: WType): string | undefined {
   }
 }
 
+// Per-section node budget. The per-item getters each do an O(n) arena liveness
+// scan, so materializing every node of a huge module is O(n²) and would wedge
+// the worker (and swamp the SVG). We render the first MAX_PER_SECTION of each
+// family and mark the section truncated; the full count is still reported.
+const MAX_PER_SECTION = 250
+
+function cap<T>(items: T[]): { shown: T[]; total: number; truncated: boolean } {
+  if (items.length <= MAX_PER_SECTION) return { shown: items, total: items.length, truncated: false }
+  return { shown: items.slice(0, MAX_PER_SECTION), total: items.length, truncated: true }
+}
+
+// Walk a function body (including nested Block/Loop/IfElse arms) and collect the
+// functions it references via Call / ReturnCall / RefFunc.
+type CallEdge = { from: number; to: number; kind: 'Call' | 'ReturnCall' | 'RefFunc' }
+function collectCalls(instrs: InstrDesc[], from: number, out: CallEdge[]): void {
+  for (const ins of instrs) {
+    if (ins.func != null && (ins.type === 'Call' || ins.type === 'ReturnCall' || ins.type === 'RefFunc')) {
+      out.push({ from, to: ins.func, kind: ins.type })
+    }
+    if (ins.seq) collectCalls(ins.seq, from, out)
+    if (ins.consequent) collectCalls(ins.consequent, from, out)
+    if (ins.alternative) collectCalls(ins.alternative, from, out)
+  }
+}
+
 function buildGraph(m: WasmModule): InspectResult {
   const nodes: GraphNode[] = []
   const edges: GraphEdge[] = []
@@ -100,13 +125,14 @@ function buildGraph(m: WasmModule): InspectResult {
   const edge = (from: string, to: string, label?: string) =>
     edges.push({ id: `e${edgeSeq++}`, from, to, label })
 
-  const section = (kind: NodeKind, label: string, ids: string[]) =>
-    sections.push({ kind, label, count: ids.length, nodeIds: ids })
+  const section = (kind: NodeKind, label: string, ids: string[], total?: number, truncated?: boolean) =>
+    sections.push({ kind, label, count: total ?? ids.length, nodeIds: ids, truncated: truncated ?? false })
 
   // types
   {
     const ids: string[] = []
-    for (const t of safeItems(m.types)) {
+    const { shown, total, truncated } = cap(safeItems(m.types))
+    for (const t of shown) {
       const id = nid('type', t.index)
       ids.push(id)
       const s = typeSig(t)
@@ -123,13 +149,14 @@ function buildGraph(m: WasmModule): InspectResult {
         ],
       })
     }
-    section('type', 'Types', ids)
+    section('type', 'Types', ids, total, truncated)
   }
 
   // imports
   {
     const ids: string[] = []
-    for (const im of safeItems(m.imports)) {
+    const { shown, total, truncated } = cap(safeItems(m.imports))
+    for (const im of shown) {
       const id = nid('import', im.index)
       ids.push(id)
       nodes.push({
@@ -146,15 +173,19 @@ function buildGraph(m: WasmModule): InspectResult {
         ],
       })
     }
-    section('import', 'Imports', ids)
+    section('import', 'Imports', ids, total, truncated)
   }
 
   // functions
+  const shownFuncIndices = new Set<number>()
+  const callEdges: CallEdge[] = []
   {
     const ids: string[] = []
-    for (const f of safeItems(m.functions)) {
+    const { shown, total, truncated } = cap(safeItems(m.functions))
+    for (const f of shown) {
       const id = nid('function', f.index)
       ids.push(id)
+      shownFuncIndices.add(f.index)
       let s: string | undefined
       let tyIndex: number | undefined
       try {
@@ -179,14 +210,20 @@ function buildGraph(m: WasmModule): InspectResult {
         ],
       })
       if (tyIndex != null) edge(id, nid('type', tyIndex), 'type')
+      // Local functions have a body; collect their fn→fn call references.
+      if (f.kind === 'Local') {
+        const instrs = safeCall(() => f.instructions())
+        if (instrs) collectCalls(instrs, f.index, callEdges)
+      }
     }
-    section('function', 'Functions', ids)
+    section('function', 'Functions', ids, total, truncated)
   }
 
   // globals
   {
     const ids: string[] = []
-    for (const g of safeItems(m.globals)) {
+    const { shown, total, truncated } = cap(safeItems(m.globals))
+    for (const g of shown) {
       const id = nid('global', g.index)
       ids.push(id)
       const ty = g.ty
@@ -211,13 +248,14 @@ function buildGraph(m: WasmModule): InspectResult {
         edge(id, nid('type', ty.heap.typeIndex), 'type')
       }
     }
-    section('global', 'Globals', ids)
+    section('global', 'Globals', ids, total, truncated)
   }
 
   // memories
   {
     const ids: string[] = []
-    for (const mem of safeItems(m.memories)) {
+    const { shown, total, truncated } = cap(safeItems(m.memories))
+    for (const mem of shown) {
       const id = nid('memory', mem.index)
       ids.push(id)
       const range = `${mem.initial}${mem.maximum != null ? `..${mem.maximum}` : ''} pages`
@@ -238,13 +276,14 @@ function buildGraph(m: WasmModule): InspectResult {
         ],
       })
     }
-    section('memory', 'Memories', ids)
+    section('memory', 'Memories', ids, total, truncated)
   }
 
   // tables
   {
     const ids: string[] = []
-    for (const tb of safeItems(m.tables)) {
+    const { shown, total, truncated } = cap(safeItems(m.tables))
+    for (const tb of shown) {
       const id = nid('table', tb.index)
       ids.push(id)
       const elTy = valTypeLabel(tb.elementTy)
@@ -265,13 +304,14 @@ function buildGraph(m: WasmModule): InspectResult {
         ],
       })
     }
-    section('table', 'Tables', ids)
+    section('table', 'Tables', ids, total, truncated)
   }
 
   // data segments
   {
     const ids: string[] = []
-    for (const d of safeItems(m.data)) {
+    const { shown, total, truncated } = cap(safeItems(m.data))
+    for (const d of shown) {
       const id = nid('data', d.index)
       ids.push(id)
       let byteLen = 0
@@ -296,13 +336,14 @@ function buildGraph(m: WasmModule): InspectResult {
       const mem = safeCall(() => d.memory())
       if (mem) edge(id, nid('memory', mem.index), 'inits')
     }
-    section('data', 'Data', ids)
+    section('data', 'Data', ids, total, truncated)
   }
 
   // element segments
   {
     const ids: string[] = []
-    for (const el of safeItems(m.elements)) {
+    const { shown, total, truncated } = cap(safeItems(m.elements))
+    for (const el of shown) {
       const id = nid('element', el.index)
       ids.push(id)
       nodes.push({
@@ -323,13 +364,14 @@ function buildGraph(m: WasmModule): InspectResult {
       const fns = safeCall(() => el.functionItems())
       if (fns) for (const f of fns) edge(id, nid('function', f.index), 'ref')
     }
-    section('element', 'Elements', ids)
+    section('element', 'Elements', ids, total, truncated)
   }
 
   // tags
   {
     const ids: string[] = []
-    for (const tg of safeItems(m.tags)) {
+    const { shown, total, truncated } = cap(safeItems(m.tags))
+    for (const tg of shown) {
       const id = nid('tag', tg.index)
       ids.push(id)
       let tyIndex: number | undefined
@@ -353,13 +395,14 @@ function buildGraph(m: WasmModule): InspectResult {
       })
       if (tyIndex != null) edge(id, nid('type', tyIndex), 'type')
     }
-    section('tag', 'Tags', ids)
+    section('tag', 'Tags', ids, total, truncated)
   }
 
   // exports (drawn last so the layered layout puts them on the right)
   {
     const ids: string[] = []
-    for (const ex of safeItems(m.exports)) {
+    const { shown, total, truncated } = cap(safeItems(m.exports))
+    for (const ex of shown) {
       const id = nid('export', ex.index)
       ids.push(id)
       nodes.push({
@@ -377,7 +420,7 @@ function buildGraph(m: WasmModule): InspectResult {
       const target = exportTarget(ex)
       if (target) edge(id, target, 'exports')
     }
-    section('export', 'Exports', ids)
+    section('export', 'Exports', ids, total, truncated)
   }
 
   // imports → the item they define (drawn after all items exist)
@@ -385,6 +428,19 @@ function buildGraph(m: WasmModule): InspectResult {
     const from = nid('import', im.index)
     const target = importTarget(im)
     if (target) edge(from, target, 'defines')
+  }
+
+  // fn → fn call edges (only between functions that are both in the shown set, so
+  // an edge never dangles to a node truncated by the per-section budget). Deduped
+  // so a function calling the same target twice draws one edge.
+  const seenCalls = new Set<string>()
+  for (const c of callEdges) {
+    if (!shownFuncIndices.has(c.to)) continue
+    const label = c.kind === 'RefFunc' ? 'ref.func' : 'calls'
+    const key = `${c.from}->${c.to}:${label}`
+    if (seenCalls.has(key)) continue
+    seenCalls.add(key)
+    edge(nid('function', c.from), nid('function', c.to), label)
   }
 
   return { moduleName: safeGet(() => m.name, null), nodes, edges, sections }
@@ -547,8 +603,14 @@ function buildPreset(
   if (!fn) throw new Error('buildFunction returned an index with no function')
   m.exports.addFunction(name, fn)
   const emitted = m.emitWasm(false)
-  // Read the body back from the same handle (round-trip proof).
-  const instructions = fn.instructions().map(normalizeInstr)
+  // Re-parse the emitted bytes and read the body back from the FRESH module — a
+  // true round-trip proof (the pre-emit handle would just echo the input tree,
+  // proving nothing about what actually baked into the wasm). Building on an empty
+  // module, the sole function keeps index `idx` (0) across emit + re-parse.
+  const reparsed = WasmModule.fromBuffer(emitted)
+  const rfn = reparsed.functions.getByIndex(idx)
+  if (!rfn) throw new Error('re-parsed module is missing the built function')
+  const instructions = rfn.instructions().map(normalizeInstr)
   return { name, emitted, instructions }
 }
 

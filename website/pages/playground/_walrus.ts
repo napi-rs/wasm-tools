@@ -37,7 +37,9 @@ export type ConstValue =
   | { type: 'V128'; value: Uint8Array }
 
 // A wide tagged instruction record; only `type` (the walrus variant name) is
-// required. The build presets use the LocalGet / Const / Binop subset.
+// required. The build presets use the LocalGet / Const / Binop subset. The three
+// nested-body fields carry control-flow children (Block/Loop → `seq`; IfElse →
+// `consequent`/`alternative`) so a reader can walk the full instruction tree.
 export interface InstrDesc {
   type: string
   value?: ConstValue
@@ -45,6 +47,9 @@ export interface InstrDesc {
   global?: number
   func?: number
   op?: string
+  seq?: InstrDesc[]
+  consequent?: InstrDesc[]
+  alternative?: InstrDesc[]
 }
 
 // A module-wide local created before it is named in a function's arg list.

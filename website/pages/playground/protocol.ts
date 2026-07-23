@@ -40,8 +40,9 @@ export type GraphEdge = {
 export type SectionSummary = {
   kind: NodeKind
   label: string // plural human label, e.g. "Functions"
-  count: number
-  nodeIds: string[]
+  count: number // the FULL item count (may exceed nodeIds.length when truncated)
+  nodeIds: string[] // the node ids actually emitted (capped at MAX_PER_SECTION)
+  truncated?: boolean // true when count > nodeIds.length (large-module node budget hit)
 }
 
 export type InspectResult = {

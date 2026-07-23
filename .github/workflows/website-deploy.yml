@@ -79,6 +79,21 @@ jobs:
         working-directory: website
         run: npm run sync-vendor
 
+      # Gate the deploy on the e2e suite: landing, docs, and the cross-origin-isolated
+      # playground (inspect→graph + build→run). CI=true forces a fresh dev server so the
+      # gate runs against the real vite.config isolation middleware. NOTE: the dev/preview
+      # middleware, not void.json, supplies headers here — the config-consistency spec
+      # (e2e/config.spec.ts) additionally asserts void.json's production COOP/COEP matches,
+      # so prod header drift is caught even though this run uses the dev server.
+      - name: Install Playwright browser
+        working-directory: website
+        run: npx playwright install --with-deps chromium
+      - name: E2E gate
+        working-directory: website
+        env:
+          CI: 'true'
+        run: npm run test:e2e
+
       # `void deploy` (>= 0.10.2) detects GitHub Actions, mints the OIDC token,
       # exchanges it for a deploy token, builds, and deploys — no VOID_TOKEN secret.
       - name: Deploy
