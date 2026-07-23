@@ -334,6 +334,27 @@ export default function Playground() {
     setErrorMsg(msg)
   }, [])
 
+  // Every change to the displayed source (example pick or textarea edit) must invalidate
+  // the current inspection: the graph, edit form, after-result, selection, and emitted
+  // download all describe the PREVIOUS source, and the retained source refs Apply reads
+  // (sourceWatRef/…) still point at it. Bumping the generation also supersedes any
+  // in-flight inspect/read, so a reply for the old source can't commit against the new
+  // one. Routing both controls through here keeps the actionable session (Apply/Download)
+  // strictly matched to what's on screen — a stale module can never be applied or
+  // downloaded behind a changed editor. Source controls are also disabled while an op is
+  // running, so this never races a settling engine reply.
+  const changeSource = useCallback((next: string) => {
+    setWat(next)
+    genRef.current++
+    setResult(null)
+    setForm(null)
+    setAfterResult(null)
+    setEmitted(null)
+    setSelectedId(null)
+    setStatus('empty')
+    setErrorMsg('')
+  }, [])
+
   const applyResult = useCallback(
     (r: RunResult) => {
       if (r.ok && r.kind === 'inspect') {
@@ -646,11 +667,12 @@ export default function Playground() {
             </label>
             <select
               id="pg-example"
-              className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-surface-1) px-3 py-1.5 font-mono text-xs text-(--color-fg)"
+              className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-surface-1) px-3 py-1.5 font-mono text-xs text-(--color-fg) disabled:opacity-50"
               onChange={(e) => {
                 const s = WAT_SAMPLES[Number(e.target.value)]
-                if (s) setWat(s.wat)
+                if (s) changeSource(s.wat)
               }}
+              disabled={busy}
               defaultValue="0"
             >
               {WAT_SAMPLES.map((s, i) => (
@@ -664,8 +686,9 @@ export default function Playground() {
           <textarea
             spellCheck={false}
             value={wat}
-            onChange={(e) => setWat(e.target.value)}
-            className="min-h-72 w-full resize-y rounded-xl border border-(--color-border) bg-(--color-surface-1) p-4 font-mono text-xs leading-relaxed text-(--color-fg) focus:border-(--color-accent) focus:outline-none"
+            onChange={(e) => changeSource(e.target.value)}
+            disabled={busy}
+            className="min-h-72 w-full resize-y rounded-xl border border-(--color-border) bg-(--color-surface-1) p-4 font-mono text-xs leading-relaxed text-(--color-fg) focus:border-(--color-accent) focus:outline-none disabled:opacity-60"
             aria-label="WAT source"
           />
 

@@ -194,6 +194,31 @@ test('a failed re-inspection clears the stale edit session and download', async 
   await expect(page.getByRole('button', { name: /Apply edits/ })).toHaveCount(0)
 })
 
+test('changing the source invalidates the applied edit session (no stale Apply/Download)', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  await page.getByRole('button', { name: 'edit', exact: true }).click()
+  await page.getByLabel('Example').selectOption({ label: 'memory + mutable global + exports' })
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+
+  const memInput = page.locator('input[type="number"]').first()
+  await expect(memInput).toBeVisible({ timeout: 60_000 })
+  // Apply a valid edit → module A becomes downloadable.
+  await memInput.fill('2')
+  await page.getByRole('button', { name: /Apply edits/ }).click()
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toBeVisible({ timeout: 60_000 })
+
+  // Editing the displayed source (to a different but VALID module) must invalidate the
+  // whole A session immediately — with NO re-inspect — so A's edit form can't be applied
+  // and A's emitted bytes can't be downloaded behind an editor that now shows B.
+  await page.getByLabel('WAT source').fill('(module)')
+  await expect(page.getByText(/Inspect a module first/i)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Apply edits/ })).toHaveCount(0)
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')
