@@ -23,8 +23,9 @@ const COL_GAP = 236 // x pitch between columns
 const ROW_GAP = 68 // y pitch within a column
 const PAD = 28
 const GUTTER = COL_GAP - NODE_W // empty space between two columns (68)
-const SAME_COL_BOW = 26 // base bow of a same-column edge (kept < GUTTER so its label fits)
-const LANE_STEP = 13 // extra bow per parallel edge between the same pair
+const SAME_COL_BOW = 24 // base bow of a same-column edge (kept < GUTTER so its curve fits)
+const LANE_STEP = 10 // extra bow per parallel edge between the same pair
+const LANE_STAGGER = 12 // vertical offset per parallel label so they don't stack
 const LABEL_PAD = 40 // right-side room a same-column edge label needs
 
 type Placed = { node: GraphNode; x: number; y: number }
@@ -77,29 +78,33 @@ function routeEdge(from: XY, to: XY, lane: number): Omit<PlacedEdge, 'id' | 'fro
       maxY: Math.max(y1, y2),
     }
   }
-  // same column: bow out to the right, one lane per parallel edge so reciprocal and
-  // Call/RefFunc pairs never trace the identical curve.
+  // same column: the curve bows to the right, one lane per parallel edge so
+  // reciprocal and Call/RefFunc pairs never trace the identical curve. The LABEL is
+  // start-anchored right at the node edge (so it stays inside the gutter regardless
+  // of lane) and staggered vertically per lane so parallel labels don't stack.
   const bow = SAME_COL_BOW + lane * LANE_STEP
   const x1 = from.x + NODE_W
   const cx = x1 + bow
+  const labelX = x1 + 6 // start-anchored, inside the gutter beside the node
+  const stagger = (lane % 2 === 0 ? 1 : -1) * Math.ceil(lane / 2) * LANE_STAGGER
   if (from.y === to.y) {
     const y = from.y + NODE_H / 2 // self-loop
     return {
       path: `M ${x1} ${y - 9} C ${cx} ${y - 9}, ${cx} ${y + 9}, ${x1} ${y + 9}`,
-      lx: cx + 6,
-      ly: y,
+      lx: labelX,
+      ly: y + stagger,
       maxX: cx + LABEL_PAD,
-      maxY: y + 9,
+      maxY: y + 9 + Math.abs(stagger),
     }
   }
   const y1 = from.y + NODE_H / 2
   const y2 = to.y + NODE_H / 2
   return {
     path: `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x1} ${y2}`,
-    lx: cx + 6,
-    ly: (y1 + y2) / 2,
+    lx: labelX,
+    ly: (y1 + y2) / 2 + stagger,
     maxX: cx + LABEL_PAD,
-    maxY: Math.max(y1, y2),
+    maxY: Math.max(y1, y2) + Math.abs(stagger),
   }
 }
 
@@ -284,7 +289,7 @@ export default function GraphView({
                 key={`${e.id}-label`}
                 x={e.lx}
                 y={e.ly}
-                textAnchor="middle"
+                textAnchor={e.sameColumn ? 'start' : 'middle'}
                 fontSize={9}
                 fontFamily="var(--font-mono)"
                 fill={active ? 'var(--color-accent-strong)' : 'var(--color-faint)'}

@@ -275,6 +275,7 @@ export default function Playground() {
       if (r.ok && r.kind === 'inspect') {
         sourceFormatRef.current = 'wat'
         sourceWatRef.current = wat
+        sourceWasmRef.current = null // drop any retained upload — WAT is the source now
         setSourceLabel('module.wat')
       }
       applyResult(r)
@@ -297,7 +298,9 @@ export default function Playground() {
         if (gen !== genRef.current) return // superseded by a newer request
         if (r.ok && r.kind === 'inspect') {
           sourceFormatRef.current = 'wasm'
-          sourceWasmRef.current = bytes.slice(0)
+          // `bytes` is intact (only a slice was transferred to the engine), so retain
+          // it directly instead of making a second full copy of the upload.
+          sourceWasmRef.current = bytes
           setSourceLabel(name)
         }
         applyResult(r)

@@ -116,6 +116,11 @@ const MAX_PER_SECTION = 250
 // worker's 60s per-request timeout + the browser's own memory ceiling are the backstop.
 const MAX_EDGES = 4000
 const MAX_CALL_EDGES = 1500
+// The node cap bounds node COUNT but not the text each node carries: a module with
+// 250 exports whose names are 100k chars each is a valid <64MB upload that would post
+// a ~50MB JSON. Clip every user-controlled string (names) to keep the payload bounded.
+const MAX_TEXT = 256
+const clipText = (s: string) => (s.length > MAX_TEXT ? `${s.slice(0, MAX_TEXT)}… (${s.length} chars)` : s)
 
 function cap<T>(items: T[]): { shown: T[]; total: number; truncated: boolean } {
   if (items.length <= MAX_PER_SECTION) return { shown: items, total: items.length, truncated: false }
@@ -425,6 +430,11 @@ function buildGraph(m: WasmModule): InspectResult {
           seenTargets.add(f.index)
           edge(id, nid('function', f.index), 'ref')
         }
+      } else if (el.itemsKind === 'Expressions') {
+        // Expression-form segments can hold `ref.func` targets, but the binding
+        // exposes them as const-expressions, not function handles — so those refs
+        // are omitted here. Flag the graph partial rather than look complete.
+        edgesTruncated = true
       }
     }
     section('element', 'Elements', ids, total, truncated)
@@ -513,7 +523,21 @@ function buildGraph(m: WasmModule): InspectResult {
   const prunedEdges = edges.filter((e) => nodeIdSet.has(e.from) && nodeIdSet.has(e.to))
   if (prunedEdges.length !== edges.length) edgesTruncated = true
 
-  return { moduleName: safeGet(() => m.name, null), nodes, edges: prunedEdges, sections, edgesTruncated }
+  // Clip user-controlled text once, centrally, so no node inflates the payload.
+  for (const n of nodes) {
+    n.label = clipText(n.label)
+    if (n.sub) n.sub = clipText(n.sub)
+    for (const p of n.props) p.value = clipText(p.value)
+  }
+  const moduleName = safeGet(() => m.name, null)
+
+  return {
+    moduleName: moduleName != null ? clipText(moduleName) : null,
+    nodes,
+    edges: prunedEdges,
+    sections,
+    edgesTruncated,
+  }
 }
 
 function exportTarget(ex: WExport): string | null {
