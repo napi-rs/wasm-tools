@@ -106,6 +106,9 @@
     ]
   },
   "ava": {
+    "files": [
+      "__test__/**/*.spec.ts"
+    ],
     "nodeArguments": [
       "--import",
       "@oxc-node/core/register"

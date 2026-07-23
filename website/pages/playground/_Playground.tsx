@@ -45,12 +45,17 @@ function buildForm(r: InspectResult): EditForm {
 function diffEdits(base: EditForm, cur: EditForm): Edit[] {
   const edits: Edit[] = []
   if (cur.moduleName !== base.moduleName) {
-    edits.push({ kind: 'setModuleName', name: cur.moduleName.trim() === '' ? null : cur.moduleName })
+    // Transmit the exact string the user typed. Only a truly-empty field clears the name
+    // (→ null); a whitespace-only name is a real, binding-accepted value and must NOT be
+    // silently normalized to null — that would desync the form from the emitted bytes.
+    edits.push({ kind: 'setModuleName', name: cur.moduleName === '' ? null : cur.moduleName })
   }
   for (const key of Object.keys(cur.exportNames)) {
     const i = Number(key)
     const v = cur.exportNames[i]
-    if (v !== base.exportNames[i] && v.trim() !== '') edits.push({ kind: 'renameExport', index: i, newName: v })
+    // Transmit the exact new name — including '' (a valid, binding-accepted export name).
+    // Dropping empty names would make "clear this export name" a silent zero-pending no-op.
+    if (v !== base.exportNames[i]) edits.push({ kind: 'renameExport', index: i, newName: v })
   }
   for (const key of Object.keys(cur.globalMutable)) {
     const i = Number(key)

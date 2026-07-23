@@ -117,6 +117,29 @@ test('an extended-const global inspects (WAT features mirror the walrus parser)'
   await expect(page.getByText(/answer/).first()).toBeVisible({ timeout: 60_000 })
 })
 
+test('clearing an export name is transmitted, not silently dropped', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  await page.getByRole('button', { name: 'edit', exact: true }).click()
+  await page.getByLabel('Example').selectOption({ label: 'memory + mutable global + exports' })
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+
+  // Edit form is ready once the memory (number) input renders.
+  await expect(page.locator('input[type="number"]').first()).toBeVisible({ timeout: 60_000 })
+
+  // The first export-name field (text input #1; #0 is the module name). Clearing it to ''
+  // is a valid, binding-accepted rename — diffEdits must register it as a pending edit
+  // rather than dropping the empty string, and Apply must produce downloadable bytes.
+  const firstExport = page.locator('input[type="text"]').nth(1)
+  await firstExport.fill('')
+  await expect(page.getByText(/1 pending/)).toBeVisible()
+
+  await page.getByRole('button', { name: /Apply edits/ }).click()
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toBeVisible({ timeout: 60_000 })
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')

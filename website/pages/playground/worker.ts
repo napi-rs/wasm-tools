@@ -43,13 +43,18 @@ interface Wabt {
 // One feature set shared by parseWat AND validate. The WAT path feeds wabt's OUTPUT
 // binary straight into walrus (WasmModule.fromBuffer), so a WAT and the equivalent
 // uploaded .wasm must accept the SAME proposals — otherwise a module that inspects as
-// .wasm fails as WAT. The vendored walrus (≥1.0.2) parses permissively; a round-trip
-// probe (parseWat → validate → toBinary → fromBuffer) confirmed it accepts sign-extension,
+// .wasm fails as WAT. Each flag below was verified end-to-end (parseWat → validate →
+// toBinary → walrus.fromBuffer) against the vendored walrus (≥1.0.2): sign-extension,
 // non-trapping float→int, multi-value, extended-const, SIMD, relaxed-SIMD, tail-call,
-// memory64, shared memory (threads), GC, reference types, and bulk memory — so every wabt
-// feature is enabled here to mirror walrus's parser. (`multi_memory` is intentionally
-// absent: it is NOT a wabt 1.0.39 flag — wabt rejects two memories regardless — so setting
-// it was a silently-ignored no-op.)
+// memory64, shared memory (threads), GC, reference types, and bulk memory all round-trip.
+// Deliberately NOT enabled:
+//   • function_references — wabt 1.0.39 emits the OBSOLETE typed-reference encoding
+//     (type byte 0x6b), which walrus rejects ("failed to parse type section"). Enabling
+//     it would let a WAT pass the front end and then fail at fromBuffer — the exact
+//     inconsistency this shared set exists to prevent. Re-enable only once wabt emits the
+//     current encoding AND a round-trip regression is added.
+//   • multi_memory — NOT a wabt 1.0.39 flag at all (wabt rejects two memories regardless),
+//     so setting it was a silently-ignored no-op.
 const WABT_FEATURES: WabtFeatures = {
   exceptions: true,
   mutable_globals: true,
@@ -57,7 +62,6 @@ const WABT_FEATURES: WabtFeatures = {
   sign_extension: true,
   simd: true,
   threads: true,
-  function_references: true,
   multi_value: true,
   tail_call: true,
   bulk_memory: true,
@@ -221,7 +225,18 @@ function buildGraph(m: WasmModule): InspectResult {
   const sections: SectionSummary[] = []
   let edgeSeq = 0
   let edgesTruncated = false
+  // Ids of nodes actually materialized (every section adds its shown ids here). Edges
+  // only ever reference already-created sections, so by the time edge() runs, a valid
+  // target is already present; a MISSING target means it was capped out of its section.
+  const present = new Set<string>()
   const edge = (from: string, to: string, label?: string) => {
+    // An endpoint capped out of its section is never rendered — the edge would dangle.
+    // Reject it WITHOUT spending the edge budget, so real (visible) edges added later
+    // aren't starved by dangling ones ordered first. Flag the graph partial either way.
+    if (!present.has(from) || !present.has(to)) {
+      edgesTruncated = true
+      return
+    }
     if (edges.length >= MAX_EDGES) {
       edgesTruncated = true
       return
@@ -239,6 +254,7 @@ function buildGraph(m: WasmModule): InspectResult {
     for (const t of shown) {
       const id = nid('type', t.index)
       ids.push(id)
+      present.add(id)
       const s = typeSig(t)
       nodes.push({
         id,
@@ -262,10 +278,14 @@ function buildGraph(m: WasmModule): InspectResult {
   {
     const ids: string[] = []
     const { shown, total, truncated } = cap(safeItems(m.imports))
+    // Every import defines exactly one item, so a capped-out import always drops an
+    // import→defines edge — flag the graph partial (source-capped edges aren't attempted).
+    if (truncated) edgesTruncated = true
     shownImports.push(...shown)
     for (const im of shown) {
       const id = nid('import', im.index)
       ids.push(id)
+      present.add(id)
       nodes.push({
         id,
         kind: 'import',
@@ -298,6 +318,7 @@ function buildGraph(m: WasmModule): InspectResult {
     for (const f of shown) {
       const id = nid('function', f.index)
       ids.push(id)
+      present.add(id)
       shownFuncIndices.add(f.index)
       let s: string | undefined
       let tyIndex: number | undefined
@@ -347,6 +368,7 @@ function buildGraph(m: WasmModule): InspectResult {
     for (const g of shown) {
       const id = nid('global', g.index)
       ids.push(id)
+      present.add(id)
       const ty = g.ty
       const tyLabel = valTypeLabel(ty)
       nodes.push({
@@ -379,6 +401,7 @@ function buildGraph(m: WasmModule): InspectResult {
     for (const mem of shown) {
       const id = nid('memory', mem.index)
       ids.push(id)
+      present.add(id)
       const range = `${mem.initial}${mem.maximum != null ? `..${mem.maximum}` : ''} pages`
       nodes.push({
         id,
@@ -407,6 +430,7 @@ function buildGraph(m: WasmModule): InspectResult {
     for (const tb of shown) {
       const id = nid('table', tb.index)
       ids.push(id)
+      present.add(id)
       const elTy = valTypeLabel(tb.elementTy)
       const range = `${tb.initial}${tb.maximum != null ? `..${tb.maximum}` : ''}`
       nodes.push({
@@ -435,6 +459,7 @@ function buildGraph(m: WasmModule): InspectResult {
     for (const d of shown) {
       const id = nid('data', d.index)
       ids.push(id)
+      present.add(id)
       let byteLen = 0
       try {
         byteLen = d.value.byteLength
@@ -467,6 +492,7 @@ function buildGraph(m: WasmModule): InspectResult {
     for (const el of shown) {
       const id = nid('element', el.index)
       ids.push(id)
+      present.add(id)
       nodes.push({
         id,
         kind: 'element',
@@ -492,12 +518,14 @@ function buildGraph(m: WasmModule): InspectResult {
           seenTargets.add(f.index)
           edge(id, nid('function', f.index), 'ref')
         }
-      } else if (el.itemsKind === 'Expressions') {
-        // Expression-form segments can hold `ref.func` targets, but the binding
-        // exposes them as const-expressions, not function handles — so those refs
-        // are omitted here. Flag the graph partial rather than look complete.
-        edgesTruncated = true
       }
+      // NOTE: expression-form segments (itemsKind === 'Expressions') are a stable binding
+      // limitation, not a size truncation: functionItems() returns null for them, so a
+      // `ref.func` item's edge is never drawn — but neither is there anything to draw for a
+      // `ref.null`. We deliberately do NOT set edgesTruncated here: that flag means "the
+      // graph was cut down for size", and raising it for a tiny 2-line ref.null module would
+      // be a false partial-view warning. The binding can't tell ref.func from ref.null, so
+      // this omission can't be reported precisely and is documented rather than flagged.
     }
     section('element', 'Elements', ids, total, truncated)
   }
@@ -509,6 +537,7 @@ function buildGraph(m: WasmModule): InspectResult {
     for (const tg of shown) {
       const id = nid('tag', tg.index)
       ids.push(id)
+      present.add(id)
       let tyIndex: number | undefined
       try {
         tyIndex = tg.ty().index
@@ -537,9 +566,13 @@ function buildGraph(m: WasmModule): InspectResult {
   {
     const ids: string[] = []
     const { shown, total, truncated } = cap(safeItems(m.exports))
+    // Every export references exactly one item, so a capped-out export always drops an
+    // export→target edge — flag the graph partial (source-capped edges aren't attempted).
+    if (truncated) edgesTruncated = true
     for (const ex of shown) {
       const id = nid('export', ex.index)
       ids.push(id)
+      present.add(id)
       nodes.push({
         id,
         kind: 'export',
