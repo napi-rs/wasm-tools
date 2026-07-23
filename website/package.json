@@ -11,7 +11,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "void:prepare": "void prepare",
-    "deploy": "void deploy"
+    "deploy": "void deploy",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@napi-rs/wasm-tools": "1.0.1",
@@ -26,6 +27,7 @@
     "wabt": "^1.0.39"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "4.3.2",
     "@types/node": "^24.10.1",
     "@types/react": "^19.0.0",

@@ -3,6 +3,8 @@ dist
 .void
 .wrangler
 *.local
+test-results
+playwright-report
 
 # Vendored wasm is regenerated from the repo build by scripts/sync-vendor.mjs.
 # Only package.json is committed; the binary + glue stay out of git.

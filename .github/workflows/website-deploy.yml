@@ -1,0 +1,86 @@
+name: Deploy website to Void
+
+on:
+  push:
+    branches: [main]
+    # The Void app lives in website/. It runs the repo's OWN wasm build (vendored
+    # via website/scripts/sync-vendor.mjs), so a change to the Rust source or the
+    # website must trigger a redeploy. Skips deploys for unrelated commits.
+    paths:
+      - 'website/**'
+      - 'src/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/website-deploy.yml'
+
+# Latest push wins: cancel an in-flight deploy for the same repo+branch.
+concurrency:
+  group: void-deploy-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# id-token: write lets `void deploy` mint a GitHub OIDC token and exchange it
+# (audience "void") for a short-lived, project-scoped deploy token — no
+# long-lived VOID_TOKEN secret is stored. Mirrors the @napi-rs/image site.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  VOID_API_URL: ${{ vars.VOID_API_URL || 'https://api.void.cloud' }}
+  # TODO(set-me): the Void project slug for this site (create it once in the Void dashboard).
+  VOID_PROJECT: napi-wasm-tools
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # --- Build the repo's wasm32-wasi binary that the playground runs ---------
+      # Until @napi-rs/wasm-tools >= 1.0.2 (with the module-graph + IR-builder API)
+      # is published to npm, the site consumes the repo's own wasm build. Once that
+      # release ships, delete this block + website/vendor + website/scripts/sync-vendor.mjs
+      # and point the website dependency at the published wasm32-wasi package —
+      # then this job is just install + `void deploy` (like the image site).
+      - name: Rust toolchain (wasm32-wasip1-threads)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-wasip1-threads
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.napi-rs
+            target/
+          key: wasm32-wasip1-threads-cargo-ubuntu
+      - name: Install repo deps
+        run: pnpm install --frozen-lockfile
+      - name: Build wasm (produces walrus.wasm32-wasi.wasm + glue at repo root)
+        run: pnpm build --target wasm32-wasip1-threads
+      # -------------------------------------------------------------------------
+
+      - name: Install website deps
+        working-directory: website
+        run: npm ci
+      - name: Vendor the fresh wasm build into the site
+        working-directory: website
+        run: npm run sync-vendor
+
+      # `void deploy` (>= 0.10.2) detects GitHub Actions, mints the OIDC token,
+      # exchanges it for a deploy token, builds, and deploys — no VOID_TOKEN secret.
+      - name: Deploy
+        working-directory: website
+        run: npx void deploy --project "$VOID_PROJECT"
