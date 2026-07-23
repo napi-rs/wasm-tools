@@ -19,21 +19,25 @@ pnpm add @napi-rs/wasm-tools -D
 yarn add @napi-rs/wasm-tools -D
 ```
 
-> **Version note.** The module graph (`mod.functions`, `mod.exports`, live handles),
-> `buildFunction`, and `instructions()` shown throughout these docs require
-> **@napi-rs/wasm-tools ≥ 1.0.2**. The current npm release is **1.0.1** — `ModuleConfig`
-> and `WasmModule.fromBuffer`/`fromPath`/`emitWasm` work there, but the graph and builder
-> APIs below do **not** until a ≥ 1.0.2 build is published. The playground on this site runs
-> a vendored pre-release so you can try them today.
+> **Version note.** Most of this page requires **@napi-rs/wasm-tools ≥ 1.0.2** — the module
+> graph (`mod.functions`, `mod.exports`, live handles), `buildFunction`, `instructions()`,
+> `WasmModule.fromBuffer`, `emitWasmFile`, and the `I32 … V128` value constants all arrive in
+> 1.0.2, which is **not published yet**. The current npm release (**1.0.1**) exposes only
+> `ModuleConfig` (the chainable builder plus `parse`) and `WasmModule.fromPath` /
+> `fromFileWithConfig` / `emitWasm` — the [Parse with options, then emit](#parse-with-options-then-emit)
+> example below works on 1.0.1 today. To try the ≥ 1.0.2 APIs now, use the playground on this
+> site, which runs a vendored pre-release build.
 
 ## Get a module
 
-Two ways to parse wasm into a live `WasmModule`:
+Parse wasm into a live `WasmModule`:
 
-- `WasmModule.fromBuffer(bytes)` / `WasmModule.fromPath(path)` — parse directly with the defaults.
-- `new ModuleConfig().….parse(bytes)` — parse with walrus options (DWARF, name section, …).
+- `WasmModule.fromBuffer(bytes)` **(≥ 1.0.2)** — parse in-memory bytes with the defaults.
+- `WasmModule.fromPath(path)` / `fromFileWithConfig(path, config)` — parse a file (available in 1.0.1).
+- `new ModuleConfig().….parse(bytes)` — parse in-memory bytes with walrus options (DWARF, name section, …; available in 1.0.1).
 
 ```ts
+// Reading mod.functions / mod.exports requires @napi-rs/wasm-tools >= 1.0.2.
 import { readFile } from 'node:fs/promises'
 import { WasmModule } from '@napi-rs/wasm-tools'
 

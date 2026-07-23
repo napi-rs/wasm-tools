@@ -103,23 +103,45 @@ function typeSig(t: WType): string | undefined {
 // the worker (and swamp the SVG). We render the first MAX_PER_SECTION of each
 // family and mark the section truncated; the full count is still reported.
 const MAX_PER_SECTION = 250
+// Global caps so a valid-but-pathological module (a body with 100k calls, an element
+// segment repeating one function 20k times) can't build an unbounded edge payload that
+// stalls postMessage or the SVG. Distinct call edges are separately capped so we stop
+// reading function bodies once the call graph is already saturated.
+const MAX_EDGES = 4000
+const MAX_CALL_EDGES = 1500
 
 function cap<T>(items: T[]): { shown: T[]; total: number; truncated: boolean } {
   if (items.length <= MAX_PER_SECTION) return { shown: items, total: items.length, truncated: false }
   return { shown: items.slice(0, MAX_PER_SECTION), total: items.length, truncated: true }
 }
 
-// Walk a function body (including nested Block/Loop/IfElse arms) and collect the
-// functions it references via Call / ReturnCall / RefFunc.
+// Walk a function body and collect the functions it references via Call / ReturnCall /
+// RefFunc. Deduped AS WE GO via `seen` (a body calling one target 100k times yields a
+// single edge, not 100k intermediate entries), bounded by `budget`, and descending every
+// nested body: block/loop `seq`, if `consequent`/`alternative`, and legacy try-handler
+// `catches[i].seq` (a Call inside a catch clause would otherwise be silently dropped).
 type CallEdge = { from: number; to: number; kind: 'Call' | 'ReturnCall' | 'RefFunc' }
-function collectCalls(instrs: InstrDesc[], from: number, out: CallEdge[]): void {
+function collectCalls(
+  instrs: InstrDesc[],
+  from: number,
+  seen: Set<string>,
+  out: CallEdge[],
+  budget: { left: number },
+): void {
   for (const ins of instrs) {
+    if (budget.left <= 0) return
     if (ins.func != null && (ins.type === 'Call' || ins.type === 'ReturnCall' || ins.type === 'RefFunc')) {
-      out.push({ from, to: ins.func, kind: ins.type })
+      const key = `${from}->${ins.func}:${ins.type}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        out.push({ from, to: ins.func, kind: ins.type })
+        budget.left--
+      }
     }
-    if (ins.seq) collectCalls(ins.seq, from, out)
-    if (ins.consequent) collectCalls(ins.consequent, from, out)
-    if (ins.alternative) collectCalls(ins.alternative, from, out)
+    if (ins.seq) collectCalls(ins.seq, from, seen, out, budget)
+    if (ins.consequent) collectCalls(ins.consequent, from, seen, out, budget)
+    if (ins.alternative) collectCalls(ins.alternative, from, seen, out, budget)
+    if (ins.catches) for (const c of ins.catches) if (c.seq) collectCalls(c.seq, from, seen, out, budget)
   }
 }
 
@@ -128,8 +150,14 @@ function buildGraph(m: WasmModule): InspectResult {
   const edges: GraphEdge[] = []
   const sections: SectionSummary[] = []
   let edgeSeq = 0
-  const edge = (from: string, to: string, label?: string) =>
+  let edgesTruncated = false
+  const edge = (from: string, to: string, label?: string) => {
+    if (edges.length >= MAX_EDGES) {
+      edgesTruncated = true
+      return
+    }
     edges.push({ id: `e${edgeSeq++}`, from, to, label })
+  }
 
   const section = (kind: NodeKind, label: string, ids: string[], total?: number, truncated?: boolean) =>
     sections.push({ kind, label, count: total ?? ids.length, nodeIds: ids, truncated: truncated ?? false })
@@ -188,6 +216,8 @@ function buildGraph(m: WasmModule): InspectResult {
   // functions
   const shownFuncIndices = new Set<number>()
   const callEdges: CallEdge[] = []
+  const callSeen = new Set<string>()
+  const callBudget = { left: MAX_CALL_EDGES }
   {
     const ids: string[] = []
     const { shown, total, truncated } = cap(safeItems(m.functions))
@@ -219,10 +249,13 @@ function buildGraph(m: WasmModule): InspectResult {
         ],
       })
       if (tyIndex != null) edge(id, nid('type', tyIndex), 'type')
-      // Local functions have a body; collect their fn→fn call references.
-      if (f.kind === 'Local') {
+      // Local functions have a body; collect their fn→fn call references (bounded).
+      if (f.kind === 'Local' && callBudget.left > 0) {
         const instrs = safeCall(() => f.instructions())
-        if (instrs) collectCalls(instrs, f.index, callEdges)
+        if (instrs) collectCalls(instrs, f.index, callSeen, callEdges, callBudget)
+        // null ⇒ the body was too deep for the binding to read, so its calls are
+        // omitted; flag the graph as partial rather than pretend it's complete.
+        else edgesTruncated = true
       }
     }
     section('function', 'Functions', ids, total, truncated)
@@ -370,8 +403,17 @@ function buildGraph(m: WasmModule): InspectResult {
       })
       const table = safeCall(() => el.table())
       if (table) edge(id, nid('table', table.index), 'inits')
+      // An element may repeat the same function thousands of times; one edge per
+      // distinct target is enough (and keeps the payload bounded).
       const fns = safeCall(() => el.functionItems())
-      if (fns) for (const f of fns) edge(id, nid('function', f.index), 'ref')
+      if (fns) {
+        const seenTargets = new Set<number>()
+        for (const f of fns) {
+          if (seenTargets.has(f.index)) continue
+          seenTargets.add(f.index)
+          edge(id, nid('function', f.index), 'ref')
+        }
+      }
     }
     section('element', 'Elements', ids, total, truncated)
   }
@@ -457,8 +499,9 @@ function buildGraph(m: WasmModule): InspectResult {
   // a node that was never materialized would render nowhere and just bloat the payload.
   const nodeIdSet = new Set(nodes.map((n) => n.id))
   const prunedEdges = edges.filter((e) => nodeIdSet.has(e.from) && nodeIdSet.has(e.to))
+  if (prunedEdges.length !== edges.length) edgesTruncated = true
 
-  return { moduleName: safeGet(() => m.name, null), nodes, edges: prunedEdges, sections }
+  return { moduleName: safeGet(() => m.name, null), nodes, edges: prunedEdges, sections, edgesTruncated }
 }
 
 function exportTarget(ex: WExport): string | null {

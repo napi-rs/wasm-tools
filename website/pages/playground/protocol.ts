@@ -50,6 +50,9 @@ export type InspectResult = {
   nodes: GraphNode[]
   edges: GraphEdge[]
   sections: SectionSummary[]
+  // true when the graph omitted edges — a global edge/call budget was hit, or a
+  // function body was too deep to read — so the UI can flag the graph as partial.
+  edgesTruncated?: boolean
 }
 
 // ── Edits ─────────────────────────────────────────────────────────────────────

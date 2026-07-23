@@ -8,6 +8,9 @@ description: 'Ready-made ValType constants — I32 … V128 and the reference ty
 Value types come as ready-made constants, so you can `import { I32 }` instead of writing
 `{ type: 'I32' }` by hand.
 
+> **Requires @napi-rs/wasm-tools ≥ 1.0.2.** The `I32 … V128` value constants are not exported by
+> the published 1.0.1. See [Getting Started](/docs) for the version note.
+
 ## The five numeric types
 
 ```ts

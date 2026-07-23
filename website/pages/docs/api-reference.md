@@ -5,6 +5,11 @@ description: 'Every class and constant in @napi-rs/wasm-tools, grouped by role.'
 
 # API Reference
 
+> **Version note.** Only `ModuleConfig` and `WasmModule.fromPath` / `fromFileWithConfig` /
+> `emitWasm` ship in the published **1.0.1**. The collections, live handles, `fromBuffer`,
+> `buildFunction`, `instructions()`, and the value constants below require **≥ 1.0.2** (not yet
+> published). See [Getting Started](/docs) for details.
+
 Everything is exported from the package root:
 
 ```ts

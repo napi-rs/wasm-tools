@@ -274,8 +274,10 @@ export default function Playground() {
   }, [wat, applyResult])
 
   const inspectWasm = useCallback(
-    async (bytes: ArrayBuffer, name: string) => {
-      const gen = ++genRef.current
+    // `gen` is stamped by the caller (handleFiles) BEFORE the async file read, so the
+    // newest SELECTION always owns the newest generation regardless of which read
+    // finishes first — a slow large file selected first can't clobber a later choice.
+    async (bytes: ArrayBuffer, name: string, gen: number) => {
       setStatus('running')
       setErrorMsg('')
       try {
@@ -300,11 +302,21 @@ export default function Playground() {
     (files: FileList | null) => {
       if (!files || files.length === 0) return
       const file = files[0]
+      // Stamp the generation NOW (synchronously, at selection time) so ordering is
+      // decided by selection, not by which FileReader happens to finish first.
+      const gen = ++genRef.current
+      setStatus('running')
+      setErrorMsg('')
       const reader = new FileReader()
+      reader.onerror = () => {
+        if (gen !== genRef.current) return
+        setStatus('error')
+        setErrorMsg(`Could not read ${file.name}.`)
+      }
       reader.onload = (e) => {
         const buf = e.target?.result
         if (!(buf instanceof ArrayBuffer)) return
-        void inspectWasm(buf, file.name)
+        void inspectWasm(buf, file.name, gen)
       }
       reader.readAsArrayBuffer(file)
     },
@@ -315,9 +327,10 @@ export default function Playground() {
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault()
       setDragging(false)
+      if (status === 'running') return // serialize: one engine op at a time
       handleFiles(e.dataTransfer.files)
     },
-    [handleFiles],
+    [handleFiles, status],
   )
 
   // ----- apply edits -----
@@ -444,6 +457,10 @@ export default function Playground() {
   }
 
   const isBuild = mode === 'build'
+  // Any engine op in flight. Overlapping ops would share (and could crash) one
+  // worker, and a stale op's timeout could tear down a newer one — so while busy we
+  // lock every entry point (mode switch, inspect, build, file pick) to one op at a time.
+  const busy = status === 'running'
 
   return (
     <div className="container-page py-12">
@@ -463,11 +480,12 @@ export default function Playground() {
             key={m}
             type="button"
             onClick={() => setMode(m)}
+            disabled={busy && mode !== m}
             className={[
               'rounded-md px-4 py-1.5 font-mono text-xs capitalize transition-colors',
               mode === m
                 ? 'bg-(--color-accent) text-(--color-accent-fg)'
-                : 'text-(--color-muted) hover:text-(--color-fg)',
+                : 'text-(--color-muted) hover:text-(--color-fg) disabled:cursor-not-allowed disabled:opacity-40',
             ].join(' ')}
           >
             {m}
@@ -527,7 +545,8 @@ export default function Playground() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="rounded-lg border border-(--color-border-strong) px-3 py-1.5 font-mono text-xs text-(--color-fg) hover:bg-(--color-surface-2)"
+              disabled={busy}
+              className="rounded-lg border border-(--color-border-strong) px-3 py-1.5 font-mono text-xs text-(--color-fg) hover:bg-(--color-surface-2) disabled:cursor-not-allowed disabled:opacity-40"
             >
               Choose .wasm
             </button>
@@ -570,8 +589,9 @@ export default function Playground() {
                   type="text"
                   value={form.moduleName}
                   placeholder="(unnamed)"
+                  disabled={applying}
                   onChange={(e) => setForm((f) => (f ? { ...f, moduleName: e.target.value } : f))}
-                  className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none"
+                  className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                 />
               </label>
 
@@ -587,12 +607,13 @@ export default function Playground() {
                         <input
                           type="text"
                           value={form.exportNames[n.index] ?? ''}
+                          disabled={applying}
                           onChange={(e) =>
                             setForm((f) =>
                               f ? { ...f, exportNames: { ...f.exportNames, [n.index]: e.target.value } } : f,
                             )
                           }
-                          className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none"
+                          className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                         />
                       </div>
                     ))}
@@ -610,12 +631,13 @@ export default function Playground() {
                         <input
                           type="checkbox"
                           checked={form.globalMutable[n.index] ?? false}
+                          disabled={applying}
                           onChange={(e) =>
                             setForm((f) =>
                               f ? { ...f, globalMutable: { ...f.globalMutable, [n.index]: e.target.checked } } : f,
                             )
                           }
-                          className="accent-(--color-edit)"
+                          className="accent-(--color-edit) disabled:cursor-not-allowed disabled:opacity-50"
                         />
                         <span className="truncate font-mono text-xs text-(--color-fg)">{n.label}</span>
                       </label>
@@ -636,12 +658,13 @@ export default function Playground() {
                           type="number"
                           min={0}
                           value={form.memoryInitial[n.index] ?? '0'}
+                          disabled={applying}
                           onChange={(e) =>
                             setForm((f) =>
                               f ? { ...f, memoryInitial: { ...f.memoryInitial, [n.index]: e.target.value } } : f,
                             )
                           }
-                          className="ml-auto w-24 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none"
+                          className="ml-auto w-24 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
                         />
                       </div>
                     ))}
@@ -651,7 +674,7 @@ export default function Playground() {
               <button
                 type="button"
                 onClick={runApplyEdits}
-                disabled={applying || pendingEdits.length === 0}
+                disabled={busy || pendingEdits.length === 0}
                 className="w-full rounded-lg bg-(--color-edit) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-edit-strong) disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {applying ? 'Applying…' : `Apply edits${pendingEdits.length ? ` (${pendingEdits.length})` : ''}`}
@@ -716,7 +739,7 @@ export default function Playground() {
               <button
                 type="button"
                 onClick={runBuild}
-                disabled={building}
+                disabled={busy}
                 className="w-full rounded-lg bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-accent-strong) disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {building ? 'Building…' : 'Build & run'}
@@ -831,6 +854,13 @@ export default function Playground() {
               ) : null}
             </div>
           </div>
+
+          {displayResult?.edgesTruncated ? (
+            <p className="mb-3 rounded-lg border border-(--color-edit-muted) bg-(--color-edit-muted) px-3 py-2 font-mono text-xs text-(--color-edit-strong)">
+              Large module — some edges are omitted, so the graph is a partial view. The tree tab still
+              lists full section counts.
+            </p>
+          ) : null}
 
           {!displayResult ? (
             <div className="flex min-h-72 items-center justify-center rounded-xl border border-(--color-border) bg-(--color-surface-1) text-sm text-(--color-faint)">

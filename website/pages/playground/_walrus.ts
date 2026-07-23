@@ -50,6 +50,9 @@ export interface InstrDesc {
   seq?: InstrDesc[]
   consequent?: InstrDesc[]
   alternative?: InstrDesc[]
+  // Try/TryTable exception handlers: each clause's legacy handler body lives in
+  // `catches[i].seq`, a third nesting level a full body walk must also descend.
+  catches?: { seq?: InstrDesc[] }[]
 }
 
 // A module-wide local created before it is named in a function's arg list.

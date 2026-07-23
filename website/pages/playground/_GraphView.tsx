@@ -23,54 +23,85 @@ const COL_GAP = 236 // x pitch between columns
 const ROW_GAP = 68 // y pitch within a column
 const PAD = 28
 const SAME_COL_BOW = 46 // how far a same-column edge bows to the right of the column
-const LANE_STEP = 20 // extra bow per parallel edge between the same pair
+const LANE_STEP = 26 // extra bow per parallel edge between the same pair
+const LABEL_PAD = 40 // right-side room a same-column edge label needs
 
 type Placed = { node: GraphNode; x: number; y: number }
 type XY = { x: number; y: number }
-// A pre-routed edge: its SVG path plus the point to anchor its label on.
-type PlacedEdge = { id: string; from: string; to: string; label?: string; path: string; lx: number; ly: number }
+// A pre-routed edge: its SVG path, the point to anchor its label on, and the
+// max x/y its geometry reaches (so the canvas can size to fit and never clip).
+type PlacedEdge = {
+  id: string
+  from: string
+  to: string
+  label?: string
+  sameColumn: boolean
+  path: string
+  lx: number
+  ly: number
+  maxX: number
+  maxY: number
+}
 
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + '…' : s
 }
 
-// Route one edge. Cross-column edges keep the horizontal S-curve with the label
-// in the empty inter-column gap. Same-column edges (fn→fn calls, self-recursion)
-// bow out to the RIGHT of the column into a per-parallel lane, so neither the
-// curve nor its label ever crosses the node boxes or a node between the rows.
-function routeEdge(from: XY, to: XY, lane: number): { path: string; lx: number; ly: number } {
+// Route one edge with DIRECTION-FACING ports: it always leaves the source on the
+// side facing the target and enters the target on the side facing the source, so a
+// right→left edge (e.g. export→function) curves left instead of overshooting the
+// canvas. Same-column edges (fn→fn calls, self-recursion) bow to the right of the
+// column into a per-parallel lane. Labels are anchored in guaranteed-empty space —
+// the gap immediately beside the source for cross-column edges, out on the bow for
+// same-column — never at a global midpoint that could land on an intervening node.
+function routeEdge(from: XY, to: XY, lane: number): Omit<PlacedEdge, 'id' | 'from' | 'to' | 'label' | 'sameColumn'> {
   if (from.x !== to.x) {
-    const x1 = from.x + NODE_W
+    const leftToRight = to.x > from.x
+    const x1 = leftToRight ? from.x + NODE_W : from.x
     const y1 = from.y + NODE_H / 2
-    const x2 = to.x
+    const x2 = leftToRight ? to.x : to.x + NODE_W
     const y2 = to.y + NODE_H / 2
     const dx = Math.max(40, Math.abs(x2 - x1) * 0.5)
+    const c1x = leftToRight ? x1 + dx : x1 - dx
+    const c2x = leftToRight ? x2 - dx : x2 + dx
+    const gapOff = Math.min(COL_GAP * 0.34, Math.abs(x2 - x1) * 0.4)
     return {
-      path: `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`,
-      lx: (x1 + x2) / 2,
-      ly: (y1 + y2) / 2 - 3,
+      path: `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`,
+      lx: x1 + (leftToRight ? gapOff : -gapOff), // in the empty gap next to the source
+      ly: y1 - 6,
+      maxX: Math.max(x1, x2, c1x, c2x),
+      maxY: Math.max(y1, y2),
     }
   }
+  // same column: bow out to the right, one lane per parallel edge so reciprocal and
+  // Call/RefFunc pairs never trace the identical curve.
   const bow = SAME_COL_BOW + lane * LANE_STEP
-  const x1 = from.x + NODE_W // both endpoints on the right side of their boxes
+  const x1 = from.x + NODE_W
+  const cx = x1 + bow
   if (from.y === to.y) {
-    // self-loop: a small right-side loop next to the node
-    const y = from.y + NODE_H / 2
+    const y = from.y + NODE_H / 2 // self-loop
     return {
-      path: `M ${x1} ${y - 9} C ${x1 + bow} ${y - 9}, ${x1 + bow} ${y + 9}, ${x1} ${y + 9}`,
-      lx: x1 + bow + 5,
+      path: `M ${x1} ${y - 9} C ${cx} ${y - 9}, ${cx} ${y + 9}, ${x1} ${y + 9}`,
+      lx: cx + 6,
       ly: y,
+      maxX: cx + LABEL_PAD,
+      maxY: y + 9,
     }
   }
   const y1 = from.y + NODE_H / 2
   const y2 = to.y + NODE_H / 2
-  const cx = x1 + bow
   return {
     path: `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x1} ${y2}`,
-    lx: cx + 5,
+    lx: cx + 6,
     ly: (y1 + y2) / 2,
+    maxX: cx + LABEL_PAD,
+    maxY: Math.max(y1, y2),
   }
 }
+
+// Group parallel edges by UNORDERED endpoint pair, so A→B and B→A share a lane
+// counter and get distinct lanes instead of overlapping on the identical curve.
+const laneKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`)
 
 export default function GraphView({
   result,
@@ -102,23 +133,25 @@ export default function GraphView({
         pos.set(node.id, { x, y })
       })
     })
-    const width = PAD * 2 + Math.max(0, columns.length - 1) * COL_GAP + NODE_W
-    const height = PAD * 2 + Math.max(0, maxRows - 1) * ROW_GAP + NODE_H
 
-    // Pre-route edges, assigning each parallel edge between the same pair its own
-    // lane so overlapping Call/RefFunc curves and labels fan apart.
     const laneSeen = new Map<string, number>()
     const edges: PlacedEdge[] = []
+    // Start bounds at the node extent; each routed edge can only grow them.
+    let maxX = PAD + Math.max(0, columns.length - 1) * COL_GAP + NODE_W
+    let maxY = PAD + Math.max(0, maxRows - 1) * ROW_GAP + NODE_H
     for (const e of result.edges) {
       const from = pos.get(e.from)
       const to = pos.get(e.to)
       if (!from || !to) continue // endpoint capped out of its section — skip
-      const key = `${e.from}->${e.to}`
+      const key = laneKey(e.from, e.to)
       const lane = laneSeen.get(key) ?? 0
       laneSeen.set(key, lane + 1)
-      edges.push({ id: e.id, from: e.from, to: e.to, label: e.label, ...routeEdge(from, to, lane) })
+      const g = routeEdge(from, to, lane)
+      maxX = Math.max(maxX, g.maxX)
+      maxY = Math.max(maxY, g.maxY)
+      edges.push({ id: e.id, from: e.from, to: e.to, label: e.label, sameColumn: from.x === to.x, ...g })
     }
-    return { placed, edges, width, height }
+    return { placed, edges, width: maxX + PAD, height: maxY + PAD }
   }, [result])
 
   if (result.nodes.length === 0) {
@@ -230,11 +263,18 @@ export default function GraphView({
           })}
         </g>
 
-        {/* edge labels (drawn last so they sit above nodes/edges) */}
+        {/* edge labels. Same-column labels (fn→fn calls / ref.func) are routed out to
+            the right into their own lanes, so they never touch a node — show them
+            always. Cross-column labels can only be placed in a column gap and a
+            column-skipping edge's label could still fall near an intervening node, so
+            show those ONLY for the selected node's edges. This keeps the graph readable
+            (a dense module would otherwise carpet the canvas) while always surfacing the
+            call graph and revealing every relationship on focus. */}
         <g>
           {edges.map((e) => {
             if (!e.label) return null
             const active = e.from === selectedId || e.to === selectedId
+            if (!e.sameColumn && !active) return null
             return (
               <text
                 key={`${e.id}-label`}
@@ -244,7 +284,7 @@ export default function GraphView({
                 fontSize={9}
                 fontFamily="var(--font-mono)"
                 fill={active ? 'var(--color-accent-strong)' : 'var(--color-faint)'}
-                opacity={active ? 1 : 0.7}
+                opacity={active ? 1 : 0.75}
                 style={{ pointerEvents: 'none' }}
               >
                 {e.label}
