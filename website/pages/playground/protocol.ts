@@ -177,5 +177,8 @@ export type WorkerBuildOk = {
   instructions: BuildInstrDesc[] // round-tripped body read back via fn.instructions()
 }
 export type WorkerOk = WorkerInspectOk | WorkerApplyEditsOk | WorkerBuildOk
-export type WorkerErr = { id: number; ok: false; error: string }
+// `fatal` marks a module-load failure that poisoned the worker's ESM registry: the
+// error is final for THIS worker, so the engine terminates + recreates it before the
+// next request (an in-place retry would just re-hit the cached rejection).
+export type WorkerErr = { id: number; ok: false; error: string; fatal?: boolean }
 export type WorkerResponse = WorkerOk | WorkerErr

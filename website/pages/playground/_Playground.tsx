@@ -649,7 +649,7 @@ export default function Playground() {
                   type="text"
                   value={form.moduleName}
                   placeholder="(unnamed)"
-                  disabled={applying || clipInfo.moduleName}
+                  disabled={busy || clipInfo.moduleName}
                   title={clipInfo.moduleName ? 'Name is too long to edit here' : undefined}
                   onChange={(e) => setForm((f) => (f ? { ...f, moduleName: e.target.value } : f))}
                   className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
@@ -671,7 +671,7 @@ export default function Playground() {
                         <input
                           type="text"
                           value={form.exportNames[n.index] ?? ''}
-                          disabled={applying || clipInfo.exports.has(n.index)}
+                          disabled={busy || clipInfo.exports.has(n.index)}
                           title={clipInfo.exports.has(n.index) ? 'Name is too long to edit here' : undefined}
                           onChange={(e) =>
                             setForm((f) =>
@@ -696,7 +696,7 @@ export default function Playground() {
                         <input
                           type="checkbox"
                           checked={form.globalMutable[n.index] ?? false}
-                          disabled={applying}
+                          disabled={busy}
                           onChange={(e) =>
                             setForm((f) =>
                               f ? { ...f, globalMutable: { ...f.globalMutable, [n.index]: e.target.checked } } : f,
@@ -723,7 +723,7 @@ export default function Playground() {
                           type="number"
                           min={0}
                           value={form.memoryInitial[n.index] ?? '0'}
-                          disabled={applying}
+                          disabled={busy}
                           onChange={(e) =>
                             setForm((f) =>
                               f ? { ...f, memoryInitial: { ...f.memoryInitial, [n.index]: e.target.value } } : f,

@@ -32,6 +32,16 @@ export const WAT_SAMPLES: WatSample[] = [
   (func $run (call $log (i32.const 7)))
   (export "run" (func $run)))`,
   },
+  {
+    // A shared memory only VALIDATES under the threads feature. It exists to prove the
+    // worker feeds the same feature set to wabt's validate() as to parseWat() — without
+    // that, validate() falls back to baseline features and rejects this valid module.
+    name: 'shared memory (threads)',
+    note: 'shared memory — needs the threads feature at validate time',
+    wat: `(module
+  (memory $mem 1 1 shared)
+  (export "memory" (memory $mem)))`,
+  },
 ]
 
 export const DEFAULT_WAT = WAT_SAMPLES[0].wat

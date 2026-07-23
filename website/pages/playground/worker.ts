@@ -29,40 +29,81 @@ if (typeof (globalThis as { Buffer?: unknown }).Buffer === 'undefined') {
 type WabtFeatures = Record<string, boolean>
 interface WabtModule {
   resolveNames(): void
-  validate(): void
+  // validate() defaults to wabt's baseline feature set when given no argument, so it
+  // must receive the SAME features parseWat used or it rejects valid modules the
+  // parser accepted (shared memory, multi-memory, …). The `.d.ts` omits the param.
+  validate(features?: WabtFeatures): void
   toBinary(opts: { log: boolean; write_debug_names: boolean }): { buffer: Uint8Array }
   destroy(): void
 }
 interface Wabt {
   parseWat(filename: string, text: string, features?: WabtFeatures): WabtModule
 }
+
+// One feature set shared by parseWat AND validate (see the validate() note above).
+const WABT_FEATURES: WabtFeatures = {
+  simd: true,
+  threads: true,
+  reference_types: true,
+  bulk_memory: true,
+  mutable_globals: true,
+  gc: true,
+  exceptions: true,
+  tail_call: true,
+  multi_memory: true,
+}
+
+// A failed dynamic `import()` leaves this worker's ESM module registry with a cached
+// rejection that EVERY later import of the same specifier re-hits — the module never
+// re-evaluates. In-place retry can't recover; only a brand-new worker (fresh registry)
+// can. Load failures are tagged with this so the engine terminates + recreates us.
+class FatalLoadError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause))
+    this.name = 'FatalLoadError'
+  }
+}
+
+async function loadMod(): Promise<Mod> {
+  try {
+    return (await import('@napi-rs/wasm-tools')) as unknown as Mod
+  } catch (err) {
+    throw new FatalLoadError(err)
+  }
+}
+
 let wabtPromise: Promise<Wabt> | null = null
 async function getWabt(): Promise<Wabt> {
   if (!wabtPromise) {
-    const wabtInit = (await import('wabt')).default as unknown as () => Promise<Wabt>
-    wabtPromise = wabtInit()
+    wabtPromise = (async () => {
+      let wabtInit: () => Promise<Wabt>
+      try {
+        wabtInit = (await import('wabt')).default as unknown as () => Promise<Wabt>
+      } catch (err) {
+        // Module import poisoned the registry → fatal (needs a fresh worker).
+        throw new FatalLoadError(err)
+      }
+      // wabtInit() (wasm instantiation) can fail transiently; that IS retryable, so
+      // its rejection is left un-tagged and the slot is cleared below to allow a retry.
+      return wabtInit()
+    })()
+    // Never cache a rejection: a transient init failure must not poison every later
+    // request. Clearing the slot lets the next getWabt() retry from scratch.
+    wabtPromise.catch(() => {
+      wabtPromise = null
+    })
   }
   return wabtPromise
 }
 
 function watToWasm(wabt: Wabt, watText: string): Uint8Array {
-  const m = wabt.parseWat('module.wat', watText, {
-    simd: true,
-    threads: true,
-    reference_types: true,
-    bulk_memory: true,
-    mutable_globals: true,
-    gc: true,
-    exceptions: true,
-    tail_call: true,
-    multi_memory: true,
-  })
+  const m = wabt.parseWat('module.wat', watText, WABT_FEATURES)
   // resolveNames/validate/toBinary can each throw on invalid input; destroy()
   // MUST still run or the wabt wasm-heap allocation leaks. Repeated invalid input
   // would otherwise accumulate unbounded memory in this long-lived worker.
   try {
     m.resolveNames()
-    m.validate()
+    m.validate(WABT_FEATURES)
     const { buffer } = m.toBinary({ log: false, write_debug_names: true })
     return buffer
   } finally {
@@ -509,7 +550,12 @@ function buildGraph(m: WasmModule): InspectResult {
   // so a function calling the same target twice draws one edge.
   const seenCalls = new Set<string>()
   for (const c of callEdges) {
-    if (!shownFuncIndices.has(c.to)) continue
+    // Target function was capped out of the shown set → its call edge is dropped, so
+    // the rendered call graph is partial. Flag it rather than silently omit the edge.
+    if (!shownFuncIndices.has(c.to)) {
+      edgesTruncated = true
+      continue
+    }
     const label = c.kind === 'RefFunc' ? 'ref.func' : 'calls'
     const key = `${c.from}->${c.to}:${label}`
     if (seenCalls.has(key)) continue
@@ -726,7 +772,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       } else {
         wasmBytes = new Uint8Array(bytes)
       }
-      const mod = (await import('@napi-rs/wasm-tools')) as unknown as Mod
+      const mod = await loadMod()
       const module = mod.WasmModule.fromBuffer(wasmBytes)
       const result = buildGraph(module)
       post({ id, ok: true, kind: 'inspect', result })
@@ -741,7 +787,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       } else {
         wasmBytes = new Uint8Array(bytes)
       }
-      const mod = (await import('@napi-rs/wasm-tools')) as unknown as Mod
+      const mod = await loadMod()
       const module = mod.WasmModule.fromBuffer(wasmBytes)
       const before = buildGraph(module)
       applyEditList(module, op.edits)
@@ -754,7 +800,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       return
     }
     if (op.kind === 'buildFn') {
-      const mod = (await import('@napi-rs/wasm-tools')) as unknown as Mod
+      const mod = await loadMod()
       const { name, emitted, instructions } = buildPreset(mod, op.preset)
       // Copy into a plain ArrayBuffer: it's both the BufferSource we instantiate
       // from AND the transferable we return (the wasm heap may be a SharedArrayBuffer).
@@ -768,6 +814,9 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     }
     post({ id, ok: false, error: `Unknown op: ${(op as { kind: string }).kind}` })
   } catch (err) {
-    post({ id, ok: false, error: err instanceof Error ? err.message : String(err) })
+    // A fatal module-load failure poisoned the ESM registry; tell the engine to drop
+    // this worker so the NEXT request runs in a fresh one that can re-import cleanly.
+    const fatal = err instanceof FatalLoadError
+    post({ id, ok: false, error: err instanceof Error ? err.message : String(err), fatal })
   }
 }

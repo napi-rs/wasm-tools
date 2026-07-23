@@ -87,6 +87,21 @@ test('re-inspecting resets the edit form (no stale pending edits carried over)',
   await expect(page.getByText(/0 pending/)).toBeVisible({ timeout: 60_000 })
 })
 
+test('a shared-memory module inspects (wabt validate gets the threads feature)', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  // `(memory 1 1 shared)` only validates under the threads feature. If the worker's
+  // validate() ran with wabt's baseline features (the bug), this inspect would error
+  // instead of rendering a graph. The memory node's `shared: true` prop is the proof.
+  await page.getByLabel('Example').selectOption({ label: 'shared memory (threads)' })
+  await page.getByRole('button', { name: 'Inspect module' }).click()
+
+  await expect(page.getByRole('img', { name: /module graph/i })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText(/1\.\.1 pages/).first()).toBeVisible({ timeout: 60_000 })
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')

@@ -40,6 +40,13 @@ export class PlaygroundEngine {
       clearTimeout(p.timer)
       this.pending.delete(e.data.id)
       p.resolve(e.data as RunResult)
+      // A fatal load failure poisoned this worker's ESM module registry — no later
+      // request can recover in it. THIS request is already resolved (its error text
+      // reaches the user above); now discard the worker so the next run() gets a fresh
+      // one, and fail any other in-flight requests that would re-hit the same rejection.
+      if (e.data.ok === false && e.data.fatal) {
+        this.failAll(new Error('The wasm worker was reset after a load failure — please retry.'))
+      }
     }
     // A worker-level failure (module bootstrap error, uncaught throw, OOM abort)
     // never arrives as an onmessage — without this, every in-flight request would
