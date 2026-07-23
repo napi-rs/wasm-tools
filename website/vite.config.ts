@@ -45,6 +45,29 @@ export default defineConfig({
       '@napi-rs/wasm-tools': '@napi-rs/wasm-tools-wasm32-wasi',
     },
   },
+  // Pre-bundle the playground's dependencies at server START. They are reachable only
+  // from the island and its worker, so on a COLD dev server Vite does not see them
+  // during initial scanning — it discovers them when /playground is first opened, then
+  // re-optimizes and forces a full page reload:
+  //
+  //   [vite] dependencies optimized: buffer, wabt, @napi-rs/wasm-runtime
+  //   [vite] optimized dependencies changed. reloading
+  //
+  // That reload discards whatever the page was doing, so a click made just before it
+  // (an in-flight inspect) is silently thrown away with no error — the UI simply returns
+  // to its initial state. Listing them here optimizes them up front, so the first visit
+  // to /playground never triggers the reload.
+  optimizeDeps: {
+    include: [
+      'buffer',
+      'wabt',
+      '@napi-rs/wasm-runtime',
+      '@napi-rs/wasm-tools-wasm32-wasi',
+      // Void's own client entries are likewise reached only from the rendered page.
+      'void/pages-client',
+      'void/pages-prefetch',
+    ],
+  },
   plugins: [
     // Cross-origin isolation for /playground so it can use SharedArrayBuffer + wasm
     // threads under `vite dev` / `vite preview`. The deployed worker sets COOP/COEP/CORP
