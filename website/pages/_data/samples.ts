@@ -38,7 +38,8 @@ const idx = mod.buildFunction(
   ],
 )`
 
-export const storySample = `import { WasmModule } from '@napi-rs/wasm-tools'
+export const storySample = `import { readFile } from 'node:fs/promises'
+import { WasmModule } from '@napi-rs/wasm-tools'
 
 const mod = WasmModule.fromBuffer(await readFile('./module.wasm'))
 
