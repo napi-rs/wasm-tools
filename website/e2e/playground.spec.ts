@@ -219,6 +219,40 @@ test('changing the source invalidates the applied edit session (no stale Apply/D
   await expect(page.getByRole('button', { name: /Apply edits/ })).toHaveCount(0)
 })
 
+test('uploading a binary supersedes the WAT session and deactivates the editor', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  await page.getByRole('button', { name: 'edit', exact: true }).click()
+  await page.getByLabel('Example').selectOption({ label: 'memory + mutable global + exports' })
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+
+  const memInput = page.locator('input[type="number"]').first()
+  await expect(memInput).toBeVisible({ timeout: 60_000 })
+  // Apply a valid edit → the WAT module (A) becomes downloadable.
+  await memInput.fill('2')
+  await page.getByRole('button', { name: /Apply edits/ }).click()
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toBeVisible({ timeout: 60_000 })
+
+  // Upload a different module as a binary (the minimal 8-byte empty module). Selecting it
+  // must supersede A's session: A's Download is gone, and the WAT editor is deactivated
+  // (it still holds A's text, which cannot represent this binary).
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'empty.wasm',
+    mimeType: 'application/wasm',
+    buffer: Buffer.from([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]),
+  })
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toHaveCount(0)
+  await expect(page.getByLabel('WAT source')).toBeDisabled()
+  // The binary is the active source now; its filename identifies it.
+  await expect(page.getByText('empty.wasm').first()).toBeVisible({ timeout: 60_000 })
+
+  // Switching back re-activates the WAT editor with its preserved source.
+  await page.getByRole('button', { name: /Switch to WAT editor/i }).click()
+  await expect(page.getByLabel('WAT source')).toBeEnabled()
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')

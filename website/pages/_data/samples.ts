@@ -53,6 +53,13 @@ out.mainMemory!.initial           // 4n`
 
 export const builderSample = `import { I32, WasmModule } from '@napi-rs/wasm-tools'
 
+// Start from the 8-byte empty module (\`\\0asm\` + version 1).
+const mod = WasmModule.fromBuffer(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0]))
+
+// Locals are module-wide; make them, then bind as params.
+const a = mod.locals.add(I32)
+const b = mod.locals.add(I32)
+
 const idx = mod.buildFunction(
   [I32, I32], [I32], [a.index, b.index],
   [
@@ -63,8 +70,10 @@ const idx = mod.buildFunction(
 )
 mod.exports.addFunction('add', mod.functions.getByIndex(idx)!)
 
-const { instance } = await WebAssembly.instantiate(mod.emitWasm(false))
-console.log(instance.exports.add(2, 3)) // 5
+const bytes = mod.emitWasm(false)
+const { instance } = await WebAssembly.instantiate(bytes)
+const add = instance.exports.add as (a: number, b: number) => number
+console.log(add(2, 3)) // 5
 
 // The body round-trips back to descriptors:
 const fn = WasmModule.fromBuffer(bytes).exports.byName('add')!.func()!

@@ -211,6 +211,11 @@ export default function Playground() {
   const [mode, setMode] = useState<Mode>('inspect')
   const [wat, setWat] = useState(DEFAULT_WAT)
   const [sourceLabel, setSourceLabel] = useState<string>('module.wat')
+  // Which input is the ACTIVE source: the WAT editor, or an uploaded binary. A binary
+  // upload makes the WAT editor inert (the graph/edits act on the file, not the textarea),
+  // so the editor is deactivated until the user switches back — keeping the displayed
+  // source and the actionable source in agreement.
+  const [sourceKind, setSourceKind] = useState<'wat' | 'wasm'>('wat')
   const [status, setStatus] = useState<Status>('empty')
   const [errorMsg, setErrorMsg] = useState('')
   const [result, setResult] = useState<InspectResult | null>(null)
@@ -319,41 +324,53 @@ export default function Playground() {
     return engineRef.current
   }
 
-  // A failed inspection leaves NO valid current module. Clear the whole session — graph,
-  // edit form, after-result, selection, and the emitted download — so a previously
-  // inspected module can't still be applied or downloaded while the editor shows the
-  // failed new source. (The retained source refs are only read when `form` exists, so
-  // nulling the form is enough to make Apply unavailable.)
-  const failInspect = useCallback((msg: string) => {
+  // Clears the entire inspect/edit/download session — graph, edit form, after-result,
+  // selection, and emitted download. Every path that supersedes the current module (a
+  // source edit, a file selection, a failed inspection) goes through this, so none can
+  // leave a stale, still-actionable session behind a source that has already changed.
+  // (The retained source refs are only read when `form` exists, so nulling the form is
+  // enough to make Apply unavailable.)
+  const resetSession = useCallback(() => {
     setResult(null)
     setForm(null)
     setAfterResult(null)
     setEmitted(null)
     setSelectedId(null)
-    setStatus('error')
-    setErrorMsg(msg)
   }, [])
 
-  // Every change to the displayed source (example pick or textarea edit) must invalidate
-  // the current inspection: the graph, edit form, after-result, selection, and emitted
-  // download all describe the PREVIOUS source, and the retained source refs Apply reads
-  // (sourceWatRef/…) still point at it. Bumping the generation also supersedes any
+  // A failed inspection leaves NO valid current module. Clear the whole session so a
+  // previously inspected module can't still be applied or downloaded while the editor
+  // shows the failed new source.
+  const failInspect = useCallback(
+    (msg: string) => {
+      resetSession()
+      setStatus('error')
+      setErrorMsg(msg)
+    },
+    [resetSession],
+  )
+
+  // Every change to the displayed WAT source (example pick or textarea edit) must
+  // invalidate the current inspection: the graph, edit form, after-result, selection, and
+  // emitted download all describe the PREVIOUS source, and the retained source refs Apply
+  // reads (sourceWatRef/…) still point at it. Bumping the generation also supersedes any
   // in-flight inspect/read, so a reply for the old source can't commit against the new
   // one. Routing both controls through here keeps the actionable session (Apply/Download)
   // strictly matched to what's on screen — a stale module can never be applied or
   // downloaded behind a changed editor. Source controls are also disabled while an op is
-  // running, so this never races a settling engine reply.
-  const changeSource = useCallback((next: string) => {
-    setWat(next)
-    genRef.current++
-    setResult(null)
-    setForm(null)
-    setAfterResult(null)
-    setEmitted(null)
-    setSelectedId(null)
-    setStatus('empty')
-    setErrorMsg('')
-  }, [])
+  // running, so this never races a settling engine reply. Selecting WAT also returns the
+  // active source to the editor (a prior binary upload is discarded).
+  const changeSource = useCallback(
+    (next: string) => {
+      resetSession()
+      setWat(next)
+      setSourceKind('wat')
+      genRef.current++
+      setStatus('empty')
+      setErrorMsg('')
+    },
+    [resetSession],
+  )
 
   const applyResult = useCallback(
     (r: RunResult) => {
@@ -437,6 +454,13 @@ export default function Playground() {
       // Stamp the generation NOW (synchronously, at selection time) so ordering is
       // decided by selection, not by which FileReader happens to finish first.
       const gen = ++genRef.current
+      // Supersede the previous module BEFORE the async read: drop the whole session so a
+      // stale graph/edit form/download can't stay actionable while the file loads (or if
+      // the read fails), and mark the binary the active source so the WAT editor — which
+      // still shows the OLD text and can't represent this binary — is deactivated.
+      resetSession()
+      setSourceKind('wasm')
+      setSourceLabel(file.name) // name the active binary now so the banner reads right during the read
       setStatus('running')
       setErrorMsg('')
       // Abort a read still running from a superseded selection, then track this one.
@@ -470,7 +494,7 @@ export default function Playground() {
       }
       reader.readAsArrayBuffer(file)
     },
-    [inspectWasm],
+    [inspectWasm, resetSession],
   )
 
   const handleDrop = useCallback(
@@ -672,7 +696,7 @@ export default function Playground() {
                 const s = WAT_SAMPLES[Number(e.target.value)]
                 if (s) changeSource(s.wat)
               }}
-              disabled={busy}
+              disabled={busy || sourceKind === 'wasm'}
               defaultValue="0"
             >
               {WAT_SAMPLES.map((s, i) => (
@@ -687,7 +711,7 @@ export default function Playground() {
             spellCheck={false}
             value={wat}
             onChange={(e) => changeSource(e.target.value)}
-            disabled={busy}
+            disabled={busy || sourceKind === 'wasm'}
             className="min-h-72 w-full resize-y rounded-xl border border-(--color-border) bg-(--color-surface-1) p-4 font-mono text-xs leading-relaxed text-(--color-fg) focus:border-(--color-accent) focus:outline-none disabled:opacity-60"
             aria-label="WAT source"
           />
@@ -724,10 +748,29 @@ export default function Playground() {
             onChange={(e) => handleFiles(e.target.files)}
           />
 
+          {/* Binary source is active: the WAT editor above is inert (it can't represent
+              this file). Surface which file drives the graph/edits, and offer a way back. */}
+          {sourceKind === 'wasm' ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-(--color-border-strong) bg-(--color-surface-1) px-4 py-3">
+              <span className="min-w-0 truncate font-mono text-xs text-(--color-muted)">
+                Binary loaded: <span className="text-(--color-fg)">{sourceLabel}</span> — the graph and
+                edits act on this file.
+              </span>
+              <button
+                type="button"
+                onClick={() => changeSource(wat)}
+                disabled={busy}
+                className="shrink-0 rounded-lg border border-(--color-border-strong) px-3 py-1.5 font-mono text-xs text-(--color-fg) hover:bg-(--color-surface-2) disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Switch to WAT editor
+              </button>
+            </div>
+          ) : null}
+
           <button
             type="button"
             onClick={inspectWat}
-            disabled={status === 'running' || isBuild}
+            disabled={status === 'running' || isBuild || sourceKind === 'wasm'}
             className="w-full rounded-lg bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-accent-strong) disabled:cursor-not-allowed disabled:opacity-40"
           >
             {status === 'running' && !applying ? 'Parsing…' : mode === 'edit' ? 'Inspect to edit' : 'Inspect module'}
@@ -1024,7 +1067,8 @@ export default function Playground() {
                   <button
                     type="button"
                     onClick={downloadEmitted}
-                    className="rounded-lg border border-(--color-edit) bg-(--color-edit-muted) px-3 py-1.5 font-mono text-xs text-(--color-edit-strong) transition-colors hover:bg-(--color-edit-glow)"
+                    disabled={busy}
+                    className="rounded-lg border border-(--color-edit) bg-(--color-edit-muted) px-3 py-1.5 font-mono text-xs text-(--color-edit-strong) transition-colors hover:bg-(--color-edit-glow) disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Download .wasm
                   </button>
