@@ -1,7 +1,7 @@
-import Button from './Button'
-import Chip from './Chip'
-import ModuleGraph from './ModuleGraph'
-import InstallSwitcher from './_InstallSwitcher'
+import Button from './button'
+import Chip from './chip'
+import ModuleGraph from './module-graph'
+import InstallSwitcher from './_install-switcher'
 
 export default function Hero() {
   return (

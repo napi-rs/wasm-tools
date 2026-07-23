@@ -1,6 +1,6 @@
-import CodeBlock from './CodeBlock'
-import SectionHeader from './SectionHeader'
-import Reveal from './_Reveal'
+import CodeBlock from './code-block'
+import SectionHeader from './section-header'
+import Reveal from './_reveal'
 import { builderSample } from '../_data/samples'
 
 export default function BuilderHighlight({ html }: { html: string }) {

@@ -1,5 +1,5 @@
-import Button from './Button'
-import Reveal from './_Reveal'
+import Button from './button'
+import Reveal from './_reveal'
 
 export default function CtaBand() {
   return (

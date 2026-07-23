@@ -1,7 +1,7 @@
-import CodeBlock from './CodeBlock'
-import SectionHeader from './SectionHeader'
-import Chip from './Chip'
-import Reveal from './_Reveal'
+import CodeBlock from './code-block'
+import SectionHeader from './section-header'
+import Chip from './chip'
+import Reveal from './_reveal'
 import { storySample } from '../_data/samples'
 
 const STEPS = [

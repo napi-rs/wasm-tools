@@ -1,10 +1,10 @@
 import type { Props } from './index.server'
-import Hero from './_components/Hero'
-import Verbs from './_components/Verbs'
-import LiveHandleStory from './_components/LiveHandleStory'
-import BuilderHighlight from './_components/BuilderHighlight'
-import ApiMap from './_components/ApiMap'
-import CtaBand from './_components/CtaBand'
+import Hero from './_components/hero'
+import Verbs from './_components/verbs'
+import LiveHandleStory from './_components/live-handle-story'
+import BuilderHighlight from './_components/builder-highlight'
+import ApiMap from './_components/api-map'
+import CtaBand from './_components/cta-band'
 
 export default function Home({
   inspectHtml,

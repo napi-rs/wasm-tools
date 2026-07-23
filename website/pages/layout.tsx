@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import '../app.css'
-import Footer from './_components/Footer'
+import Footer from './_components/footer'
 
 // Single source of truth for the header nav — rendered both inline (desktop) and
 // inside the mobile drawer.

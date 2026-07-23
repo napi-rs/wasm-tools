@@ -1,6 +1,6 @@
-import SectionHeader from './SectionHeader'
-import Chip from './Chip'
-import Reveal from './_Reveal'
+import SectionHeader from './section-header'
+import Chip from './chip'
+import Reveal from './_reveal'
 
 const GROUPS: { label: string; blurb: string; items: string[] }[] = [
   {
