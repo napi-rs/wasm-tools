@@ -52,6 +52,21 @@ export const WAT_SAMPLES: WatSample[] = [
   (global $answer i32 (i32.add (i32.const 40) (i32.const 2)))
   (export "answer" (global $answer)))`,
   },
+  {
+    // Exercises the table section: a funcref table (table64 = false) seeded by an active
+    // element segment, with a call_indirect through it — so the graph renders a table node
+    // (carrying its table64 flag) alongside the element segment.
+    name: 'funcref table + call_indirect',
+    note: 'table (funcref, 32-bit) · active element segment · export→table edge',
+    wat: `(module
+  (type $ft (func (result i32)))
+  (func $forty_two (type $ft) (result i32) i32.const 42)
+  (table $tbl 1 funcref)
+  (elem (i32.const 0) $forty_two)
+  (func $call (result i32) (call_indirect (type $ft) (i32.const 0)))
+  (export "table" (table $tbl))
+  (export "call" (func $call)))`,
+  },
 ]
 
 export const DEFAULT_WAT = WAT_SAMPLES[0].wat

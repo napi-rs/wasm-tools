@@ -458,11 +458,15 @@ function buildGraph(m: WasmModule): InspectResult {
   {
     const ids: string[] = []
     const { shown, total, truncated } = cap(safeItems(m.tables))
+    // Conservative O(1) flag (see globals): a capped table section MAY drop a table→type
+    // edge (a concrete/exact element type carries one). Per-table detection is O(n²).
+    if (truncated) edgesTruncated = true
     for (const tb of shown) {
       const id = nid('table', tb.index)
       ids.push(id)
       present.add(id)
-      const elTy = valTypeLabel(tb.elementTy)
+      const elTyRaw = tb.elementTy // read the arena accessor once; reuse for label + edge
+      const elTy = valTypeLabel(elTyRaw)
       const range = `${tb.initial}${tb.maximum != null ? `..${tb.maximum}` : ''}`
       nodes.push({
         id,
@@ -476,9 +480,16 @@ function buildGraph(m: WasmModule): InspectResult {
           { key: 'element', value: elTy },
           { key: 'initial', value: String(tb.initial) },
           { key: 'maximum', value: tb.maximum != null ? String(tb.maximum) : '—' },
+          // 64-bit vs 32-bit index type — distinguishes otherwise-identical table32/table64.
+          { key: 'table64', value: String(tb.table64) },
           { key: 'imported', value: String(tb.isImported) },
         ],
       })
+      // table → type edge only when the element type is a concrete ref into the type arena
+      // (mirrors globals). funcref/externref abstract-heap tables carry no such edge.
+      if (elTyRaw.type === 'Ref' && (elTyRaw.heap.type === 'Concrete' || elTyRaw.heap.type === 'Exact')) {
+        edge(id, nid('type', elTyRaw.heap.typeIndex), 'type')
+      }
     }
     section('table', 'Tables', ids, total, truncated)
   }

@@ -52,8 +52,9 @@ mod.exports.addFunction('add', mod.functions.getByIndex(idx)!)
 
 const bytes = mod.emitWasm(false)
 
-// It really runs:
-const { instance } = await WebAssembly.instantiate(bytes)
+// It really runs (new Uint8Array(bytes) narrows the buffer type so `instantiate` picks its
+// BufferSource overload — emitWasm's Uint8Array<ArrayBufferLike> resolves to the Module one):
+const { instance } = await WebAssembly.instantiate(new Uint8Array(bytes))
 const add = instance.exports.add as (a: number, b: number) => number
 console.log(add(2, 3)) // 5
 ```

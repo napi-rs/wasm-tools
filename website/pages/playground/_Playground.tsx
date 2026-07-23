@@ -336,6 +336,12 @@ export default function Playground() {
     setAfterResult(null)
     setEmitted(null)
     setSelectedId(null)
+    // Release the retained source the superseded session held. The wasm buffer can be up
+    // to MAX_UPLOAD_BYTES, so keeping it would pin tens of MB per stale upload; the WAT
+    // text already lives independently in `wat`. Apply is gated on `form` (also cleared
+    // above), so nulling these can never strand an in-progress edit.
+    sourceWasmRef.current = null
+    sourceWatRef.current = ''
   }, [])
 
   // A failed inspection leaves NO valid current module. Clear the whole session so a
@@ -344,6 +350,10 @@ export default function Playground() {
   const failInspect = useCallback(
     (msg: string) => {
       resetSession()
+      // A failed inspection committed no binary, so drop back to the WAT editor: leaving
+      // sourceKind='wasm' would deactivate the editor and falsely claim a binary is loaded
+      // and actionable. (A WAT-source failure is already 'wat', so this is a no-op there.)
+      setSourceKind('wat')
       setStatus('error')
       setErrorMsg(msg)
     },
@@ -477,12 +487,16 @@ export default function Playground() {
       reader.onerror = () => {
         settle()
         if (gen !== genRef.current) return
+        // No bytes committed — return to the WAT editor rather than leaving it deactivated
+        // behind a "binary loaded" banner for a file that never loaded.
+        setSourceKind('wat')
         setStatus('error')
         setErrorMsg(`Could not read ${file.name}.`)
       }
       reader.onabort = () => {
         settle()
         if (gen !== genRef.current) return // superseded/unmounted: a newer op owns the UI
+        setSourceKind('wat')
         setStatus('error')
         setErrorMsg(`Reading ${file.name} was cancelled or timed out.`)
       }
@@ -745,7 +759,13 @@ export default function Playground() {
             type="file"
             accept=".wasm,application/wasm"
             className="hidden"
-            onChange={(e) => handleFiles(e.target.files)}
+            onChange={(e) => {
+              handleFiles(e.target.files)
+              // Clear the selection so re-picking the SAME file (e.g. to retry a failed
+              // read) still fires a change event. handleFiles has already captured the
+              // File, so the in-flight read is unaffected.
+              e.target.value = ''
+            }}
           />
 
           {/* Binary source is active: the WAT editor above is inert (it can't represent

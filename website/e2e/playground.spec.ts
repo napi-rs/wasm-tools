@@ -253,6 +253,38 @@ test('uploading a binary supersedes the WAT session and deactivates the editor',
   await expect(page.getByLabel('WAT source')).toBeEnabled()
 })
 
+test('a failed binary read returns to the WAT editor (no stuck deactivated editor)', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  // Upload bytes that are not a valid module (bad magic). The read succeeds but the parse
+  // fails: the session must NOT stay in the deactivated 'binary loaded' state — it reverts
+  // to the WAT editor so the source controls work again and no false banner lingers.
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'bad.wasm',
+    mimeType: 'application/wasm',
+    buffer: Buffer.from([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+  })
+  await expect(page.getByLabel('WAT source')).toBeEnabled({ timeout: 60_000 })
+  await expect(page.getByRole('button', { name: /Switch to WAT editor/i })).toHaveCount(0)
+})
+
+test('a funcref table renders a table node in the graph', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  // The table sample compiles + parses through the worker; buildGraph's table block must
+  // emit a table node without erroring. Its sub label is the element type, which valTypeLabel
+  // renders as "(ref null func)" — asserted on the SVG node text (not the dropdown option).
+  await page.getByLabel('Example').selectOption({ label: 'funcref table + call_indirect' })
+  await page.getByRole('button', { name: 'Inspect module' }).click()
+
+  await expect(page.getByRole('img', { name: /module graph/i })).toBeVisible({ timeout: 60_000 })
+  await expect(page.locator('svg text', { hasText: /ref null func/ }).first()).toBeVisible({ timeout: 60_000 })
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')
