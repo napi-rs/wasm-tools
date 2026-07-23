@@ -42,6 +42,16 @@ export const WAT_SAMPLES: WatSample[] = [
   (memory $mem 1 1 shared)
   (export "memory" (memory $mem)))`,
   },
+  {
+    // A global initialized with (i32.add …) is an EXTENDED-CONST expression — it only
+    // parses/validates under the extended_const feature. walrus (the .wasm upload path)
+    // accepts it, so the WAT path must enable the same flag or the two disagree.
+    name: 'extended-const global',
+    note: 'global init uses i32.add — needs the extended_const feature',
+    wat: `(module
+  (global $answer i32 (i32.add (i32.const 40) (i32.const 2)))
+  (export "answer" (global $answer)))`,
+  },
 ]
 
 export const DEFAULT_WAT = WAT_SAMPLES[0].wat

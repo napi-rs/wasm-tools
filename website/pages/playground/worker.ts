@@ -31,7 +31,7 @@ interface WabtModule {
   resolveNames(): void
   // validate() defaults to wabt's baseline feature set when given no argument, so it
   // must receive the SAME features parseWat used or it rejects valid modules the
-  // parser accepted (shared memory, multi-memory, …). The `.d.ts` omits the param.
+  // parser accepted (shared memory, extended-const, …). The `.d.ts` omits the param.
   validate(features?: WabtFeatures): void
   toBinary(opts: { log: boolean; write_debug_names: boolean }): { buffer: Uint8Array }
   destroy(): void
@@ -40,17 +40,34 @@ interface Wabt {
   parseWat(filename: string, text: string, features?: WabtFeatures): WabtModule
 }
 
-// One feature set shared by parseWat AND validate (see the validate() note above).
+// One feature set shared by parseWat AND validate. The WAT path feeds wabt's OUTPUT
+// binary straight into walrus (WasmModule.fromBuffer), so a WAT and the equivalent
+// uploaded .wasm must accept the SAME proposals — otherwise a module that inspects as
+// .wasm fails as WAT. The vendored walrus (≥1.0.2) parses permissively; a round-trip
+// probe (parseWat → validate → toBinary → fromBuffer) confirmed it accepts sign-extension,
+// non-trapping float→int, multi-value, extended-const, SIMD, relaxed-SIMD, tail-call,
+// memory64, shared memory (threads), GC, reference types, and bulk memory — so every wabt
+// feature is enabled here to mirror walrus's parser. (`multi_memory` is intentionally
+// absent: it is NOT a wabt 1.0.39 flag — wabt rejects two memories regardless — so setting
+// it was a silently-ignored no-op.)
 const WABT_FEATURES: WabtFeatures = {
+  exceptions: true,
+  mutable_globals: true,
+  sat_float_to_int: true,
+  sign_extension: true,
   simd: true,
   threads: true,
-  reference_types: true,
-  bulk_memory: true,
-  mutable_globals: true,
-  gc: true,
-  exceptions: true,
+  function_references: true,
+  multi_value: true,
   tail_call: true,
-  multi_memory: true,
+  bulk_memory: true,
+  reference_types: true,
+  annotations: true,
+  code_metadata: true,
+  gc: true,
+  memory64: true,
+  extended_const: true,
+  relaxed_simd: true,
 }
 
 // A failed dynamic `import()` leaves this worker's ESM module registry with a cached
@@ -274,6 +291,10 @@ function buildGraph(m: WasmModule): InspectResult {
   {
     const ids: string[] = []
     const { shown, total, truncated } = cap(safeItems(m.functions))
+    // Functions capped out of `shown` are never walked, so their OUTGOING call edges
+    // are omitted too. The per-target capping check below can't observe a call whose
+    // SOURCE was capped, so flag the graph partial here whenever the section truncates.
+    if (truncated) edgesTruncated = true
     for (const f of shown) {
       const id = nid('function', f.index)
       ids.push(id)

@@ -102,6 +102,21 @@ test('a shared-memory module inspects (wabt validate gets the threads feature)',
   await expect(page.getByText(/1\.\.1 pages/).first()).toBeVisible({ timeout: 60_000 })
 })
 
+test('an extended-const global inspects (WAT features mirror the walrus parser)', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  // `(global i32 (i32.add …))` only parses/validates under extended_const. walrus accepts
+  // the emitted binary, so the WAT path must enable the same flag; without it, wabt would
+  // reject this and the inspect would error instead of rendering the global node.
+  await page.getByLabel('Example').selectOption({ label: 'extended-const global' })
+  await page.getByRole('button', { name: 'Inspect module' }).click()
+
+  await expect(page.getByRole('img', { name: /module graph/i })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByText(/answer/).first()).toBeVisible({ timeout: 60_000 })
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')

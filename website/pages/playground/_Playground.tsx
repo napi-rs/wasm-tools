@@ -125,7 +125,7 @@ function StaticFallback() {
       <p className="mb-4 text-sm text-(--color-muted)">
         What the playground does — parse a module and walk its live handle graph:
       </p>
-      <pre className="mb-10 overflow-x-auto rounded-xl border border-(--color-border) bg-(--color-surface-1) p-5 font-mono text-xs leading-relaxed text-(--color-fg)">
+      <pre className="mb-4 overflow-x-auto rounded-xl border border-(--color-border) bg-(--color-surface-1) p-5 font-mono text-xs leading-relaxed text-(--color-fg)">
         {`import { WasmModule } from '@napi-rs/wasm-tools'
 
 const mod = WasmModule.fromBuffer(bytes)
@@ -136,6 +136,17 @@ for (const ex of mod.exports.items()) {
   console.log(ex.name, '→', ex.func()?.index)
 }`}
       </pre>
+      <p className="mb-10 text-xs text-(--color-faint)">
+        Heads up: <code className="font-mono">fromBuffer</code> and the collection graph above ship in{' '}
+        <span className="font-mono">@napi-rs/wasm-tools ≥ 1.0.2</span>, which is not on npm yet — the current{' '}
+        <span className="font-mono">1.0.1</span> release exposes <span className="font-mono">ModuleConfig</span> plus{' '}
+        <span className="font-mono">fromPath</span>/<span className="font-mono">emitWasm</span>. This site runs a
+        vendored pre-release build. See the{' '}
+        <a href="/docs" className="underline hover:text-(--color-fg)">
+          docs version note
+        </a>{' '}
+        for details.
+      </p>
 
       <p className="mb-4 text-sm text-(--color-muted)">Sample modules seeded in the editor:</p>
       <div className="flex flex-col gap-4">
