@@ -167,6 +167,33 @@ test('an invalid memory edit blocks Apply even alongside a valid edit', async ({
   await expect(page.getByRole('button', { name: /Apply edits/ })).toBeEnabled()
 })
 
+test('a failed re-inspection clears the stale edit session and download', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  await page.getByRole('button', { name: 'edit', exact: true }).click()
+  await page.getByLabel('Example').selectOption({ label: 'memory + mutable global + exports' })
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+
+  const memInput = page.locator('input[type="number"]').first()
+  await expect(memInput).toBeVisible({ timeout: 60_000 })
+  // Apply a valid edit → a downloadable binary for module A appears.
+  await memInput.fill('2')
+  await page.getByRole('button', { name: /Apply edits/ }).click()
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toBeVisible({ timeout: 60_000 })
+
+  // Replace the source with malformed WAT and re-inspect: the parse fails.
+  await page.getByLabel('WAT source').fill('(module (this is not valid wat')
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+
+  // The stale A session must be gone: no Download button, and the edit form is cleared
+  // back to the "inspect first" prompt (so A can't be applied/downloaded under source B).
+  await expect(page.getByText(/Inspect a module first/i)).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Apply edits/ })).toHaveCount(0)
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')

@@ -319,23 +319,40 @@ export default function Playground() {
     return engineRef.current
   }
 
-  const applyResult = useCallback((r: RunResult) => {
-    if (r.ok && r.kind === 'inspect') {
-      // Commit the result AND its derived edit form in the SAME batched update, so no
-      // intermediate render ever pairs the new module with the previous module's form.
-      // Otherwise a click landing in that window could apply stale (possibly clipped)
-      // edits — diffed against the new baseline — to the new source.
-      setResult(r.result)
-      setForm(buildForm(r.result))
-      setAfterResult(null)
-      setEmitted(null)
-      setSelectedId(r.result.nodes[0]?.id ?? null)
-      setStatus('done')
-    } else if (!r.ok) {
-      setStatus('error')
-      setErrorMsg(r.error)
-    }
+  // A failed inspection leaves NO valid current module. Clear the whole session — graph,
+  // edit form, after-result, selection, and the emitted download — so a previously
+  // inspected module can't still be applied or downloaded while the editor shows the
+  // failed new source. (The retained source refs are only read when `form` exists, so
+  // nulling the form is enough to make Apply unavailable.)
+  const failInspect = useCallback((msg: string) => {
+    setResult(null)
+    setForm(null)
+    setAfterResult(null)
+    setEmitted(null)
+    setSelectedId(null)
+    setStatus('error')
+    setErrorMsg(msg)
   }, [])
+
+  const applyResult = useCallback(
+    (r: RunResult) => {
+      if (r.ok && r.kind === 'inspect') {
+        // Commit the result AND its derived edit form in the SAME batched update, so no
+        // intermediate render ever pairs the new module with the previous module's form.
+        // Otherwise a click landing in that window could apply stale (possibly clipped)
+        // edits — diffed against the new baseline — to the new source.
+        setResult(r.result)
+        setForm(buildForm(r.result))
+        setAfterResult(null)
+        setEmitted(null)
+        setSelectedId(r.result.nodes[0]?.id ?? null)
+        setStatus('done')
+      } else if (!r.ok) {
+        failInspect(r.error)
+      }
+    },
+    [failInspect],
+  )
 
   const inspectWat = useCallback(async () => {
     const gen = ++genRef.current
@@ -356,10 +373,9 @@ export default function Playground() {
       applyResult(r)
     } catch (err) {
       if (gen !== genRef.current) return
-      setStatus('error')
-      setErrorMsg(String(err))
+      failInspect(String(err))
     }
-  }, [wat, applyResult])
+  }, [wat, applyResult, failInspect])
 
   const inspectWasm = useCallback(
     // `gen` is stamped by the caller (handleFiles) BEFORE the async file read, so the
@@ -381,11 +397,10 @@ export default function Playground() {
         applyResult(r)
       } catch (err) {
         if (gen !== genRef.current) return
-        setStatus('error')
-        setErrorMsg(String(err))
+        failInspect(String(err))
       }
     },
-    [applyResult],
+    [applyResult, failInspect],
   )
 
   const handleFiles = useCallback(
