@@ -23,6 +23,42 @@ export type HeapType =
 interface Collection<T> {
   readonly length: number
   items(): T[]
+  // Lookup by stable index (used by Edit mode to resolve a handle from a GraphNode).
+  getByIndex(index: number): T | null
+}
+
+// ── Build (IR builder) surface (post-#158) ───────────────────────────────────
+// A single const value nested under InstrDesc.value. I64 carries a BigInt.
+export type ConstValue =
+  | { type: 'I32'; value: number }
+  | { type: 'I64'; value: bigint }
+  | { type: 'F32'; value: number }
+  | { type: 'F64'; value: number }
+  | { type: 'V128'; value: Uint8Array }
+
+// A wide tagged instruction record; only `type` (the walrus variant name) is
+// required. The build presets use the LocalGet / Const / Binop subset.
+export interface InstrDesc {
+  type: string
+  value?: ConstValue
+  local?: number
+  global?: number
+  func?: number
+  op?: string
+}
+
+// A module-wide local created before it is named in a function's arg list.
+export interface WLocal {
+  readonly index: number
+}
+
+interface LocalCollection {
+  add(ty: ValType): WLocal
+}
+
+// Exports gain an `addFunction` factory in Build mode (name → new function export).
+interface ExportCollection extends Collection<WExport> {
+  addFunction(name: string, func: WFunction): WExport
 }
 
 export interface WFunction {
@@ -31,11 +67,13 @@ export interface WFunction {
   readonly kind: string // 'Local' | 'Import' | 'Uninitialized'
   ty(): WType
   import(): WImport | null
+  // Inverse of buildFunction — reads the body back as descriptors (round-trip).
+  instructions(): InstrDesc[]
 }
 export interface WGlobal {
   readonly index: number
   readonly name: string | null
-  readonly mutable: boolean
+  mutable: boolean // has a real setter (Edit mode toggles it)
   readonly shared: boolean
   readonly ty: ValType
   readonly kind: string // 'Local' | 'Import'
@@ -46,8 +84,8 @@ export interface WMemory {
   readonly name: string | null
   readonly shared: boolean
   readonly memory64: boolean
-  readonly initial: bigint
-  readonly maximum: bigint | null
+  initial: bigint // has a real setter (Edit mode bumps it; value is BigInt)
+  maximum: bigint | null
   readonly isImported: boolean
   import(): WImport | null
 }
@@ -81,7 +119,7 @@ export interface WImport {
 }
 export interface WExport {
   readonly index: number
-  readonly name: string
+  name: string // has a real setter (Edit mode renames it)
   readonly kind: string // 'Function' | 'Table' | 'Memory' | 'Global' | 'Tag'
   func(): WFunction | null
   table(): WTable | null
@@ -113,21 +151,39 @@ export interface WTag {
 }
 
 export interface WasmModule {
-  readonly name: string | null
+  name: string | null // get string|null / set string|undefined|null (Edit mode)
+  readonly mainMemory: WMemory | null
   readonly functions: Collection<WFunction>
   readonly globals: Collection<WGlobal>
   readonly memories: Collection<WMemory>
   readonly tables: Collection<WTable>
   readonly types: Collection<WType>
   readonly imports: Collection<WImport>
-  readonly exports: Collection<WExport>
+  readonly exports: ExportCollection
   readonly data: Collection<WData>
   readonly elements: Collection<WElement>
   readonly tags: Collection<WTag>
+  // Build mode: module-wide locals + the IR builder.
+  readonly locals: LocalCollection
+  buildFunction(
+    params: ValType[],
+    results: ValType[],
+    argLocalIndices: number[],
+    body: InstrDesc[],
+  ): number
+  // Emit the (possibly edited) module into an in-memory wasm buffer.
+  // `demangle` runs Rust name demangling; false for a plain passthrough.
+  emitWasm(demangle: boolean): Uint8Array
 }
 
 export interface WalrusMod {
   WasmModule: { fromBuffer(bytes: Uint8Array): WasmModule }
+  // Ready-made ValType constants (a constant IS just its object, e.g. I32 === { type:'I32' }).
+  I32: ValType
+  I64: ValType
+  F32: ValType
+  F64: ValType
+  V128: ValType
 }
 
 // ── ValType → display string ────────────────────────────────────────────────

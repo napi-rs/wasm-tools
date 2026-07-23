@@ -10,8 +10,8 @@
 // the emitted bytes (a comment alone is stripped by minification and does NOT change the hash). Bump
 // it whenever the COEP/serving story changes and a clean asset URL is needed.
 import { Buffer } from 'buffer'
-import type { WorkerRequest, WorkerResponse, InspectResult, GraphNode, GraphEdge, SectionSummary, NodeKind, PropPair } from './protocol'
-import type { WalrusMod, WasmModule, WType, WImport, WExport } from './_walrus'
+import type { WorkerRequest, WorkerResponse, InspectResult, GraphNode, GraphEdge, SectionSummary, NodeKind, PropPair, Edit, BuildPresetId, BuildInstrDesc } from './protocol'
+import type { WalrusMod, WasmModule, WType, WImport, WExport, InstrDesc } from './_walrus'
 import { valTypeLabel } from './_walrus'
 
 // Names the worker thread (visible in devtools) AND, as a live side effect on `self`, survives
@@ -64,9 +64,8 @@ function watToWasm(wabt: Wabt, watText: string): Uint8Array {
   return buffer
 }
 
-// Kept generic + verbatim from the reference kit: copy into a FRESH ArrayBuffer so the result is
-// transferable even when the wasm heap is a SharedArrayBuffer (threads → shared memory). Used by the
-// (stubbed) build/edit ops that emit new wasm.
+// Copy into a FRESH ArrayBuffer so the result is transferable even when the wasm heap is a
+// SharedArrayBuffer (threads → shared memory). Used by the Edit + Build ops that emit new wasm.
 function toArrayBuffer(out: Uint8Array): ArrayBuffer {
   const ab = new ArrayBuffer(out.byteLength)
   new Uint8Array(ab).set(out)
@@ -453,8 +452,105 @@ function safeGet<T>(fn: () => T, fallback: T): T {
   }
 }
 
-// `toArrayBuffer` is retained for the staged Edit/Build ops (which emit new wasm).
-void toArrayBuffer
+// ── edit application (write-through handles) ─────────────────────────────────
+// Each edit resolves a live handle by stable index and mutates it in place.
+// Missing handles (stale index) are skipped rather than throwing so one bad edit
+// can't sink a whole batch. `pages` is normalized to BigInt for the memory setter.
+function applyEditList(m: WasmModule, edits: Edit[]): void {
+  for (const e of edits) {
+    switch (e.kind) {
+      case 'renameExport': {
+        const ex = m.exports.getByIndex(e.index)
+        if (ex) ex.name = e.newName
+        break
+      }
+      case 'toggleGlobalMutable': {
+        const g = m.globals.getByIndex(e.index)
+        if (g) g.mutable = !g.mutable
+        break
+      }
+      case 'setModuleName': {
+        m.name = e.name
+        break
+      }
+      case 'setMemoryInitial': {
+        const mem = m.memories.getByIndex(e.index)
+        if (mem) mem.initial = BigInt(e.pages)
+        break
+      }
+    }
+  }
+}
+
+// Flag the after-graph nodes that an edit targeted, so the UI can paint them amber.
+// (setModuleName has no owning node — it surfaces via the module-name field.)
+function markEdited(res: InspectResult, edits: Edit[]): void {
+  const ids = new Set<string>()
+  for (const e of edits) {
+    if (e.kind === 'renameExport') ids.add(nid('export', e.index))
+    else if (e.kind === 'toggleGlobalMutable') ids.add(nid('global', e.index))
+    else if (e.kind === 'setMemoryInitial') ids.add(nid('memory', e.index))
+  }
+  for (const n of res.nodes) if (ids.has(n.id)) n.edited = true
+}
+
+// ── build (IR builder) ────────────────────────────────────────────────────────
+// The canonical 8-byte empty module every preset builds on top of.
+const EMPTY_MODULE = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 1, 0, 0, 0])
+
+// Structured-clone / JSON safety: I64 const values are BigInt and must be
+// stringified before postMessage. Everything else is already a plain number.
+function normalizeInstr(d: InstrDesc): BuildInstrDesc {
+  const out: BuildInstrDesc = { type: d.type }
+  if (d.local != null) out.local = d.local
+  if (d.global != null) out.global = d.global
+  if (d.func != null) out.func = d.func
+  if (d.op != null) out.op = d.op
+  if (d.value != null) {
+    const v = d.value.value
+    out.value = { type: d.value.type, value: typeof v === 'bigint' ? v.toString() : (v as number) }
+  }
+  return out
+}
+
+// Build one preset into a fresh module, export it, and hand back the exported
+// name + emitted bytes + the round-tripped instruction body. The `mod` namespace
+// supplies both the WasmModule ctor and the ready-made ValType constants.
+function buildPreset(
+  mod: Mod,
+  preset: BuildPresetId,
+): { name: string; emitted: Uint8Array; instructions: BuildInstrDesc[] } {
+  const { WasmModule, I32 } = mod
+  const m = WasmModule.fromBuffer(EMPTY_MODULE)
+
+  let idx: number
+  let name: string
+  if (preset === 'add') {
+    const a = m.locals.add(I32)
+    const b = m.locals.add(I32)
+    idx = m.buildFunction([I32, I32], [I32], [a.index, b.index], [
+      { type: 'LocalGet', local: a.index },
+      { type: 'LocalGet', local: b.index },
+      { type: 'Binop', op: 'I32Add' },
+    ])
+    name = 'add'
+  } else if (preset === 'const42') {
+    idx = m.buildFunction([], [I32], [], [{ type: 'Const', value: { type: 'I32', value: 42 } }])
+    name = 'const42'
+  } else {
+    const p0 = m.locals.add(I32)
+    idx = m.buildFunction([I32], [I32], [p0.index], [{ type: 'LocalGet', local: p0.index }])
+    name = 'identity'
+  }
+
+  const fn = m.functions.getByIndex(idx)
+  if (!fn) throw new Error('buildFunction returned an index with no function')
+  m.exports.addFunction(name, fn)
+  const emitted = m.emitWasm(false)
+  // Read the body back from the same handle (round-trip proof).
+  const instructions = fn.instructions().map(normalizeInstr)
+  return { name, emitted, instructions }
+}
 
 // ── dispatcher ────────────────────────────────────────────────────────────────
 self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
@@ -477,8 +573,41 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       post({ id, ok: true, kind: 'inspect', result })
       return
     }
-    // Edit / Build are staged for a later task once the module-graph wasm build ships.
-    post({ id, ok: false, error: 'Edit and Build modes are coming soon.' })
+    if (op.kind === 'applyEdits') {
+      let wasmBytes: Uint8Array
+      if (op.format === 'wat') {
+        const wabt = await getWabt()
+        const text = new TextDecoder('utf-8').decode(new Uint8Array(bytes))
+        wasmBytes = watToWasm(wabt, text)
+      } else {
+        wasmBytes = new Uint8Array(bytes)
+      }
+      const mod = (await import('@napi-rs/wasm-tools')) as unknown as Mod
+      const module = mod.WasmModule.fromBuffer(wasmBytes)
+      const before = buildGraph(module)
+      applyEditList(module, op.edits)
+      // Emit → re-parse so the after-graph reflects what actually baked into bytes.
+      const emitted = module.emitWasm(false)
+      const after = buildGraph(mod.WasmModule.fromBuffer(emitted))
+      markEdited(after, op.edits)
+      const ab = toArrayBuffer(emitted)
+      post({ id, ok: true, kind: 'applyEdits', before, after, emitted: ab }, [ab])
+      return
+    }
+    if (op.kind === 'buildFn') {
+      const mod = (await import('@napi-rs/wasm-tools')) as unknown as Mod
+      const { name, emitted, instructions } = buildPreset(mod, op.preset)
+      // Copy into a plain ArrayBuffer: it's both the BufferSource we instantiate
+      // from AND the transferable we return (the wasm heap may be a SharedArrayBuffer).
+      const ab = toArrayBuffer(emitted)
+      const { instance } = await WebAssembly.instantiate(ab, {})
+      const fn = instance.exports[name] as (...args: number[]) => number | bigint
+      const raw = fn(...op.args)
+      const result = typeof raw === 'bigint' ? raw.toString() : raw
+      post({ id, ok: true, kind: 'buildFn', result, emitted: ab, instructions }, [ab])
+      return
+    }
+    post({ id, ok: false, error: `Unknown op: ${(op as { kind: string }).kind}` })
   } catch (err) {
     post({ id, ok: false, error: err instanceof Error ? err.message : String(err) })
   }

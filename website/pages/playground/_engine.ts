@@ -1,8 +1,16 @@
 // website/pages/playground/_engine.ts
-import type { Op, WorkerResponse, InspectResult } from './protocol'
+import type { Op, WorkerResponse, InspectResult, BuildInstrDesc } from './protocol'
 
 export type RunResult =
   | { ok: true; kind: 'inspect'; result: InspectResult }
+  | { ok: true; kind: 'applyEdits'; before: InspectResult; after: InspectResult; emitted: ArrayBuffer }
+  | {
+      ok: true
+      kind: 'buildFn'
+      result: number | string
+      emitted: ArrayBuffer
+      instructions: BuildInstrDesc[]
+    }
   | { ok: false; error: string }
 
 export class PlaygroundEngine {

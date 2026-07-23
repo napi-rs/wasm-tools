@@ -3,15 +3,93 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PlaygroundEngine } from './_engine'
 import type { RunResult } from './_engine'
-import type { InspectResult, GraphNode } from './protocol'
+import type { InspectResult, GraphNode, Edit, InspectFormat, BuildPresetId, BuildInstrDesc } from './protocol'
+import { BUILD_PRESETS } from './protocol'
 import { WAT_SAMPLES, DEFAULT_WAT } from './_samples'
 import GraphView from './_GraphView'
 import TreeView from './_TreeView'
 import DetailPanel from './_DetailPanel'
+import CodeBlock from '../_components/CodeBlock'
 
 type Status = 'empty' | 'running' | 'done' | 'error'
 type Mode = 'inspect' | 'edit' | 'build'
 type View = 'graph' | 'tree'
+
+// ── Edit-mode form model ─────────────────────────────────────────────────────
+// A flat, index-keyed mirror of the parts of a module Edit mode can mutate. Both
+// the live form and the pristine baseline use this shape; diffing the two yields
+// the minimal `Edit[]` the worker applies through handles.
+type EditForm = {
+  moduleName: string
+  exportNames: Record<number, string>
+  globalMutable: Record<number, boolean>
+  memoryInitial: Record<number, string>
+}
+
+function getProp(n: GraphNode, key: string): string | undefined {
+  return n.props.find((p) => p.key === key)?.value
+}
+
+function buildForm(r: InspectResult): EditForm {
+  const exportNames: Record<number, string> = {}
+  const globalMutable: Record<number, boolean> = {}
+  const memoryInitial: Record<number, string> = {}
+  for (const n of r.nodes) {
+    if (n.kind === 'export') exportNames[n.index] = n.label
+    else if (n.kind === 'global') globalMutable[n.index] = getProp(n, 'mutable') === 'true'
+    else if (n.kind === 'memory') memoryInitial[n.index] = getProp(n, 'initial') ?? '0'
+  }
+  return { moduleName: r.moduleName ?? '', exportNames, globalMutable, memoryInitial }
+}
+
+function diffEdits(base: EditForm, cur: EditForm): Edit[] {
+  const edits: Edit[] = []
+  if (cur.moduleName !== base.moduleName) {
+    edits.push({ kind: 'setModuleName', name: cur.moduleName.trim() === '' ? null : cur.moduleName })
+  }
+  for (const key of Object.keys(cur.exportNames)) {
+    const i = Number(key)
+    const v = cur.exportNames[i]
+    if (v !== base.exportNames[i] && v.trim() !== '') edits.push({ kind: 'renameExport', index: i, newName: v })
+  }
+  for (const key of Object.keys(cur.globalMutable)) {
+    const i = Number(key)
+    if (cur.globalMutable[i] !== base.globalMutable[i]) edits.push({ kind: 'toggleGlobalMutable', index: i })
+  }
+  for (const key of Object.keys(cur.memoryInitial)) {
+    const i = Number(key)
+    const v = cur.memoryInitial[i]
+    if (v !== base.memoryInitial[i] && v.trim() !== '' && /^\d+$/.test(v.trim()))
+      edits.push({ kind: 'setMemoryInitial', index: i, pages: v.trim() })
+  }
+  return edits
+}
+
+// ── Build-mode descriptor rendering ──────────────────────────────────────────
+// Render one round-tripped instruction as its object-literal — the same shape
+// fed to buildFunction, so the list doubles as round-trip proof.
+function fmtInstr(d: BuildInstrDesc): string {
+  const parts: string[] = [`type: '${d.type}'`]
+  if (d.local != null) parts.push(`local: ${d.local}`)
+  if (d.global != null) parts.push(`global: ${d.global}`)
+  if (d.func != null) parts.push(`func: ${d.func}`)
+  if (d.op != null) parts.push(`op: '${d.op}'`)
+  if (d.value != null) {
+    const v = d.value.value
+    const lit = typeof v === 'string' ? v : String(v)
+    parts.push(`value: { type: '${d.value.type}', value: ${lit} }`)
+  }
+  return `{ ${parts.join(', ')} }`
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function instrsToHtml(instrs: BuildInstrDesc[]): string {
+  const body = instrs.map((d) => escapeHtml(fmtInstr(d))).join('\n')
+  return `<pre class="font-mono text-xs leading-relaxed text-(--color-fg)">${body}</pre>`
+}
 
 // The PUBLISHED @napi-rs/wasm-tools-wasm32-wasi@1.0.1 binary predates the module-graph API
 // (#158/#159). This site instead ships a vendored pre-release build (website/vendor/, aliased
@@ -94,9 +172,61 @@ export default function Playground() {
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // ----- edit state -----
+  // The exact source that produced `result`, retained so Edit mode re-parses the
+  // SAME module (a later textarea edit can't shift the indices the form keys on).
+  const sourceFormatRef = useRef<InspectFormat>('wat')
+  const sourceWatRef = useRef<string>('')
+  const sourceWasmRef = useRef<ArrayBuffer | null>(null)
+  const [form, setForm] = useState<EditForm | null>(null)
+  const [afterResult, setAfterResult] = useState<InspectResult | null>(null)
+  const [emitted, setEmitted] = useState<ArrayBuffer | null>(null)
+  const [applying, setApplying] = useState(false)
+
+  // ----- build state -----
+  const [buildPreset, setBuildPreset] = useState<BuildPresetId>(BUILD_PRESETS[0].id)
+  const [buildArgs, setBuildArgs] = useState<string[]>(BUILD_PRESETS[0].defaultArgs.map(String))
+  const [building, setBuilding] = useState(false)
+  const [buildResult, setBuildResult] = useState<{
+    preset: BuildPresetId
+    name: string
+    args: number[]
+    result: number | string
+    instructions: BuildInstrDesc[]
+    emitted: ArrayBuffer
+  } | null>(null)
+  const activePreset = useMemo(
+    () => BUILD_PRESETS.find((p) => p.id === buildPreset) ?? BUILD_PRESETS[0],
+    [buildPreset],
+  )
+  // Switching presets reseeds the arg inputs and clears any prior result.
+  const selectPreset = useCallback((id: BuildPresetId) => {
+    const p = BUILD_PRESETS.find((x) => x.id === id) ?? BUILD_PRESETS[0]
+    setBuildPreset(id)
+    setBuildArgs(p.defaultArgs.map(String))
+    setBuildResult(null)
+  }, [])
+
+  // Pristine baseline for diffing; rebuilt whenever a fresh inspect lands.
+  const baseline = useMemo(() => (result ? buildForm(result) : null), [result])
+  // A new inspect resets the editable form and drops any prior emitted output.
+  useEffect(() => {
+    setForm(result ? buildForm(result) : null)
+    setAfterResult(null)
+    setEmitted(null)
+  }, [result])
+
+  // In Edit mode the right pane shows the after-graph once edits are applied.
+  const displayResult = mode === 'edit' && afterResult ? afterResult : result
+
   const selectedNode: GraphNode | null = useMemo(
-    () => result?.nodes.find((n) => n.id === selectedId) ?? null,
-    [result, selectedId],
+    () => displayResult?.nodes.find((n) => n.id === selectedId) ?? null,
+    [displayResult, selectedId],
+  )
+
+  const pendingEdits = useMemo(
+    () => (form && baseline ? diffEdits(baseline, form) : []),
+    [form, baseline],
   )
 
   const ensureEngine = () => {
@@ -121,6 +251,8 @@ export default function Playground() {
     try {
       const bytes = new TextEncoder().encode(wat)
       const r = await ensureEngine().run({ kind: 'inspect', format: 'wat' }, bytes.buffer as ArrayBuffer)
+      sourceFormatRef.current = 'wat'
+      sourceWatRef.current = wat
       setSourceLabel('module.wat')
       applyResult(r)
     } catch (err) {
@@ -135,6 +267,8 @@ export default function Playground() {
       setErrorMsg('')
       try {
         const r = await ensureEngine().run({ kind: 'inspect', format: 'wasm' }, bytes.slice(0))
+        sourceFormatRef.current = 'wasm'
+        sourceWasmRef.current = bytes.slice(0)
         setSourceLabel(name)
         applyResult(r)
       } catch (err) {
@@ -169,6 +303,104 @@ export default function Playground() {
     [handleFiles],
   )
 
+  // ----- apply edits -----
+  const runApplyEdits = useCallback(async () => {
+    if (!form || !baseline) return
+    const edits = diffEdits(baseline, form)
+    if (edits.length === 0) return
+    setApplying(true)
+    setStatus('running')
+    setErrorMsg('')
+    try {
+      const format = sourceFormatRef.current
+      let bytes: ArrayBuffer
+      if (format === 'wat') {
+        bytes = new TextEncoder().encode(sourceWatRef.current).buffer as ArrayBuffer
+      } else if (sourceWasmRef.current) {
+        bytes = sourceWasmRef.current.slice(0)
+      } else {
+        throw new Error('No source retained — re-inspect the module before editing.')
+      }
+      const r = await ensureEngine().run({ kind: 'applyEdits', format, edits }, bytes)
+      if (r.ok && r.kind === 'applyEdits') {
+        setAfterResult(r.after)
+        setEmitted(r.emitted)
+        setSelectedId(r.after.nodes[0]?.id ?? null)
+        setStatus('done')
+      } else if (!r.ok) {
+        setStatus('error')
+        setErrorMsg(r.error)
+      }
+    } catch (err) {
+      setStatus('error')
+      setErrorMsg(String(err))
+    } finally {
+      setApplying(false)
+    }
+  }, [form, baseline])
+
+  const downloadEmitted = useCallback(() => {
+    if (!emitted) return
+    const blob = new Blob([emitted], { type: 'application/wasm' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'edited.wasm'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }, [emitted])
+
+  // ----- build & run -----
+  const runBuild = useCallback(async () => {
+    const preset = BUILD_PRESETS.find((p) => p.id === buildPreset) ?? BUILD_PRESETS[0]
+    const args = preset.argLabels.map((_, i) => {
+      const n = Number.parseInt(buildArgs[i] ?? '0', 10)
+      return Number.isFinite(n) ? n : 0
+    })
+    setBuilding(true)
+    setStatus('running')
+    setErrorMsg('')
+    try {
+      // Build ignores request bytes; send an empty (transferable) buffer.
+      const empty = new ArrayBuffer(0)
+      const r = await ensureEngine().run({ kind: 'buildFn', preset: buildPreset, args }, empty)
+      if (r.ok && r.kind === 'buildFn') {
+        setBuildResult({
+          preset: preset.id,
+          name: preset.name,
+          args,
+          result: r.result,
+          instructions: r.instructions,
+          emitted: r.emitted,
+        })
+        setStatus('done')
+      } else if (!r.ok) {
+        setStatus('error')
+        setErrorMsg(r.error)
+      }
+    } catch (err) {
+      setStatus('error')
+      setErrorMsg(String(err))
+    } finally {
+      setBuilding(false)
+    }
+  }, [buildPreset, buildArgs])
+
+  const downloadBuilt = useCallback(() => {
+    if (!buildResult) return
+    const blob = new Blob([buildResult.emitted], { type: 'application/wasm' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${activePreset.name}.wasm`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }, [buildResult, activePreset])
+
   // ----- SSR shell (before mount) -----
   if (!mounted) {
     return (
@@ -186,7 +418,7 @@ export default function Playground() {
     return <StaticFallback />
   }
 
-  const editing = mode !== 'inspect'
+  const isBuild = mode === 'build'
 
   return (
     <div className="container-page py-12">
@@ -214,7 +446,6 @@ export default function Playground() {
             ].join(' ')}
           >
             {m}
-            {m !== 'inspect' ? <span className="ml-1 opacity-60">soon</span> : null}
           </button>
         ))}
       </div>
@@ -222,6 +453,8 @@ export default function Playground() {
       <div className="flex flex-col gap-8 lg:flex-row">
         {/* ---- Left: input ---- */}
         <div className="flex flex-col gap-4 lg:w-96 lg:shrink-0">
+          {!isBuild ? (
+            <>
           <div className="flex items-center justify-between gap-3">
             <label htmlFor="pg-example" className="font-mono text-xs text-(--color-muted)">
               Example
@@ -285,17 +518,184 @@ export default function Playground() {
           <button
             type="button"
             onClick={inspectWat}
-            disabled={status === 'running' || editing}
+            disabled={status === 'running' || isBuild}
             className="w-full rounded-lg bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-accent-strong) disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {status === 'running' ? 'Parsing…' : 'Inspect module'}
+            {status === 'running' && !applying ? 'Parsing…' : mode === 'edit' ? 'Inspect to edit' : 'Inspect module'}
           </button>
 
-          {editing ? (
+          {mode === 'edit' && !result ? (
             <p className="text-center font-mono text-xs text-(--color-faint)">
-              {mode === 'edit' ? 'Edit' : 'Build'} mode is coming soon — Inspect is live.
+              Inspect a module first, then tweak its exports, globals, memory, and name below.
             </p>
           ) : null}
+
+          {/* ---- Edit controls (amber accent = mutation) ---- */}
+          {mode === 'edit' && result && form ? (
+            <div className="flex flex-col gap-4 rounded-xl border border-(--color-edit-muted) bg-(--color-surface-1) p-4">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-xs tracking-wide text-(--color-edit-strong) uppercase">Edits</span>
+                <span className="font-mono text-xs text-(--color-faint)">{pendingEdits.length} pending</span>
+              </div>
+
+              {/* module name */}
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-xs text-(--color-muted)">module name</span>
+                <input
+                  type="text"
+                  value={form.moduleName}
+                  placeholder="(unnamed)"
+                  onChange={(e) => setForm((f) => (f ? { ...f, moduleName: e.target.value } : f))}
+                  className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none"
+                />
+              </label>
+
+              {/* exports → rename */}
+              {result.nodes.some((n) => n.kind === 'export') ? (
+                <div className="flex flex-col gap-2">
+                  <span className="font-mono text-xs text-(--color-muted)">exports · rename</span>
+                  {result.nodes
+                    .filter((n) => n.kind === 'export')
+                    .map((n) => (
+                      <div key={n.id} className="flex items-center gap-2">
+                        <span className="w-6 shrink-0 text-right font-mono text-xs text-(--color-faint)">#{n.index}</span>
+                        <input
+                          type="text"
+                          value={form.exportNames[n.index] ?? ''}
+                          onChange={(e) =>
+                            setForm((f) =>
+                              f ? { ...f, exportNames: { ...f.exportNames, [n.index]: e.target.value } } : f,
+                            )
+                          }
+                          className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none"
+                        />
+                      </div>
+                    ))}
+                </div>
+              ) : null}
+
+              {/* globals → toggle mutable */}
+              {result.nodes.some((n) => n.kind === 'global') ? (
+                <div className="flex flex-col gap-2">
+                  <span className="font-mono text-xs text-(--color-muted)">globals · mutable</span>
+                  {result.nodes
+                    .filter((n) => n.kind === 'global')
+                    .map((n) => (
+                      <label key={n.id} className="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={form.globalMutable[n.index] ?? false}
+                          onChange={(e) =>
+                            setForm((f) =>
+                              f ? { ...f, globalMutable: { ...f.globalMutable, [n.index]: e.target.checked } } : f,
+                            )
+                          }
+                          className="accent-(--color-edit)"
+                        />
+                        <span className="truncate font-mono text-xs text-(--color-fg)">{n.label}</span>
+                      </label>
+                    ))}
+                </div>
+              ) : null}
+
+              {/* memories → initial pages */}
+              {result.nodes.some((n) => n.kind === 'memory') ? (
+                <div className="flex flex-col gap-2">
+                  <span className="font-mono text-xs text-(--color-muted)">memories · initial pages</span>
+                  {result.nodes
+                    .filter((n) => n.kind === 'memory')
+                    .map((n) => (
+                      <div key={n.id} className="flex items-center gap-2">
+                        <span className="truncate font-mono text-xs text-(--color-fg)">{n.label}</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={form.memoryInitial[n.index] ?? '0'}
+                          onChange={(e) =>
+                            setForm((f) =>
+                              f ? { ...f, memoryInitial: { ...f.memoryInitial, [n.index]: e.target.value } } : f,
+                            )
+                          }
+                          className="ml-auto w-24 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none"
+                        />
+                      </div>
+                    ))}
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={runApplyEdits}
+                disabled={applying || pendingEdits.length === 0}
+                className="w-full rounded-lg bg-(--color-edit) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-edit-strong) disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {applying ? 'Applying…' : `Apply edits${pendingEdits.length ? ` (${pendingEdits.length})` : ''}`}
+              </button>
+            </div>
+          ) : null}
+
+            </>
+          ) : (
+            /* ---- Build controls (cyan accent = generative) ---- */
+            <div className="flex flex-col gap-4 rounded-xl border border-(--color-border) bg-(--color-surface-1) p-4">
+              <span className="font-mono text-xs tracking-wide text-(--color-accent) uppercase">
+                Build a function
+              </span>
+
+              <label className="flex flex-col gap-1">
+                <span className="font-mono text-xs text-(--color-muted)">preset</span>
+                <select
+                  value={buildPreset}
+                  onChange={(e) => selectPreset(e.target.value as BuildPresetId)}
+                  className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-accent) focus:outline-none"
+                >
+                  {BUILD_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <p className="font-mono text-xs text-(--color-faint)">{activePreset.signature}</p>
+
+              {activePreset.argLabels.length ? (
+                <div className="flex flex-col gap-2">
+                  <span className="font-mono text-xs text-(--color-muted)">args</span>
+                  {activePreset.argLabels.map((lab, i) => (
+                    <div key={lab} className="flex items-center gap-2">
+                      <span className="w-6 shrink-0 text-right font-mono text-xs text-(--color-faint)">
+                        {lab}
+                      </span>
+                      <input
+                        type="number"
+                        value={buildArgs[i] ?? ''}
+                        onChange={(e) =>
+                          setBuildArgs((a) => {
+                            const next = [...a]
+                            next[i] = e.target.value
+                            return next
+                          })
+                        }
+                        className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-accent) focus:outline-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="font-mono text-xs text-(--color-faint)">No arguments.</p>
+              )}
+
+              <button
+                type="button"
+                onClick={runBuild}
+                disabled={building}
+                className="w-full rounded-lg bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-accent-strong) disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {building ? 'Building…' : 'Build & run'}
+              </button>
+            </div>
+          )}
           {status === 'error' ? (
             <p className="rounded-lg border border-(--color-border-strong) bg-(--color-surface-1) px-3 py-2 font-mono text-xs break-words text-(--color-bad)">
               {errorMsg}
@@ -305,6 +705,64 @@ export default function Playground() {
 
         {/* ---- Right: output ---- */}
         <div className="min-w-0 flex-1">
+          {isBuild ? (
+            <div className="flex flex-col gap-6">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-mono text-xs text-(--color-faint)">{activePreset.name}.wasm</span>
+                {buildResult ? (
+                  <button
+                    type="button"
+                    onClick={downloadBuilt}
+                    className="rounded-lg border border-(--color-accent) bg-(--color-accent-muted) px-3 py-1.5 font-mono text-xs text-(--color-accent-strong) transition-colors hover:bg-(--color-accent-glow)"
+                  >
+                    Download .wasm
+                  </button>
+                ) : null}
+              </div>
+
+              {!buildResult ? (
+                <div className="flex min-h-72 items-center justify-center rounded-xl border border-(--color-border) bg-(--color-surface-1) text-sm text-(--color-faint)">
+                  {status === 'running' ? 'Building…' : 'Pick a preset and press Build & run.'}
+                </div>
+              ) : (
+                <>
+                  {/* the returned value, prominent */}
+                  <div className="rounded-xl border border-(--color-accent-muted) bg-(--color-surface-1) p-6">
+                    <p className="mb-3 font-mono text-xs tracking-wide text-(--color-accent) uppercase">
+                      Result
+                    </p>
+                    <p className="font-mono text-xl break-words text-(--color-fg)">
+                      {buildResult.name}({buildResult.args.join(', ')}) ={' '}
+                      <span className="font-semibold text-(--color-accent)">
+                        {String(buildResult.result)}
+                      </span>
+                    </p>
+                  </div>
+
+                  {/* round-tripped body — the descriptors fn.instructions() reads back */}
+                  <div>
+                    <p className="mb-2 font-mono text-xs text-(--color-muted)">
+                      fn.instructions() — read back from the emitted bytes
+                    </p>
+                    <CodeBlock
+                      html={instrsToHtml(buildResult.instructions)}
+                      copyText={buildResult.instructions.map(fmtInstr).join('\n')}
+                      filename="function body"
+                    />
+                  </div>
+
+                  {/* the IR-builder snippet that produced it */}
+                  <div>
+                    <p className="mb-2 font-mono text-xs text-(--color-muted)">IR builder</p>
+                    <pre className="overflow-x-auto rounded-xl border border-(--color-border) bg-(--color-surface-1) p-4 font-mono text-xs leading-relaxed text-(--color-fg)">
+                      {activePreset.source}
+                    </pre>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : (
+            <>
           <div className="mb-4 flex items-center justify-between gap-3">
             <div className="inline-flex rounded-lg border border-(--color-border) bg-(--color-surface-1) p-1">
               {(['graph', 'tree'] as View[]).map((v) => (
@@ -323,15 +781,31 @@ export default function Playground() {
                 </button>
               ))}
             </div>
-            {result ? (
-              <span className="font-mono text-xs text-(--color-faint)">
-                {sourceLabel}
-                {result.moduleName ? ` · ${result.moduleName}` : ''}
-              </span>
-            ) : null}
+            <div className="flex items-center gap-3">
+              {mode === 'edit' && afterResult ? (
+                <>
+                  <span className="inline-flex items-center rounded-full bg-(--color-edit-muted) px-2.5 py-0.5 font-mono text-xs text-(--color-edit-strong)">
+                    After edits
+                  </span>
+                  <button
+                    type="button"
+                    onClick={downloadEmitted}
+                    className="rounded-lg border border-(--color-edit) bg-(--color-edit-muted) px-3 py-1.5 font-mono text-xs text-(--color-edit-strong) transition-colors hover:bg-(--color-edit-glow)"
+                  >
+                    Download .wasm
+                  </button>
+                </>
+              ) : null}
+              {displayResult ? (
+                <span className="font-mono text-xs text-(--color-faint)">
+                  {sourceLabel}
+                  {displayResult.moduleName ? ` · ${displayResult.moduleName}` : ''}
+                </span>
+              ) : null}
+            </div>
           </div>
 
-          {!result ? (
+          {!displayResult ? (
             <div className="flex min-h-72 items-center justify-center rounded-xl border border-(--color-border) bg-(--color-surface-1) text-sm text-(--color-faint)">
               {status === 'running' ? 'Parsing module…' : 'Inspect a module to see its graph.'}
             </div>
@@ -339,13 +813,15 @@ export default function Playground() {
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_20rem]">
               <div className="min-w-0">
                 {view === 'graph' ? (
-                  <GraphView result={result} selectedId={selectedId} onSelect={setSelectedId} />
+                  <GraphView result={displayResult} selectedId={selectedId} onSelect={setSelectedId} />
                 ) : (
-                  <TreeView result={result} selectedId={selectedId} onSelect={setSelectedId} />
+                  <TreeView result={displayResult} selectedId={selectedId} onSelect={setSelectedId} />
                 )}
               </div>
               <DetailPanel node={selectedNode} />
             </div>
+          )}
+            </>
           )}
         </div>
       </div>
