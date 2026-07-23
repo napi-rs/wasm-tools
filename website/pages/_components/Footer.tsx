@@ -1,0 +1,45 @@
+const links = [
+  { label: 'Playground', href: '/playground' },
+  { label: 'Docs', href: '/docs' },
+  { label: 'GitHub', href: 'https://github.com/napi-rs/wasm-tools' },
+  { label: 'npm', href: 'https://www.npmjs.com/package/@napi-rs/wasm-tools' },
+  { label: 'walrus', href: 'https://github.com/rustwasm/walrus' },
+]
+
+export default function Footer() {
+  return (
+    <footer className="border-t border-(--color-border)">
+      <div className="container-page py-12">
+        <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
+          <div className="flex flex-col gap-3">
+            <span className="font-mono text-sm font-medium text-(--color-fg) tracking-tight">
+              @napi-rs/wasm-tools
+            </span>
+            <p className="text-sm text-(--color-muted) max-w-xs">
+              walrus bindings for JavaScript — read, edit and build WebAssembly modules
+              through live handles.
+            </p>
+          </div>
+
+          <nav className="flex flex-wrap gap-x-8 gap-y-2">
+            {links.map((l) => (
+              <a
+                key={l.label}
+                href={l.href}
+                className="text-sm text-(--color-muted) hover:text-(--color-fg) transition-colors"
+              >
+                {l.label}
+              </a>
+            ))}
+          </nav>
+        </div>
+
+        <div className="mt-10 pt-6 border-t border-(--color-border)">
+          <p className="font-mono text-xs text-(--color-faint) tabular-nums">
+            Built with @napi-rs · powered by walrus · MIT licensed
+          </p>
+        </div>
+      </div>
+    </footer>
+  )
+}

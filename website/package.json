@@ -1,0 +1,37 @@
+{
+  "name": "@napi-rs/wasm-tools-website",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "sync-vendor": "node scripts/sync-vendor.mjs",
+    "predev": "node scripts/sync-vendor.mjs",
+    "dev": "vite",
+    "prebuild": "node scripts/sync-vendor.mjs",
+    "build": "vite build",
+    "preview": "vite preview",
+    "void:prepare": "void prepare",
+    "deploy": "void deploy"
+  },
+  "dependencies": {
+    "@napi-rs/wasm-tools": "1.0.1",
+    "@napi-rs/wasm-tools-wasm32-wasi": "file:./vendor/wasm-tools-wasm32-wasi",
+    "@void/md": "0.10.2",
+    "@void/react": "0.10.2",
+    "buffer": "^6.0.0",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "shiki": "^4.0.2",
+    "void": "0.10.2",
+    "wabt": "^1.0.39"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.2",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tailwindcss": "4.3.2",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.0"
+  }
+}
