@@ -233,14 +233,10 @@ export default function Playground() {
     if (result) for (const n of result.nodes) if (n.kind === 'export' && n.labelClipped) exports.add(n.index)
     return { exports, moduleName: result?.moduleNameClipped ?? false }
   }, [result])
-  // A new inspect resets the editable form and drops any prior emitted output.
-  useEffect(() => {
-    setForm(result ? buildForm(result) : null)
-    setAfterResult(null)
-    setEmitted(null)
-  }, [result])
   // Any edit to the form invalidates a previously-applied result: its after-graph and
   // downloadable bytes no longer describe the current form, so drop them until re-apply.
+  // (The form is reset together with `result` in applyResult, so this fires only on
+  // genuine user edits — never lagging a fresh inspect.)
   useEffect(() => {
     setAfterResult(null)
     setEmitted(null)
@@ -266,7 +262,14 @@ export default function Playground() {
 
   const applyResult = useCallback((r: RunResult) => {
     if (r.ok && r.kind === 'inspect') {
+      // Commit the result AND its derived edit form in the SAME batched update, so no
+      // intermediate render ever pairs the new module with the previous module's form.
+      // Otherwise a click landing in that window could apply stale (possibly clipped)
+      // edits — diffed against the new baseline — to the new source.
       setResult(r.result)
+      setForm(buildForm(r.result))
+      setAfterResult(null)
+      setEmitted(null)
       setSelectedId(r.result.nodes[0]?.id ?? null)
       setStatus('done')
     } else if (!r.ok) {

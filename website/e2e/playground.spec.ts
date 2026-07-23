@@ -67,6 +67,26 @@ test('a failed re-apply removes the stale download (edit-mode integrity)', async
   await expect(page.getByRole('button', { name: 'Download .wasm' })).toHaveCount(0)
 })
 
+test('re-inspecting resets the edit form (no stale pending edits carried over)', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  await page.getByRole('button', { name: 'edit', exact: true }).click()
+  await page.getByLabel('Example').selectOption({ label: 'memory + mutable global + exports' })
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+
+  const initial = page.locator('input[type="number"]').first()
+  await expect(initial).toBeVisible({ timeout: 60_000 })
+  await initial.fill('2') // dirty the form
+  await expect(page.getByText(/1 pending/)).toBeVisible()
+
+  // A fresh inspect must commit the new module and its form together — leaving the
+  // previous form paired with the new result would carry stale pending edits over.
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+  await expect(page.getByText(/0 pending/)).toBeVisible({ timeout: 60_000 })
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')
