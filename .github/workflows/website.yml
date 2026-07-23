@@ -4,8 +4,10 @@ name: Website
 #
 # Merged from the former website-ci.yml + website-deploy.yml: both ran an identical
 # setup (root wasm build → vendor into the site → install), so on a push to main the
-# Rust build and the Playwright suite each ran TWICE. Here `test` is the single gate and
-# `deploy` simply `needs:` it, so main runs the build + suite once and then ships.
+# Rust build and the Playwright suite each ran TWICE. Here `test` is the single gate,
+# `deploy` simply `needs:` it, and the wasm crosses between them as an artifact — so a
+# push to main builds the Rust once, runs the suite once, and deploys the EXACT bytes
+# that suite ran against rather than a separately rebuilt copy.
 #
 # Intentionally NOT wired into the npm publish gate: the published package is the Rust
 # binding, which is independent of the website's browser tests.
@@ -89,6 +91,24 @@ jobs:
       - name: Build wasm (produces walrus.wasm32-wasi.wasm + glue at repo root)
         run: pnpm build --target wasm32-wasip1-threads
 
+      # Hand the DEPLOY job exactly the build that is about to be vendored and tested
+      # below, so main ships the bytes that passed the browser suite instead of a second,
+      # separately produced artifact — and builds the Rust once per push, not twice.
+      # These are precisely the files website/scripts/sync-vendor.mjs copies.
+      - name: Upload the tested wasm build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm32-wasi-build
+          path: |
+            walrus.wasm32-wasi.wasm
+            walrus.wasi-browser.js
+            walrus.wasi.cjs
+            wasi-worker-browser.mjs
+            wasi-worker.mjs
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Install website deps
         working-directory: website
         run: npm ci
@@ -136,40 +156,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 22
-          cache: pnpm
+          cache: npm
+          cache-dependency-path: website/package-lock.json
 
-      # `void deploy` builds the site itself, so this job only needs the vendored wasm in
-      # place beforehand. The cargo cache is shared with `test`, so this is a warm build.
-      - name: Rust toolchain (wasm32-wasip1-threads)
-        uses: dtolnay/rust-toolchain@stable
+      # Ship the artifact the browser suite actually ran against. `test` uploaded the wasm
+      # it vendored; restore it to the repo root, where sync-vendor.mjs reads from. This is
+      # why the job needs no Rust toolchain, cargo cache, or root install: `void deploy`
+      # builds the SITE itself, and the only other input is this wasm.
+      - name: Download the tested wasm build
+        uses: actions/download-artifact@v8
         with:
-          toolchain: stable
-          targets: wasm32-wasip1-threads
-      - name: Cache cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            ~/.napi-rs
-            target/
-          key: wasm32-wasip1-threads-cargo-ubuntu
-      - name: Install repo deps
-        run: pnpm install --frozen-lockfile
-      - name: Build wasm (produces walrus.wasm32-wasi.wasm + glue at repo root)
-        run: pnpm build --target wasm32-wasip1-threads
+          name: wasm32-wasi-build
+          path: .
 
       - name: Install website deps
         working-directory: website
         run: npm ci
-      - name: Vendor the fresh wasm build into the site
+      - name: Vendor the tested wasm build into the site
         working-directory: website
         run: npm run sync-vendor
 
