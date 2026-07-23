@@ -173,7 +173,8 @@ export type WorkerBuildOk = {
   ok: true
   kind: 'buildFn'
   result: number | string // the value returned by calling the emitted export
-  emitted: ArrayBuffer // freshly-built wasm bytes (transferable)
+  // No `emitted` here (unlike applyEdits): the built module is instantiated and CALLED
+  // in the worker, so what crosses back is the value it returned, not its bytes.
   instructions: BuildInstrDesc[] // round-tripped body read back via fn.instructions()
 }
 export type WorkerOk = WorkerInspectOk | WorkerApplyEditsOk | WorkerBuildOk

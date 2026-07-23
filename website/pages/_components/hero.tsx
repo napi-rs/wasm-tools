@@ -7,7 +7,7 @@ export default function Hero() {
   return (
     <section className="relative overflow-hidden border-b border-(--color-border)">
       <div className="accent-glow" />
-      <div className="container-page grid items-center gap-12 py-20 md:grid-cols-[1.05fr_0.95fr] md:py-28">
+      <div className="container-page grid grid-cols-[minmax(0,1fr)] items-center gap-12 py-20 md:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] md:py-28">
         <div className="min-w-0">
           <span className="eyebrow">walrus bindings for JavaScript</span>
           <h1 className="mt-5 font-display text-display-xl text-(--color-fg)">

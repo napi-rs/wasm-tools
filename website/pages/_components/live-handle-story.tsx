@@ -15,7 +15,11 @@ export default function LiveHandleStory({ html }: { html: string }) {
   return (
     <section className="border-t border-(--color-border)">
       <div className="container-page py-20 md:py-28">
-        <div className="grid gap-12 lg:grid-cols-[0.9fr_1.1fr] lg:items-center">
+        {/* minmax(0,…): a bare fr track cannot shrink below the min-content width of
+            its contents, and a code sample's long line is very wide — the track blew
+            past its share, squeezed the prose column, and pushed the whole page into
+            sideways scroll on phones. min-w-0 lets the CodeBlock scroll on its own. */}
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-12 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-center">
           <div>
             <SectionHeader
               index="02"
@@ -39,7 +43,7 @@ export default function LiveHandleStory({ html }: { html: string }) {
               ))}
             </div>
           </div>
-          <Reveal>
+          <Reveal className="min-w-0">
             <CodeBlock html={html} copyText={storySample} filename="round-trip.ts" />
           </Reveal>
         </div>

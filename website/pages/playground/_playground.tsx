@@ -247,13 +247,15 @@ export default function Playground() {
   const [buildPreset, setBuildPreset] = useState<BuildPresetId>(BUILD_PRESETS[0].id)
   const [buildArgs, setBuildArgs] = useState<string[]>(BUILD_PRESETS[0].defaultArgs.map(String))
   const [building, setBuilding] = useState(false)
+  // The emitted bytes are NOT kept: Build's whole point is that the module is
+  // instantiated and called in the worker, so the panel shows the returned value —
+  // there is nothing here to take away as a file.
   const [buildResult, setBuildResult] = useState<{
     preset: BuildPresetId
     name: string
     args: number[]
     result: number | string
     instructions: BuildInstrDesc[]
-    emitted: ArrayBuffer
   } | null>(null)
   const activePreset = useMemo(
     () => BUILD_PRESETS.find((p) => p.id === buildPreset) ?? BUILD_PRESETS[0],
@@ -609,7 +611,6 @@ export default function Playground() {
           args,
           result: r.result,
           instructions: r.instructions,
-          emitted: r.emitted,
         })
         setStatus('done')
       } else if (!r.ok) {
@@ -624,21 +625,6 @@ export default function Playground() {
       setBuilding(false)
     }
   }, [buildPreset, buildArgs])
-
-  const downloadBuilt = useCallback(() => {
-    if (!buildResult) return
-    const blob = new Blob([buildResult.emitted], { type: 'application/wasm' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    // Name the file after the artifact that was actually built, not the live
-    // selection — so the download stays correct regardless of transient UI state.
-    a.download = `${buildResult.name}.wasm`
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
-  }, [buildResult])
 
   // ----- SSR shell (before mount) -----
   if (!mounted) {
@@ -664,7 +650,7 @@ export default function Playground() {
   const busy = status === 'running'
 
   return (
-    <div className="container-page py-12">
+    <div className="container-wide py-12">
       <p className="eyebrow mb-3">Playground</p>
       <h1 className="text-display-lg mb-6 font-display text-(--color-fg)">See the shape of your wasm</h1>
 
@@ -1007,13 +993,9 @@ export default function Playground() {
               <div className="flex items-center justify-between gap-3">
                 <span className="font-mono text-xs text-(--color-faint)">{activePreset.name}.wasm</span>
                 {buildResult ? (
-                  <button
-                    type="button"
-                    onClick={downloadBuilt}
-                    className="rounded-lg border border-(--color-accent) bg-(--color-accent-muted) px-3 py-1.5 font-mono text-xs text-(--color-accent-strong) transition-colors hover:bg-(--color-accent-glow)"
-                  >
-                    Download .wasm
-                  </button>
+                  <span className="inline-flex items-center rounded-full bg-(--color-accent-muted) px-2.5 py-0.5 font-mono text-xs text-(--color-accent-strong)">
+                    built · instantiated · called
+                  </span>
                 ) : null}
               </div>
 
@@ -1115,7 +1097,9 @@ export default function Playground() {
               {status === 'running' ? 'Parsing module…' : 'Inspect a module to see its graph.'}
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_20rem]">
+            // items-start: the detail panel is usually the taller of the two, and a
+            // stretched graph pane just draws a mostly-empty box beside it.
+            <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
               <div className="min-w-0">
                 {view === 'graph' ? (
                   <GraphView result={displayResult} selectedId={selectedId} onSelect={setSelectedId} />

@@ -8,7 +8,6 @@ export type RunResult =
       ok: true
       kind: 'buildFn'
       result: number | string
-      emitted: ArrayBuffer
       instructions: BuildInstrDesc[]
     }
   | { ok: false; error: string }

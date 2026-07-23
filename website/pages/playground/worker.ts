@@ -911,14 +911,14 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     if (op.kind === 'buildFn') {
       const mod = await loadMod()
       const { name, emitted, instructions } = buildPreset(mod, op.preset)
-      // Copy into a plain ArrayBuffer: it's both the BufferSource we instantiate
-      // from AND the transferable we return (the wasm heap may be a SharedArrayBuffer).
-      const ab = toArrayBuffer(emitted)
-      const { instance } = await WebAssembly.instantiate(ab, {})
+      // Copy into a plain ArrayBuffer: WebAssembly.instantiate needs a BufferSource
+      // and the wasm heap may be a SharedArrayBuffer. The bytes stay in the worker —
+      // Build reports the value the module RETURNS, not a file to take away.
+      const { instance } = await WebAssembly.instantiate(toArrayBuffer(emitted), {})
       const fn = instance.exports[name] as (...args: number[]) => number | bigint
       const raw = fn(...op.args)
       const result = typeof raw === 'bigint' ? raw.toString() : raw
-      post({ id, ok: true, kind: 'buildFn', result, emitted: ab, instructions }, [ab])
+      post({ id, ok: true, kind: 'buildFn', result, instructions })
       return
     }
     post({ id, ok: false, error: `Unknown op: ${(op as { kind: string }).kind}` })

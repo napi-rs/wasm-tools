@@ -163,6 +163,21 @@ body::after {
     }
   }
 
+  /* The playground is a three-pane tool (editor | graph | detail), not a reading
+     column: inside container-page's 1140px the graph pane collapsed to ~320px and
+     clipped its own nodes. Wider max, same gutters. */
+  .container-wide {
+    margin-inline: auto;
+    width: 100%;
+    max-width: 1500px;
+    padding-inline: 1.5rem;
+  }
+  @media (min-width: 768px) {
+    .container-wide {
+      padding-inline: 2rem;
+    }
+  }
+
   .site-header {
     background: color-mix(in oklab, var(--color-bg) 82%, transparent);
     backdrop-filter: saturate(140%) blur(12px);

@@ -61,9 +61,11 @@ export default function Verbs({
           subhead="One module handle, three things to do with it. The same graph you read is the graph you mutate and the graph you emit."
         />
 
-        <div className="mt-12 grid gap-6 lg:grid-cols-3">
+        {/* minmax(0,…) + min-w-0 — a bare fr track sizes to the code sample's
+            min-content width, which is wider than a phone. */}
+        <div className="mt-12 grid grid-cols-[minmax(0,1fr)] gap-6 lg:grid-cols-[repeat(3,minmax(0,1fr))]">
           {VERBS.map((v, i) => (
-            <Reveal key={v.key} delay={i * 80}>
+            <Reveal key={v.key} className="min-w-0" delay={i * 80}>
               <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-(--color-hairline) bg-(--color-surface-1)/50">
                 <div className="flex items-center gap-3 border-b border-(--color-border) px-5 py-4">
                   <span

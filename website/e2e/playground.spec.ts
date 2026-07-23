@@ -296,6 +296,11 @@ test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }
   // add(2,3) -> 5, and fn.instructions() reads the body back (round-trip proof).
   await expect(page.getByText(/=\s*5\b/).first()).toBeVisible({ timeout: 60_000 })
   await expect(page.getByText(/I32Add/).first()).toBeVisible({ timeout: 60_000 })
+
+  // Build RUNS the module and reports what it returned — it does not hand back a
+  // file. (Edit mode still offers the download; that is asserted elsewhere.)
+  await expect(page.getByText(/built · instantiated · called/)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toHaveCount(0)
 })
 
 test('build mode validates numeric args (no silent coercion)', async ({ page }) => {

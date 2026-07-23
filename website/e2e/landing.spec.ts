@@ -35,6 +35,24 @@ test('sections below the hero reveal on scroll (landing page hydrates)', async (
   expect(opacity).toBe('1')
 })
 
+// A `1fr` grid track cannot shrink below its content's min-content width, and the
+// code samples are far wider than a phone — so a missing minmax(0,…)/min-w-0 puts the
+// whole page into sideways scroll instead of letting the sample scroll on its own.
+// Assert the document itself never scrolls horizontally at phone width.
+test('no horizontal page scroll at phone width', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+
+  for (const route of ['/', '/docs/building-functions', '/playground']) {
+    await page.goto(route)
+    await page.waitForTimeout(300)
+    const [scrollWidth, inner] = await page.evaluate(() => [
+      document.documentElement.scrollWidth,
+      window.innerWidth,
+    ])
+    expect(scrollWidth, `${route} scrolls sideways`).toBeLessThanOrEqual(inner + 1)
+  }
+})
+
 test('the install switcher swaps the package-manager command', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByText(/pnpm add @napi-rs\/wasm-tools/).first()).toBeVisible()

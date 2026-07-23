@@ -12,13 +12,27 @@ type Node = {
   label: string
   kind: Kind
   labelAnchor?: 'start' | 'end' | 'middle'
+  // Labels sit ABOVE their node by default. Every edge here runs horizontally
+  // through the row it connects (or diagonally out of the bottom-left node), so a
+  // label placed beside a node lands ON its own edge and the line strikes the text
+  // through. Above is empty in every row; `below` is the escape hatch for the
+  // bottom-left `type` node, whose diagonal edge leaves upward through that space.
+  labelBelow?: boolean
   edit?: boolean
 }
 
 type Edge = { from: string; to: string; edit?: boolean }
 
 const NODES: Node[] = [
-  { id: 'type', x: 70, y: 300, label: 'type (i32,i32)→i32', kind: 'type', labelAnchor: 'start' },
+  {
+    id: 'type',
+    x: 70,
+    y: 300,
+    label: 'type (i32,i32)→i32',
+    kind: 'type',
+    labelAnchor: 'start',
+    labelBelow: true,
+  },
   { id: 'import', x: 70, y: 90, label: 'import env.log', kind: 'import', labelAnchor: 'start' },
   { id: 'run', x: 250, y: 90, label: 'fn run', kind: 'function', labelAnchor: 'middle' },
   { id: 'counter', x: 250, y: 195, label: 'global counter', kind: 'global', labelAnchor: 'middle' },
@@ -83,8 +97,10 @@ export default function ModuleGraph({ className }: { className?: string }) {
       <g>
         {NODES.map((n) => {
           const anchor = n.labelAnchor ?? 'middle'
-          const dx = anchor === 'start' ? 14 : anchor === 'end' ? -14 : 0
-          const dy = anchor === 'middle' ? -16 : 4
+          // Nudge side-anchored labels off the dot without pushing them into the
+          // neighbouring column; -18 clears the edit node's r=13 focus ring.
+          const dx = anchor === 'start' ? 2 : anchor === 'end' ? -2 : 0
+          const dy = n.labelBelow ? 22 : -18
           return (
             <g key={n.id}>
               <circle

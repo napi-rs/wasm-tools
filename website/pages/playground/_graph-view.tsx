@@ -177,7 +177,12 @@ export default function GraphView({
         width={width}
         height={height}
         viewBox={`0 0 ${width} ${height}`}
-        className="block"
+        // Draw at natural size when it fits, scale DOWN to the pane when it doesn't
+        // (h-auto keeps the viewBox aspect), and stop shrinking at 520px so a wide
+        // graph in a narrow pane stays legible and scrolls instead of turning to
+        // hairlines. Never scales up: a two-node module keeps its normal type size.
+        className="block h-auto max-w-full"
+        style={{ minWidth: Math.min(width, 520) }}
         role="img"
         aria-label="Module graph"
       >
