@@ -11,7 +11,7 @@
 // it whenever the COEP/serving story changes and a clean asset URL is needed.
 import { Buffer } from 'buffer'
 import type { WorkerRequest, WorkerResponse, InspectResult, GraphNode, GraphEdge, SectionSummary, NodeKind, PropPair, Edit, BuildPresetId, BuildInstrDesc } from './protocol'
-import type { WalrusMod, WasmModule, WType, WImport, WExport, InstrDesc } from './_walrus'
+import type { WalrusMod, WasmModule, WType, WImport, WExport, WFunction, InstrDesc } from './_walrus'
 import { valTypeLabel } from './_walrus'
 
 // Names the worker thread (visible in devtools) AND, as a live side effect on `self`, survives
@@ -190,14 +190,18 @@ function cap<T>(items: T[]): { shown: T[]; total: number; truncated: boolean } {
 }
 
 // Walk a function body and collect the functions it references via Call / ReturnCall /
-// RefFunc. Deduped AS WE GO via `seen` (a body calling one target 100k times yields a
-// single edge, not 100k intermediate entries), bounded by `budget`, and descending every
-// nested body: block/loop `seq`, if `consequent`/`alternative`, and legacy try-handler
-// `catches[i].seq` (a Call inside a catch clause would otherwise be silently dropped).
+// RefFunc. Only edges to a SHOWN function are collected (a capped target would just be
+// dropped later), and the budget is charged per RENDERABLE edge: Call/ReturnCall to the
+// same target collapse to one 'calls' edge, so we key by the render identity — otherwise
+// a body calling one capped/duplicate target thousands of times would starve every later
+// function's real, visible calls. Deduped AS WE GO via `seen`, bounded by `budget`, and
+// descending every nested body: block/loop `seq`, if `consequent`/`alternative`, and
+// legacy try-handler `catches[i].seq` (a Call in a catch clause would else be dropped).
 type CallEdge = { from: number; to: number; kind: 'Call' | 'ReturnCall' | 'RefFunc' }
 function collectCalls(
   instrs: InstrDesc[],
   from: number,
+  shown: Set<number>,
   seen: Set<string>,
   out: CallEdge[],
   budget: { left: number },
@@ -205,17 +209,20 @@ function collectCalls(
   for (const ins of instrs) {
     if (budget.left <= 0) return
     if (ins.func != null && (ins.type === 'Call' || ins.type === 'ReturnCall' || ins.type === 'RefFunc')) {
-      const key = `${from}->${ins.func}:${ins.type}`
-      if (!seen.has(key)) {
-        seen.add(key)
-        out.push({ from, to: ins.func, kind: ins.type })
-        budget.left--
+      if (shown.has(ins.func)) {
+        const renderKind = ins.type === 'RefFunc' ? 'ref' : 'call'
+        const key = `${from}->${ins.func}:${renderKind}`
+        if (!seen.has(key)) {
+          seen.add(key)
+          out.push({ from, to: ins.func, kind: ins.type })
+          budget.left--
+        }
       }
     }
-    if (ins.seq) collectCalls(ins.seq, from, seen, out, budget)
-    if (ins.consequent) collectCalls(ins.consequent, from, seen, out, budget)
-    if (ins.alternative) collectCalls(ins.alternative, from, seen, out, budget)
-    if (ins.catches) for (const c of ins.catches) if (c.seq) collectCalls(c.seq, from, seen, out, budget)
+    if (ins.seq) collectCalls(ins.seq, from, shown, seen, out, budget)
+    if (ins.consequent) collectCalls(ins.consequent, from, shown, seen, out, budget)
+    if (ins.alternative) collectCalls(ins.alternative, from, shown, seen, out, budget)
+    if (ins.catches) for (const c of ins.catches) if (c.seq) collectCalls(c.seq, from, shown, seen, out, budget)
   }
 }
 
@@ -308,6 +315,8 @@ function buildGraph(m: WasmModule): InspectResult {
   const callEdges: CallEdge[] = []
   const callSeen = new Set<string>()
   const callBudget = { left: MAX_CALL_EDGES }
+  // Shown local functions (they have a body) held for the SECOND pass below.
+  const shownLocalFns: WFunction[] = []
   {
     const ids: string[] = []
     const { shown, total, truncated } = cap(safeItems(m.functions))
@@ -344,21 +353,24 @@ function buildGraph(m: WasmModule): InspectResult {
         ],
       })
       if (tyIndex != null) edge(id, nid('type', tyIndex), 'type')
-      // Local functions have a body; collect their fn→fn call references (bounded).
-      if (f.kind === 'Local') {
-        if (callBudget.left > 0) {
-          const instrs = safeCall(() => f.instructions())
-          if (instrs) collectCalls(instrs, f.index, callSeen, callEdges, callBudget)
-          // null ⇒ the body was too deep for the binding to read, so its calls are
-          // omitted; flag the graph as partial rather than pretend it's complete.
-          else edgesTruncated = true
-        }
-        // Once the call budget is spent (here or in an earlier function), this and
-        // every later local body's calls are dropped — so the call graph is partial.
-        if (callBudget.left <= 0) edgesTruncated = true
-      }
+      if (f.kind === 'Local') shownLocalFns.push(f)
     }
     section('function', 'Functions', ids, total, truncated)
+  }
+
+  // fn→fn calls: collected in a SECOND pass, AFTER the whole shown set is known, so
+  // collectCalls charges its budget only for edges to shown functions. Doing this inside
+  // the node loop (with a partially-built shown set) let one body's calls to capped or
+  // not-yet-seen targets spend the budget and starve later bodies' visible calls.
+  for (const f of shownLocalFns) {
+    if (callBudget.left <= 0) {
+      edgesTruncated = true // budget spent → later bodies' calls dropped, graph is partial
+      break
+    }
+    const instrs = safeCall(() => f.instructions())
+    if (instrs) collectCalls(instrs, f.index, shownFuncIndices, callSeen, callEdges, callBudget)
+    // null ⇒ the body was too deep for the binding to read; its calls are omitted.
+    else edgesTruncated = true
   }
 
   // globals
@@ -534,6 +546,11 @@ function buildGraph(m: WasmModule): InspectResult {
   {
     const ids: string[] = []
     const { shown, total, truncated } = cap(safeItems(m.tags))
+    // Every tag carries a tag→type edge, so a capped-out tag always drops one — flag
+    // the graph partial (source-capped edges are never attempted). data/elements are
+    // NOT flagged this way: a passive data segment or a ref.null element legitimately
+    // has no edge, so capping them does not *necessarily* omit one.
+    if (truncated) edgesTruncated = true
     for (const tg of shown) {
       const id = nid('tag', tg.index)
       ids.push(id)

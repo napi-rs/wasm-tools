@@ -1,0 +1,102 @@
+name: Website CI
+
+# Pre-merge browser coverage for the Void app in website/. The root CI workflow only
+# runs the binding's AVA tests; without this, a PR that breaks the playground's
+# cross-origin isolation, the wasm-in-a-worker engine, or the graph walk would pass CI
+# and only fail post-merge in the deploy workflow's e2e gate. This runs the SAME build +
+# Playwright suite as the deploy job, but on pull requests, and never deploys.
+#
+# It is intentionally NOT wired into the npm publish gate: the published package is the
+# Rust binding, which is independent of the website's browser tests.
+on:
+  pull_request:
+    # Same input set as the deploy trigger: anything that feeds the vendored wasm build
+    # or the site itself. A PR touching none of these skips this (heavier) job.
+    paths:
+      - 'website/**'
+      - 'src/**'
+      - 'crates/**'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'patches/**'
+      - '.github/workflows/website-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'src/**'
+      - 'crates/**'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'patches/**'
+      - '.github/workflows/website-ci.yml'
+
+concurrency:
+  group: website-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Build the repo's wasm32-wasi binary that the playground runs (the site consumes
+      # the vendored build until @napi-rs/wasm-tools >= 1.0.2 is on npm).
+      - name: Rust toolchain (wasm32-wasip1-threads)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-wasip1-threads
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.napi-rs
+            target/
+          key: wasm32-wasip1-threads-cargo-ubuntu
+      - name: Install repo deps
+        run: pnpm install --frozen-lockfile
+      - name: Build wasm (produces walrus.wasm32-wasi.wasm + glue at repo root)
+        run: pnpm build --target wasm32-wasip1-threads
+
+      - name: Install website deps
+        working-directory: website
+        run: npm ci
+      - name: Vendor the fresh wasm build into the site
+        working-directory: website
+        run: npm run sync-vendor
+
+      # CI=true forces a fresh dev server so the suite runs against the real vite.config
+      # isolation middleware; e2e/config.spec.ts additionally asserts void.json's prod
+      # COOP/COEP matches, so header drift is caught even though this uses the dev server.
+      - name: Install Playwright browser
+        working-directory: website
+        run: npx playwright install --with-deps chromium
+      - name: E2E
+        working-directory: website
+        env:
+          CI: 'true'
+        run: npm run test:e2e

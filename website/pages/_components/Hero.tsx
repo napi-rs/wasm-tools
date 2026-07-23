@@ -32,6 +32,17 @@ export default function Hero() {
 
           <div className="mt-10">
             <InstallSwitcher />
+            <p className="mt-3 max-w-md text-xs text-(--color-faint)">
+              The live-handle graph &amp; <span className="font-mono">buildFunction</span> API shown here needs{' '}
+              <span className="font-mono">@napi-rs/wasm-tools ≥ 1.0.2</span> (not on npm yet — this site runs a
+              vendored pre-release). The current <span className="font-mono">1.0.1</span> release installs{' '}
+              <span className="font-mono">ModuleConfig</span> + <span className="font-mono">fromPath</span>/
+              <span className="font-mono">emitWasm</span>. See the{' '}
+              <a href="/docs" className="underline hover:text-(--color-fg)">
+                version note
+              </a>
+              .
+            </p>
           </div>
         </div>
 

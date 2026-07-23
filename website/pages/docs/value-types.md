@@ -46,8 +46,8 @@ it, so anywhere the API asks for a `ValType` you may pass a constant or an inlin
 
 ```ts
 { type: 'I32' }
-{ type: 'Ref', heap: { type: 'Abstract', kind: 'Func' } }          // funcref
-{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }             // (ref $t) — a concrete type
+{ type: 'Ref', nullable: true, heap: { type: 'Abstract', kind: 'Func' } }   // funcref = (ref null func)
+{ type: 'Ref', nullable: false, heap: { type: 'Concrete', typeIndex } }     // (ref $t) — a concrete, non-null ref
 ```
 
 The `heap` of a `Ref` is itself a union: `Abstract` (an `AbstractHeapType` such as `Func`, `Extern`,
@@ -62,6 +62,6 @@ discriminant. Mutable metadata (an item's `name`, a global's `mutable`, a memory
 
 ## Concrete refs must name a live type
 
-Any `{ type: 'Ref', heap: { type: 'Concrete', typeIndex } }` you pass to `globals.addLocal`,
+Any `{ type: 'Ref', nullable: false, heap: { type: 'Concrete', typeIndex } }` you pass to `globals.addLocal`,
 `locals.add`, `tables.addLocal`, `types.add`, … must index an **existing** type in this module; an
 index that names no live type is rejected with a catchable error, never a process abort.
