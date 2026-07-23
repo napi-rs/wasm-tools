@@ -151,7 +151,7 @@ jobs:
       contents: read
     env:
       VOID_API_URL: ${{ vars.VOID_API_URL || 'https://api.void.cloud' }}
-      # TODO(set-me): the Void project slug for this site (create it once in the dashboard).
+      # The Void project this site deploys to: https://napi-wasm-tools.void.app
       VOID_PROJECT: napi-wasm-tools
     steps:
       - uses: actions/checkout@v7
