@@ -126,7 +126,7 @@
     "singleQuote": true,
     "arrowParens": "always"
   },
-  "packageManager": "pnpm@11.15.1",
+  "packageManager": "pnpm@11.17.0",
   "optionalDependencies": {
     "@napi-rs/wasm-tools-darwin-x64": "1.0.1",
     "@napi-rs/wasm-tools-darwin-arm64": "1.0.1",
