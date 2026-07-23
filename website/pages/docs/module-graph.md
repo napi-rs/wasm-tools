@@ -10,6 +10,9 @@ elements, locals, tags, custom sections, producers — is exposed as a **live ha
 property reads through to the module; writing one writes back. Your edits persist when you call
 `emitWasm()`.
 
+> **Requires @napi-rs/wasm-tools ≥ 1.0.2** (the published 1.0.1 predates this API). See
+> [Getting Started](/docs) for the version note.
+
 ## Collections vs. handles
 
 A `WasmModule` exposes one **collection** per item kind — `mod.functions`, `mod.globals`,

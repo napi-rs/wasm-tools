@@ -19,6 +19,13 @@ pnpm add @napi-rs/wasm-tools -D
 yarn add @napi-rs/wasm-tools -D
 ```
 
+> **Version note.** The module graph (`mod.functions`, `mod.exports`, live handles),
+> `buildFunction`, and `instructions()` shown throughout these docs require
+> **@napi-rs/wasm-tools ≥ 1.0.2**. The current npm release is **1.0.1** — `ModuleConfig`
+> and `WasmModule.fromBuffer`/`fromPath`/`emitWasm` work there, but the graph and builder
+> APIs below do **not** until a ≥ 1.0.2 build is published. The playground on this site runs
+> a vendored pre-release so you can try them today.
+
 ## Get a module
 
 Two ways to parse wasm into a live `WasmModule`:

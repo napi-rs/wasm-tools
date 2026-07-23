@@ -8,6 +8,9 @@ description: 'Synthesize a function body from an instruction-descriptor tree wit
 `buildFunction` mints a new locally-defined function from an array of **instruction descriptors**
 (`InstrDesc`) and appends it to the module, returning its stable index.
 
+> **Requires @napi-rs/wasm-tools ≥ 1.0.2** (the published 1.0.1 predates this API). See
+> [Getting Started](/docs) for the version note.
+
 ```ts
 buildFunction(
   params: ValType[],

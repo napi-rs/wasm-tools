@@ -57,11 +57,17 @@ function watToWasm(wabt: Wabt, watText: string): Uint8Array {
     tail_call: true,
     multi_memory: true,
   })
-  m.resolveNames()
-  m.validate()
-  const { buffer } = m.toBinary({ log: false, write_debug_names: true })
-  m.destroy()
-  return buffer
+  // resolveNames/validate/toBinary can each throw on invalid input; destroy()
+  // MUST still run or the wabt wasm-heap allocation leaks. Repeated invalid input
+  // would otherwise accumulate unbounded memory in this long-lived worker.
+  try {
+    m.resolveNames()
+    m.validate()
+    const { buffer } = m.toBinary({ log: false, write_debug_names: true })
+    return buffer
+  } finally {
+    m.destroy()
+  }
 }
 
 // Copy into a FRESH ArrayBuffer so the result is transferable even when the wasm heap is a
@@ -152,10 +158,13 @@ function buildGraph(m: WasmModule): InspectResult {
     section('type', 'Types', ids, total, truncated)
   }
 
-  // imports
+  // imports (shown slice captured so the defines-edge pass below stays within the
+  // per-section cap — walking ALL imports there would re-introduce the O(n²) resolve).
+  const shownImports: WImport[] = []
   {
     const ids: string[] = []
     const { shown, total, truncated } = cap(safeItems(m.imports))
+    shownImports.push(...shown)
     for (const im of shown) {
       const id = nid('import', im.index)
       ids.push(id)
@@ -423,8 +432,9 @@ function buildGraph(m: WasmModule): InspectResult {
     section('export', 'Exports', ids, total, truncated)
   }
 
-  // imports → the item they define (drawn after all items exist)
-  for (const im of safeItems(m.imports)) {
+  // imports → the item they define (drawn after all items exist). Only the shown
+  // (capped) imports, so an import-heavy module can't restore the quadratic walk.
+  for (const im of shownImports) {
     const from = nid('import', im.index)
     const target = importTarget(im)
     if (target) edge(from, target, 'defines')
@@ -443,7 +453,12 @@ function buildGraph(m: WasmModule): InspectResult {
     edge(nid('function', c.from), nid('function', c.to), label)
   }
 
-  return { moduleName: safeGet(() => m.name, null), nodes, edges, sections }
+  // Drop edges whose target (or source) was capped out of its section — an edge to
+  // a node that was never materialized would render nowhere and just bloat the payload.
+  const nodeIdSet = new Set(nodes.map((n) => n.id))
+  const prunedEdges = edges.filter((e) => nodeIdSet.has(e.from) && nodeIdSet.has(e.to))
+
+  return { moduleName: safeGet(() => m.name, null), nodes, edges: prunedEdges, sections }
 }
 
 function exportTarget(ex: WExport): string | null {

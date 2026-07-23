@@ -171,6 +171,11 @@ export default function Playground() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Monotonic request generation. Every engine op bumps it and captures its value;
+  // a reply is applied only if it's still the latest, so an out-of-order completion
+  // (e.g. a slow inspect landing after a newer inspect/build) can never overwrite
+  // fresher state or leave the retained source pointing at a different module.
+  const genRef = useRef(0)
 
   // ----- edit state -----
   // The exact source that produced `result`, retained so Edit mode re-parses the
@@ -246,16 +251,23 @@ export default function Playground() {
   }, [])
 
   const inspectWat = useCallback(async () => {
+    const gen = ++genRef.current
     setStatus('running')
     setErrorMsg('')
     try {
       const bytes = new TextEncoder().encode(wat)
       const r = await ensureEngine().run({ kind: 'inspect', format: 'wat' }, bytes.buffer as ArrayBuffer)
-      sourceFormatRef.current = 'wat'
-      sourceWatRef.current = wat
-      setSourceLabel('module.wat')
+      if (gen !== genRef.current) return // superseded by a newer request
+      // Commit the retained source ONLY on success, together with the result, so the
+      // source Edit mode re-parses always matches the graph currently on screen.
+      if (r.ok && r.kind === 'inspect') {
+        sourceFormatRef.current = 'wat'
+        sourceWatRef.current = wat
+        setSourceLabel('module.wat')
+      }
       applyResult(r)
     } catch (err) {
+      if (gen !== genRef.current) return
       setStatus('error')
       setErrorMsg(String(err))
     }
@@ -263,15 +275,20 @@ export default function Playground() {
 
   const inspectWasm = useCallback(
     async (bytes: ArrayBuffer, name: string) => {
+      const gen = ++genRef.current
       setStatus('running')
       setErrorMsg('')
       try {
         const r = await ensureEngine().run({ kind: 'inspect', format: 'wasm' }, bytes.slice(0))
-        sourceFormatRef.current = 'wasm'
-        sourceWasmRef.current = bytes.slice(0)
-        setSourceLabel(name)
+        if (gen !== genRef.current) return // superseded by a newer request
+        if (r.ok && r.kind === 'inspect') {
+          sourceFormatRef.current = 'wasm'
+          sourceWasmRef.current = bytes.slice(0)
+          setSourceLabel(name)
+        }
         applyResult(r)
       } catch (err) {
+        if (gen !== genRef.current) return
         setStatus('error')
         setErrorMsg(String(err))
       }
@@ -308,6 +325,7 @@ export default function Playground() {
     if (!form || !baseline) return
     const edits = diffEdits(baseline, form)
     if (edits.length === 0) return
+    const gen = ++genRef.current
     setApplying(true)
     setStatus('running')
     setErrorMsg('')
@@ -322,6 +340,7 @@ export default function Playground() {
         throw new Error('No source retained — re-inspect the module before editing.')
       }
       const r = await ensureEngine().run({ kind: 'applyEdits', format, edits }, bytes)
+      if (gen !== genRef.current) return // superseded by a newer request
       if (r.ok && r.kind === 'applyEdits') {
         setAfterResult(r.after)
         setEmitted(r.emitted)
@@ -332,6 +351,7 @@ export default function Playground() {
         setErrorMsg(r.error)
       }
     } catch (err) {
+      if (gen !== genRef.current) return
       setStatus('error')
       setErrorMsg(String(err))
     } finally {
@@ -359,6 +379,7 @@ export default function Playground() {
       const n = Number.parseInt(buildArgs[i] ?? '0', 10)
       return Number.isFinite(n) ? n : 0
     })
+    const gen = ++genRef.current
     setBuilding(true)
     setStatus('running')
     setErrorMsg('')
@@ -366,6 +387,7 @@ export default function Playground() {
       // Build ignores request bytes; send an empty (transferable) buffer.
       const empty = new ArrayBuffer(0)
       const r = await ensureEngine().run({ kind: 'buildFn', preset: buildPreset, args }, empty)
+      if (gen !== genRef.current) return // superseded by a newer request
       if (r.ok && r.kind === 'buildFn') {
         setBuildResult({
           preset: preset.id,
@@ -381,6 +403,7 @@ export default function Playground() {
         setErrorMsg(r.error)
       }
     } catch (err) {
+      if (gen !== genRef.current) return
       setStatus('error')
       setErrorMsg(String(err))
     } finally {

@@ -22,11 +22,54 @@ const NODE_H = 48
 const COL_GAP = 236 // x pitch between columns
 const ROW_GAP = 68 // y pitch within a column
 const PAD = 28
+const SAME_COL_BOW = 46 // how far a same-column edge bows to the right of the column
+const LANE_STEP = 20 // extra bow per parallel edge between the same pair
 
 type Placed = { node: GraphNode; x: number; y: number }
+type XY = { x: number; y: number }
+// A pre-routed edge: its SVG path plus the point to anchor its label on.
+type PlacedEdge = { id: string; from: string; to: string; label?: string; path: string; lx: number; ly: number }
 
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + '…' : s
+}
+
+// Route one edge. Cross-column edges keep the horizontal S-curve with the label
+// in the empty inter-column gap. Same-column edges (fn→fn calls, self-recursion)
+// bow out to the RIGHT of the column into a per-parallel lane, so neither the
+// curve nor its label ever crosses the node boxes or a node between the rows.
+function routeEdge(from: XY, to: XY, lane: number): { path: string; lx: number; ly: number } {
+  if (from.x !== to.x) {
+    const x1 = from.x + NODE_W
+    const y1 = from.y + NODE_H / 2
+    const x2 = to.x
+    const y2 = to.y + NODE_H / 2
+    const dx = Math.max(40, Math.abs(x2 - x1) * 0.5)
+    return {
+      path: `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`,
+      lx: (x1 + x2) / 2,
+      ly: (y1 + y2) / 2 - 3,
+    }
+  }
+  const bow = SAME_COL_BOW + lane * LANE_STEP
+  const x1 = from.x + NODE_W // both endpoints on the right side of their boxes
+  if (from.y === to.y) {
+    // self-loop: a small right-side loop next to the node
+    const y = from.y + NODE_H / 2
+    return {
+      path: `M ${x1} ${y - 9} C ${x1 + bow} ${y - 9}, ${x1 + bow} ${y + 9}, ${x1} ${y + 9}`,
+      lx: x1 + bow + 5,
+      ly: y,
+    }
+  }
+  const y1 = from.y + NODE_H / 2
+  const y2 = to.y + NODE_H / 2
+  const cx = x1 + bow
+  return {
+    path: `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x1} ${y2}`,
+    lx: cx + 5,
+    ly: (y1 + y2) / 2,
+  }
 }
 
 export default function GraphView({
@@ -38,7 +81,7 @@ export default function GraphView({
   selectedId: string | null
   onSelect: (id: string) => void
 }) {
-  const { placed, pos, width, height } = useMemo(() => {
+  const { placed, edges, width, height } = useMemo(() => {
     const byKind = new Map<NodeKind, GraphNode[]>()
     for (const n of result.nodes) {
       const arr = byKind.get(n.kind) ?? []
@@ -47,7 +90,7 @@ export default function GraphView({
     }
     const columns = KIND_ORDER.filter((k) => (byKind.get(k)?.length ?? 0) > 0)
     const placed: Placed[] = []
-    const pos = new Map<string, { x: number; y: number }>()
+    const pos = new Map<string, XY>()
     let maxRows = 0
     columns.forEach((kind, col) => {
       const list = byKind.get(kind) ?? []
@@ -61,7 +104,21 @@ export default function GraphView({
     })
     const width = PAD * 2 + Math.max(0, columns.length - 1) * COL_GAP + NODE_W
     const height = PAD * 2 + Math.max(0, maxRows - 1) * ROW_GAP + NODE_H
-    return { placed, pos, width, height }
+
+    // Pre-route edges, assigning each parallel edge between the same pair its own
+    // lane so overlapping Call/RefFunc curves and labels fan apart.
+    const laneSeen = new Map<string, number>()
+    const edges: PlacedEdge[] = []
+    for (const e of result.edges) {
+      const from = pos.get(e.from)
+      const to = pos.get(e.to)
+      if (!from || !to) continue // endpoint capped out of its section — skip
+      const key = `${e.from}->${e.to}`
+      const lane = laneSeen.get(key) ?? 0
+      laneSeen.set(key, lane + 1)
+      edges.push({ id: e.id, from: e.from, to: e.to, label: e.label, ...routeEdge(from, to, lane) })
+    }
+    return { placed, edges, width, height }
   }, [result])
 
   if (result.nodes.length === 0) {
@@ -70,15 +127,6 @@ export default function GraphView({
         This module is empty.
       </div>
     )
-  }
-
-  const edgePath = (from: { x: number; y: number }, to: { x: number; y: number }) => {
-    const x1 = from.x + NODE_W
-    const y1 = from.y + NODE_H / 2
-    const x2 = to.x
-    const y2 = to.y + NODE_H / 2
-    const dx = Math.max(40, Math.abs(x2 - x1) * 0.5)
-    return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
   }
 
   return (
@@ -118,16 +166,13 @@ export default function GraphView({
 
         {/* edges */}
         <g fill="none">
-          {result.edges.map((e) => {
-            const from = pos.get(e.from)
-            const to = pos.get(e.to)
-            if (!from || !to) return null
+          {edges.map((e) => {
             const active = e.from === selectedId || e.to === selectedId
             const stroke = active ? 'var(--color-accent-strong)' : 'var(--color-accent)'
             return (
               <path
                 key={e.id}
-                d={edgePath(from, to)}
+                d={e.path}
                 stroke={stroke}
                 strokeWidth={active ? 1.8 : 1}
                 opacity={active ? 0.9 : 0.32}
@@ -187,24 +232,14 @@ export default function GraphView({
 
         {/* edge labels (drawn last so they sit above nodes/edges) */}
         <g>
-          {result.edges.map((e) => {
-            const from = pos.get(e.from)
-            const to = pos.get(e.to)
-            if (!from || !to || !e.label) return null
-            const x1 = from.x + NODE_W
-            const y1 = from.y + NODE_H / 2
-            const x2 = to.x
-            const y2 = to.y + NODE_H / 2
-            // The straight midpoint coincides with the cubic bezier's t=0.5 point
-            // (the control points are horizontal offsets), so this sits on the curve.
-            const mx = (x1 + x2) / 2
-            const my = (y1 + y2) / 2
+          {edges.map((e) => {
+            if (!e.label) return null
             const active = e.from === selectedId || e.to === selectedId
             return (
               <text
                 key={`${e.id}-label`}
-                x={mx}
-                y={my - 3}
+                x={e.lx}
+                y={e.ly}
                 textAnchor="middle"
                 fontSize={9}
                 fontFamily="var(--font-mono)"

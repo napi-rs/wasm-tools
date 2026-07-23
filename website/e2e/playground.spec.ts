@@ -25,6 +25,22 @@ test('playground is cross-origin isolated and inspects a module into a graph', a
   await expect(page.getByText(/\(i32, i32\)\s*→\s*i32/).first()).toBeVisible({ timeout: 60_000 })
 })
 
+test('a module with a call renders the fn→fn "calls" edge', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  // The env.log sample: local `$run` calls the imported `$log`. buildGraph reads
+  // `$run`'s body via instructions(), extracts the Call target, and (since the
+  // imported function is itself a node in the functions collection) emits a
+  // function→function "calls" edge that GraphView labels on its routed curve.
+  await page.getByLabel('Example').selectOption({ label: 'imported env.log' })
+  await page.getByRole('button', { name: 'Inspect module' }).click()
+
+  await expect(page.getByRole('img', { name: /module graph/i })).toBeVisible({ timeout: 60_000 })
+  await expect(page.locator('svg text', { hasText: /^calls$/ }).first()).toBeVisible({ timeout: 60_000 })
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')

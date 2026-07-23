@@ -5,13 +5,21 @@ on:
     branches: [main]
     # The Void app lives in website/. It runs the repo's OWN wasm build (vendored
     # via website/scripts/sync-vendor.mjs), so a change to the Rust source or the
-    # website must trigger a redeploy. Skips deploys for unrelated commits.
+    # website must trigger a redeploy. The job installs ROOT deps and runs the ROOT
+    # wasm build, so every input to that build belongs here — omitting one (e.g. a
+    # dependency-patch or build.rs change) would leave the live playground on stale
+    # wasm with no redeploy. Skips deploys only for commits touching none of these.
     paths:
       - 'website/**'
       - 'src/**'
       - 'crates/**'
+      - 'build.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'patches/**'
       - '.github/workflows/website-deploy.yml'
 
 # Latest push wins: cancel an in-flight deploy for the same repo+branch.
