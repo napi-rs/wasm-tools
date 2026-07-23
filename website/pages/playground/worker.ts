@@ -204,15 +204,22 @@ function collectCalls(
   shown: Set<number>,
   seen: Set<string>,
   out: CallEdge[],
-  budget: { left: number },
+  budget: { left: number; overflow: boolean },
 ): void {
   for (const ins of instrs) {
-    if (budget.left <= 0) return
+    if (budget.overflow) return // a renderable edge was already dropped — stop walking.
     if (ins.func != null && (ins.type === 'Call' || ins.type === 'ReturnCall' || ins.type === 'RefFunc')) {
       if (shown.has(ins.func)) {
         const renderKind = ins.type === 'RefFunc' ? 'ref' : 'call'
         const key = `${from}->${ins.func}:${renderKind}`
         if (!seen.has(key)) {
+          // A NEW distinct renderable edge that can't fit means the call graph is
+          // truncated. Signal it (don't just stop): the caller marks edgesTruncated,
+          // otherwise an overflow inside the LAST function would look complete.
+          if (budget.left <= 0) {
+            budget.overflow = true
+            return
+          }
           seen.add(key)
           out.push({ from, to: ins.func, kind: ins.type })
           budget.left--
@@ -314,7 +321,7 @@ function buildGraph(m: WasmModule): InspectResult {
   const shownFuncIndices = new Set<number>()
   const callEdges: CallEdge[] = []
   const callSeen = new Set<string>()
-  const callBudget = { left: MAX_CALL_EDGES }
+  const callBudget = { left: MAX_CALL_EDGES, overflow: false }
   // Shown local functions (they have a body) held for the SECOND pass below.
   const shownLocalFns: WFunction[] = []
   {
@@ -363,20 +370,25 @@ function buildGraph(m: WasmModule): InspectResult {
   // the node loop (with a partially-built shown set) let one body's calls to capped or
   // not-yet-seen targets spend the budget and starve later bodies' visible calls.
   for (const f of shownLocalFns) {
-    if (callBudget.left <= 0) {
-      edgesTruncated = true // budget spent → later bodies' calls dropped, graph is partial
+    const instrs = safeCall(() => f.instructions())
+    if (!instrs) {
+      edgesTruncated = true // body too deep for the binding to read → its calls are omitted
+      continue
+    }
+    collectCalls(instrs, f.index, shownFuncIndices, callSeen, callEdges, callBudget)
+    // overflow ⇒ a distinct renderable call edge was dropped for budget (possibly in THIS,
+    // the last, function). Mark partial and stop — the rest can only add more overflow.
+    if (callBudget.overflow) {
+      edgesTruncated = true
       break
     }
-    const instrs = safeCall(() => f.instructions())
-    if (instrs) collectCalls(instrs, f.index, shownFuncIndices, callSeen, callEdges, callBudget)
-    // null ⇒ the body was too deep for the binding to read; its calls are omitted.
-    else edgesTruncated = true
   }
 
   // globals
   {
     const ids: string[] = []
-    const { shown, total, truncated } = cap(safeItems(m.globals))
+    const allGlobals = safeItems(m.globals)
+    const { shown, total, truncated } = cap(allGlobals)
     for (const g of shown) {
       const id = nid('global', g.index)
       ids.push(id)
@@ -401,6 +413,19 @@ function buildGraph(m: WasmModule): InspectResult {
       // global → type edge only when the valtype is a concrete ref into the type arena
       if (ty.type === 'Ref' && (ty.heap.type === 'Concrete' || ty.heap.type === 'Exact')) {
         edge(id, nid('type', ty.heap.typeIndex), 'type')
+      }
+    }
+    // A global carries a global→type edge ONLY when its valtype is a concrete/exact ref.
+    // So a capped globals section omits an edge iff some DROPPED global is ref-typed —
+    // scan the tail (cheap: .ty is O(1) per item, early-exit on first hit) and flag only
+    // then, rather than blanket-flagging every >250-global module (most carry no edges).
+    if (truncated) {
+      for (let i = MAX_PER_SECTION; i < allGlobals.length; i++) {
+        const ty = safeGet(() => allGlobals[i].ty, null)
+        if (ty && ty.type === 'Ref' && (ty.heap.type === 'Concrete' || ty.heap.type === 'Exact')) {
+          edgesTruncated = true
+          break
+        }
       }
     }
     section('global', 'Globals', ids, total, truncated)
@@ -467,7 +492,8 @@ function buildGraph(m: WasmModule): InspectResult {
   // data segments
   {
     const ids: string[] = []
-    const { shown, total, truncated } = cap(safeItems(m.data))
+    const allData = safeItems(m.data)
+    const { shown, total, truncated } = cap(allData)
     for (const d of shown) {
       const id = nid('data', d.index)
       ids.push(id)
@@ -494,13 +520,24 @@ function buildGraph(m: WasmModule): InspectResult {
       const mem = safeCall(() => d.memory())
       if (mem) edge(id, nid('memory', mem.index), 'inits')
     }
+    // A data segment carries a data→memory edge ONLY when ACTIVE (passive has none). Flag
+    // partial iff a DROPPED segment is active — scan the capped tail, early-exit on first.
+    if (truncated) {
+      for (let i = MAX_PER_SECTION; i < allData.length; i++) {
+        if (safeCall(() => allData[i].memory())) {
+          edgesTruncated = true
+          break
+        }
+      }
+    }
     section('data', 'Data', ids, total, truncated)
   }
 
   // element segments
   {
     const ids: string[] = []
-    const { shown, total, truncated } = cap(safeItems(m.elements))
+    const allElements = safeItems(m.elements)
+    const { shown, total, truncated } = cap(allElements)
     for (const el of shown) {
       const id = nid('element', el.index)
       ids.push(id)
@@ -538,6 +575,19 @@ function buildGraph(m: WasmModule): InspectResult {
       // graph was cut down for size", and raising it for a tiny 2-line ref.null module would
       // be a false partial-view warning. The binding can't tell ref.func from ref.null, so
       // this omission can't be reported precisely and is documented rather than flagged.
+    }
+    // An element carries an edge when ACTIVE (→table) or when it holds function items
+    // (→function). Flag partial iff a DROPPED segment is one of those — scan the capped
+    // tail, early-exit on first. (Expression-form refs remain the documented binding
+    // limitation above and are not counted here either.)
+    if (truncated) {
+      for (let i = MAX_PER_SECTION; i < allElements.length; i++) {
+        const e = allElements[i]
+        if (safeCall(() => e.table()) || safeGet(() => e.itemsKind, '') === 'Functions') {
+          edgesTruncated = true
+          break
+        }
+      }
     }
     section('element', 'Elements', ids, total, truncated)
   }

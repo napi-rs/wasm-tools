@@ -89,9 +89,16 @@ jobs:
         working-directory: website
         run: npm run sync-vendor
 
-      # CI=true forces a fresh dev server so the suite runs against the real vite.config
-      # isolation middleware; e2e/config.spec.ts additionally asserts void.json's prod
-      # COOP/COEP matches, so header drift is caught even though this uses the dev server.
+      # Compile the production bundle so bundling / SSR build failures are caught
+      # pre-merge, not post-merge in the deploy job. (Runtime testing of the built
+      # artifact needs a faithful Void/Cloudflare SSR server; `vite preview` does not
+      # replicate it, so the browser suite below runs against the dev server, which
+      # replays the SAME vite.config isolation middleware, and e2e/config.spec.ts
+      # asserts void.json's prod COOP/COEP matches it.)
+      - name: Build (production bundle)
+        working-directory: website
+        run: npm run build
+
       - name: Install Playwright browser
         working-directory: website
         run: npx playwright install --with-deps chromium

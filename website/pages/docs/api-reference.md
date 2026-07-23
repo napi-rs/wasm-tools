@@ -53,8 +53,17 @@ Each hangs off a `WasmModule` getter, caches nothing, and shares `.length` / `.i
 | `WasmImports` | `mod.imports` | Imports; `find`, `addFunction` / `addMemory` / `addTable` / `addGlobal` / `addTag`, `delete`. |
 | `WasmExports` | `mod.exports` | Exports; `byName`, `addFunction` / `addTable` / `addMemory` / `addGlobal` / `addTag`, `delete`. |
 | `WasmLocals` | `mod.locals` | Module-wide local arena; `add`. |
-| `WasmProducers` | `mod.producers` | `producers` section; `addLanguage` / `addProcessedBy` / `addSdk`, `fields`, `clear`. |
-| `WasmCustomSections` | `mod.customs` | Raw custom sections; `addRaw`, `removeRaw`, `list`. |
+
+### Section façades
+
+`mod.producers` and `mod.customs` are **not** arena-backed collections — they do **not** share
+the `.length` / `.items()` / `.getByIndex()` contract above. Each wraps a single module section
+with its own API:
+
+| Class | Module getter | API |
+| --- | --- | --- |
+| `WasmProducers` | `mod.producers` | `addLanguage` / `addProcessedBy` / `addSdk`, `fields()`, `clear()`. |
+| `WasmCustomSections` | `mod.customs` | `addRaw`, `removeRaw`, `list()`. |
 
 ## Handles (items)
 

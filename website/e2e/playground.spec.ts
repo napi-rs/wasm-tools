@@ -152,3 +152,25 @@ test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }
   await expect(page.getByText(/=\s*5\b/).first()).toBeVisible({ timeout: 60_000 })
   await expect(page.getByText(/I32Add/).first()).toBeVisible({ timeout: 60_000 })
 })
+
+test('build mode validates numeric args (no silent coercion)', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  await page.getByRole('button', { name: 'build', exact: true }).click()
+  const firstArg = page.locator('input[type="number"]').first()
+
+  // Empty and non-integer inputs are rejected (Build disabled), not coerced to 0.
+  await firstArg.fill('')
+  await expect(page.getByText(/whole i32 number/i)).toBeVisible()
+  await expect(page.getByRole('button', { name: /Build & run/ })).toBeDisabled()
+
+  await firstArg.fill('1.5')
+  await expect(page.getByRole('button', { name: /Build & run/ })).toBeDisabled()
+
+  // "1e3" is the valid integer 1000 — parsed with Number, not parseInt (which would read
+  // it as 1) — so Build re-enables instead of silently running a different call.
+  await firstArg.fill('1e3')
+  await expect(page.getByRole('button', { name: /Build & run/ })).toBeEnabled()
+})

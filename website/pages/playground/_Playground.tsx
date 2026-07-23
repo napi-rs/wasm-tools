@@ -70,6 +70,24 @@ function diffEdits(base: EditForm, cur: EditForm): Edit[] {
   return edits
 }
 
+// ── Build-arg parsing ─────────────────────────────────────────────────────────
+// Preset params are i32 and the inputs are <input type="number">, which accepts
+// scientific notation and decimals. Parse with Number (NOT parseInt — that turns
+// "1e3" into 1) and reject anything that isn't a whole i32, visibly, instead of
+// silently coercing empty/malformed input to 0 and running a different call.
+const I32_MIN = -2_147_483_648
+const I32_MAX = 2_147_483_647
+type ArgCheck = { value: number } | { error: string }
+function parseI32Arg(raw: string): ArgCheck {
+  const s = raw.trim()
+  if (s === '') return { error: 'required' }
+  const n = Number(s)
+  if (!Number.isFinite(n)) return { error: 'not a number' }
+  if (!Number.isInteger(n)) return { error: 'must be a whole number' }
+  if (n < I32_MIN || n > I32_MAX) return { error: 'out of i32 range' }
+  return { value: n }
+}
+
 // ── Build-mode descriptor rendering ──────────────────────────────────────────
 // Render one round-tripped instruction as its object-literal — the same shape
 // fed to buildFunction, so the list doubles as round-trip proof.
@@ -232,6 +250,12 @@ export default function Playground() {
     () => BUILD_PRESETS.find((p) => p.id === buildPreset) ?? BUILD_PRESETS[0],
     [buildPreset],
   )
+  // One parse result per arg input; drives per-field error styling and the Build gate.
+  const argChecks = useMemo(
+    () => activePreset.argLabels.map((_, i) => parseI32Arg(buildArgs[i] ?? '')),
+    [activePreset, buildArgs],
+  )
+  const argsValid = argChecks.every((c) => 'value' in c)
   // Switching presets reseeds the arg inputs and clears any prior result.
   const selectPreset = useCallback((id: BuildPresetId) => {
     const p = BUILD_PRESETS.find((x) => x.id === id) ?? BUILD_PRESETS[0]
@@ -464,10 +488,18 @@ export default function Playground() {
   // ----- build & run -----
   const runBuild = useCallback(async () => {
     const preset = BUILD_PRESETS.find((p) => p.id === buildPreset) ?? BUILD_PRESETS[0]
-    const args = preset.argLabels.map((_, i) => {
-      const n = Number.parseInt(buildArgs[i] ?? '0', 10)
-      return Number.isFinite(n) ? n : 0
-    })
+    // Validate every arg up front; a bad field must surface an error, never run a
+    // silently-coerced different call. (The Build button is also disabled while invalid.)
+    const parsed = preset.argLabels.map((_, i) => parseI32Arg(buildArgs[i] ?? ''))
+    const badIdx = parsed.findIndex((c) => 'error' in c)
+    if (badIdx !== -1) {
+      setStatus('error')
+      setErrorMsg(
+        `Argument "${preset.argLabels[badIdx]}" is invalid (${(parsed[badIdx] as { error: string }).error}). Enter a whole i32 number.`,
+      )
+      return
+    }
+    const args = parsed.map((c) => (c as { value: number }).value)
     const gen = ++genRef.current
     setBuilding(true)
     setStatus('running')
@@ -801,6 +833,8 @@ export default function Playground() {
                         type="number"
                         value={buildArgs[i] ?? ''}
                         disabled={building}
+                        aria-invalid={'error' in argChecks[i]}
+                        title={'error' in argChecks[i] ? `Invalid: ${argChecks[i].error}` : undefined}
                         onChange={(e) =>
                           setBuildArgs((a) => {
                             const next = [...a]
@@ -808,7 +842,7 @@ export default function Playground() {
                             return next
                           })
                         }
-                        className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-accent) focus:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+                        className={`min-w-0 flex-1 rounded-lg border ${'error' in argChecks[i] ? 'border-(--color-bad)' : 'border-(--color-border)'} bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-accent) focus:outline-none disabled:cursor-not-allowed disabled:opacity-40`}
                       />
                     </div>
                   ))}
@@ -817,10 +851,14 @@ export default function Playground() {
                 <p className="font-mono text-xs text-(--color-faint)">No arguments.</p>
               )}
 
+              {activePreset.argLabels.length && !argsValid ? (
+                <p className="font-mono text-xs text-(--color-bad)">Each argument must be a whole i32 number.</p>
+              ) : null}
+
               <button
                 type="button"
                 onClick={runBuild}
-                disabled={busy}
+                disabled={busy || !argsValid}
                 className="w-full rounded-lg bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-accent-strong) disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {building ? 'Building…' : 'Build & run'}
