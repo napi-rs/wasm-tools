@@ -10,7 +10,7 @@ const GROUPS: { label: string; blurb: string; items: string[] }[] = [
   },
   {
     label: 'Collections',
-    blurb: 'Live sets on a module: .length, .items(), lookups and add* factories.',
+    blurb: 'Live arena sets on a module: .length, .items(), lookups and add* factories.',
     items: [
       'WasmFunctions',
       'WasmGlobals',
@@ -23,8 +23,6 @@ const GROUPS: { label: string; blurb: string; items: string[] }[] = [
       'WasmElements',
       'WasmTags',
       'WasmLocals',
-      'WasmCustomSections',
-      'WasmProducers',
     ],
   },
   {
@@ -43,6 +41,11 @@ const GROUPS: { label: string; blurb: string; items: string[] }[] = [
       'WasmTag',
       'WasmLocal',
     ],
+  },
+  {
+    label: 'Section façades',
+    blurb: 'Single-section wrappers with their own API — not .length / .items() collections.',
+    items: ['WasmProducers', 'WasmCustomSections'],
   },
 ]
 

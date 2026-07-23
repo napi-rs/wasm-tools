@@ -387,8 +387,15 @@ function buildGraph(m: WasmModule): InspectResult {
   // globals
   {
     const ids: string[] = []
-    const allGlobals = safeItems(m.globals)
-    const { shown, total, truncated } = cap(allGlobals)
+    const { shown, total, truncated } = cap(safeItems(m.globals))
+    // Conservative O(1) partial-graph signal: a capped globals section MAY drop a
+    // global→type edge (concrete/exact-ref globals carry one). Detecting precisely would
+    // mean reading each omitted global's `.ty` — an O(n) arena scan PER handle, i.e. O(n²)
+    // over the tail — so we flag whenever the section truncates instead. This over-flags a
+    // module of all-primitive globals, but that is already a >250-global (node-truncated)
+    // module, so "graph may be partial" still holds. Same rationale for data/elements below.
+    // (Precise O(1) detection would need bulk edge-bearing metadata from the binding.)
+    if (truncated) edgesTruncated = true
     for (const g of shown) {
       const id = nid('global', g.index)
       ids.push(id)
@@ -413,19 +420,6 @@ function buildGraph(m: WasmModule): InspectResult {
       // global → type edge only when the valtype is a concrete ref into the type arena
       if (ty.type === 'Ref' && (ty.heap.type === 'Concrete' || ty.heap.type === 'Exact')) {
         edge(id, nid('type', ty.heap.typeIndex), 'type')
-      }
-    }
-    // A global carries a global→type edge ONLY when its valtype is a concrete/exact ref.
-    // So a capped globals section omits an edge iff some DROPPED global is ref-typed —
-    // scan the tail (cheap: .ty is O(1) per item, early-exit on first hit) and flag only
-    // then, rather than blanket-flagging every >250-global module (most carry no edges).
-    if (truncated) {
-      for (let i = MAX_PER_SECTION; i < allGlobals.length; i++) {
-        const ty = safeGet(() => allGlobals[i].ty, null)
-        if (ty && ty.type === 'Ref' && (ty.heap.type === 'Concrete' || ty.heap.type === 'Exact')) {
-          edgesTruncated = true
-          break
-        }
       }
     }
     section('global', 'Globals', ids, total, truncated)
@@ -492,8 +486,10 @@ function buildGraph(m: WasmModule): InspectResult {
   // data segments
   {
     const ids: string[] = []
-    const allData = safeItems(m.data)
-    const { shown, total, truncated } = cap(allData)
+    const { shown, total, truncated } = cap(safeItems(m.data))
+    // Conservative O(1) flag (see globals): a capped data section MAY drop a data→memory
+    // edge (active segments carry one). Per-segment detection is O(n²), so flag on cap.
+    if (truncated) edgesTruncated = true
     for (const d of shown) {
       const id = nid('data', d.index)
       ids.push(id)
@@ -520,24 +516,18 @@ function buildGraph(m: WasmModule): InspectResult {
       const mem = safeCall(() => d.memory())
       if (mem) edge(id, nid('memory', mem.index), 'inits')
     }
-    // A data segment carries a data→memory edge ONLY when ACTIVE (passive has none). Flag
-    // partial iff a DROPPED segment is active — scan the capped tail, early-exit on first.
-    if (truncated) {
-      for (let i = MAX_PER_SECTION; i < allData.length; i++) {
-        if (safeCall(() => allData[i].memory())) {
-          edgesTruncated = true
-          break
-        }
-      }
-    }
     section('data', 'Data', ids, total, truncated)
   }
 
   // element segments
   {
     const ids: string[] = []
-    const allElements = safeItems(m.elements)
-    const { shown, total, truncated } = cap(allElements)
+    const { shown, total, truncated } = cap(safeItems(m.elements))
+    // Conservative O(1) flag (see globals): a capped element section MAY drop an
+    // element→table or element→function edge. Per-segment detection is O(n²), so flag on
+    // cap. (This can over-flag a tail of empty/expression-form segments, accepted as the
+    // O(1) tradeoff — precise detection needs bulk edge metadata from the binding.)
+    if (truncated) edgesTruncated = true
     for (const el of shown) {
       const id = nid('element', el.index)
       ids.push(id)
@@ -575,19 +565,6 @@ function buildGraph(m: WasmModule): InspectResult {
       // graph was cut down for size", and raising it for a tiny 2-line ref.null module would
       // be a false partial-view warning. The binding can't tell ref.func from ref.null, so
       // this omission can't be reported precisely and is documented rather than flagged.
-    }
-    // An element carries an edge when ACTIVE (→table) or when it holds function items
-    // (→function). Flag partial iff a DROPPED segment is one of those — scan the capped
-    // tail, early-exit on first. (Expression-form refs remain the documented binding
-    // limitation above and are not counted here either.)
-    if (truncated) {
-      for (let i = MAX_PER_SECTION; i < allElements.length; i++) {
-        const e = allElements[i]
-        if (safeCall(() => e.table()) || safeGet(() => e.itemsKind, '') === 'Functions') {
-          edgesTruncated = true
-          break
-        }
-      }
     }
     section('element', 'Elements', ids, total, truncated)
   }

@@ -24,6 +24,9 @@ on:
       - 'pnpm-workspace.yaml'
       - 'patches/**'
       - '.github/workflows/website-ci.yml'
+      # A deploy-workflow change alters how the site is built/shipped, so it must run
+      # this gate too — otherwise a deploy-only PR skips the build + browser suite.
+      - '.github/workflows/website-deploy.yml'
   push:
     branches: [main]
     paths:
@@ -38,6 +41,9 @@ on:
       - 'pnpm-workspace.yaml'
       - 'patches/**'
       - '.github/workflows/website-ci.yml'
+      # A deploy-workflow change alters how the site is built/shipped, so it must run
+      # this gate too — otherwise a deploy-only PR skips the build + browser suite.
+      - '.github/workflows/website-deploy.yml'
 
 concurrency:
   group: website-ci-${{ github.workflow }}-${{ github.ref }}

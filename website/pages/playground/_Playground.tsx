@@ -81,11 +81,15 @@ type ArgCheck = { value: number } | { error: string }
 function parseI32Arg(raw: string): ArgCheck {
   const s = raw.trim()
   if (s === '') return { error: 'required' }
-  const n = Number(s)
-  if (!Number.isFinite(n)) return { error: 'not a number' }
-  if (!Number.isInteger(n)) return { error: 'must be a whole number' }
-  if (n < I32_MIN || n > I32_MAX) return { error: 'out of i32 range' }
-  return { value: n }
+  // Require a PLAIN integer literal. Number() would silently round or underflow decimal
+  // and exponent forms to an integer that passes Number.isInteger — "1e-999" → 0,
+  // "1.00000000000000001" → 1 — and then run a different call than the user typed. BigInt
+  // over the exact digits sidesteps all Binary64 rounding (exponent forms are rejected;
+  // type a plain integer).
+  if (!/^-?\d+$/.test(s)) return { error: 'must be a whole number' }
+  const n = BigInt(s)
+  if (n < BigInt(I32_MIN) || n > BigInt(I32_MAX)) return { error: 'out of i32 range' }
+  return { value: Number(n) }
 }
 
 // ── Build-mode descriptor rendering ──────────────────────────────────────────
@@ -294,6 +298,21 @@ export default function Playground() {
     () => (form && baseline ? diffEdits(baseline, form) : []),
     [form, baseline],
   )
+
+  // Memory-pages fields must be non-negative integers. A CHANGED-but-invalid field
+  // (empty, decimal, non-numeric) is dropped by diffEdits, so without this guard Apply
+  // would still run any OTHER valid edit and emit bytes that contradict the shown form.
+  const memoryErrors = useMemo(() => {
+    const bad = new Set<number>()
+    if (!form || !baseline) return bad
+    for (const key of Object.keys(form.memoryInitial)) {
+      const i = Number(key)
+      const v = form.memoryInitial[i]
+      if (v !== baseline.memoryInitial[i] && !/^\d+$/.test(v.trim())) bad.add(i)
+    }
+    return bad
+  }, [form, baseline])
+  const editFormValid = memoryErrors.size === 0
 
   const ensureEngine = () => {
     if (!engineRef.current) engineRef.current = new PlaygroundEngine()
@@ -772,22 +791,30 @@ export default function Playground() {
                           min={0}
                           value={form.memoryInitial[n.index] ?? '0'}
                           disabled={busy}
+                          aria-invalid={memoryErrors.has(n.index)}
+                          title={memoryErrors.has(n.index) ? 'Enter a whole number of pages' : undefined}
                           onChange={(e) =>
                             setForm((f) =>
                               f ? { ...f, memoryInitial: { ...f.memoryInitial, [n.index]: e.target.value } } : f,
                             )
                           }
-                          className="ml-auto w-24 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                          className={`ml-auto w-24 rounded-lg border ${memoryErrors.has(n.index) ? 'border-(--color-bad)' : 'border-(--color-border)'} bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50`}
                         />
                       </div>
                     ))}
                 </div>
               ) : null}
 
+              {!editFormValid ? (
+                <p className="font-mono text-xs text-(--color-bad)">
+                  Memory pages must be a whole number — fix the highlighted field to apply.
+                </p>
+              ) : null}
+
               <button
                 type="button"
                 onClick={runApplyEdits}
-                disabled={busy || pendingEdits.length === 0}
+                disabled={busy || pendingEdits.length === 0 || !editFormValid}
                 className="w-full rounded-lg bg-(--color-edit) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-edit-strong) disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {applying ? 'Applying…' : `Apply edits${pendingEdits.length ? ` (${pendingEdits.length})` : ''}`}

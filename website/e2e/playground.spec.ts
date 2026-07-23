@@ -140,6 +140,33 @@ test('clearing an export name is transmitted, not silently dropped', async ({ pa
   await expect(page.getByRole('button', { name: 'Download .wasm' })).toBeVisible({ timeout: 60_000 })
 })
 
+test('an invalid memory edit blocks Apply even alongside a valid edit', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  await page.getByRole('button', { name: 'edit', exact: true }).click()
+  await page.getByLabel('Example').selectOption({ label: 'memory + mutable global + exports' })
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+
+  const memInput = page.locator('input[type="number"]').first()
+  await expect(memInput).toBeVisible({ timeout: 60_000 })
+
+  // A valid export rename alone would enable Apply…
+  await page.locator('input[type="text"]').nth(1).fill('renamed')
+  await expect(page.getByRole('button', { name: /Apply edits/ })).toBeEnabled()
+
+  // …but a changed-yet-invalid memory value must block Apply, so no download can be
+  // produced that contradicts the shown form. The field error surfaces the reason.
+  await memInput.fill('1.5')
+  await expect(page.getByText(/Memory pages must be a whole number/i)).toBeVisible()
+  await expect(page.getByRole('button', { name: /Apply edits/ })).toBeDisabled()
+
+  // Correcting the memory value (within the sample's max of 2) re-enables Apply.
+  await memInput.fill('2')
+  await expect(page.getByRole('button', { name: /Apply edits/ })).toBeEnabled()
+})
+
 test('build mode composes add(a,b) from an IR tree and runs it', async ({ page }) => {
   wireLogs(page)
   await page.goto('/playground')
@@ -161,7 +188,8 @@ test('build mode validates numeric args (no silent coercion)', async ({ page }) 
   await page.getByRole('button', { name: 'build', exact: true }).click()
   const firstArg = page.locator('input[type="number"]').first()
 
-  // Empty and non-integer inputs are rejected (Build disabled), not coerced to 0.
+  // Empty, non-integer, and rounding-prone exponent forms are all rejected (Build
+  // disabled), never silently coerced to a different value that runs a different call.
   await firstArg.fill('')
   await expect(page.getByText(/whole i32 number/i)).toBeVisible()
   await expect(page.getByRole('button', { name: /Build & run/ })).toBeDisabled()
@@ -169,8 +197,11 @@ test('build mode validates numeric args (no silent coercion)', async ({ page }) 
   await firstArg.fill('1.5')
   await expect(page.getByRole('button', { name: /Build & run/ })).toBeDisabled()
 
-  // "1e3" is the valid integer 1000 — parsed with Number, not parseInt (which would read
-  // it as 1) — so Build re-enables instead of silently running a different call.
-  await firstArg.fill('1e3')
+  // "1e-999" would round to 0 under Number(); the exact-integer parser rejects it.
+  await firstArg.fill('1e-999')
+  await expect(page.getByRole('button', { name: /Build & run/ })).toBeDisabled()
+
+  // A plain integer re-enables Build.
+  await firstArg.fill('1000')
   await expect(page.getByRole('button', { name: /Build & run/ })).toBeEnabled()
 })

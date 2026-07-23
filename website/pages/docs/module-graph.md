@@ -17,7 +17,7 @@ property reads through to the module; writing one writes back. Your edits persis
 
 A `WasmModule` exposes one **collection** per item kind — `mod.functions`, `mod.globals`,
 `mod.memories`, `mod.tables`, `mod.types`, `mod.imports`, `mod.exports`, `mod.data`,
-`mod.elements`, `mod.tags`, `mod.locals`, plus `mod.producers` and `mod.customs`. Each collection
+`mod.elements`, `mod.tags`, and `mod.locals`. Each collection
 caches nothing: every accessor materializes a **fresh item handle** (e.g. `WasmFunction`,
 `WasmGlobal`) that carries the item's id plus a strong reference to the owning module.
 
@@ -27,6 +27,11 @@ Collections share a shape:
 - `.items()` — every item as a live handle (for `for … of`).
 - `.getByIndex(i)` — the item whose stable `.index` equals `i`, or `null`.
 - kind-specific lookups: `exports.byName(name)`, `imports.find(module, name)`, `globals.byName(name)`.
+
+`mod.producers` and `mod.customs` are **section façades**, not collections — they do **not**
+share `.length` / `.items()` / `.getByIndex()`. Each has its own API (`mod.producers`:
+`addLanguage` / `addProcessedBy` / `addSdk`, `fields()`, `clear()`; `mod.customs`: `addRaw`,
+`removeRaw`, `list()`).
 
 ## The inspect loop
 
