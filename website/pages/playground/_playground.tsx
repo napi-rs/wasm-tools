@@ -131,6 +131,13 @@ const STALE_WASM_NOTE =
 const MAX_UPLOAD_MB = 64
 const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 const READ_TIMEOUT_MS = 30_000
+// The WAT editor has no file-size gate, so `Inspect` would otherwise hand an unbounded
+// pasted source to a synchronous main-thread `TextEncoder().encode()`. Cap it at the same
+// 64 MB scale as an uploaded binary. `wat.length` (UTF-16 units) is a cheap O(1) LOWER
+// bound on the encoded byte count — enough to stop a pathological multi-hundred-MB paste;
+// real WAT is kilobytes. Guarding here also covers the Apply-edits encode, since a WAT
+// source is only committed to sourceWatRef AFTER a successful inspect.
+const MAX_WAT_CHARS = MAX_UPLOAD_BYTES
 
 // ── Static (non-isolated) fallback: a no-wasm code tour ──────────────────────
 // The page heading + intro are STATIC markup in index.island.tsx (so they exist without
@@ -405,6 +412,15 @@ export default function Playground() {
   )
 
   const inspectWat = useCallback(async () => {
+    // Bound the source before the synchronous encode below (and before entering the
+    // running state). failInspect clears the session, drops to the WAT editor, and shows
+    // the error — the right terminal state for a pre-engine rejection.
+    if (wat.length > MAX_WAT_CHARS) {
+      failInspect(
+        `WAT source is ${(wat.length / (1024 * 1024)).toFixed(1)}M characters — over the ${MAX_UPLOAD_MB} MB in-browser limit.`,
+      )
+      return
+    }
     const gen = ++genRef.current
     setStatus('running')
     setErrorMsg('')
@@ -457,8 +473,19 @@ export default function Playground() {
     (files: FileList | null) => {
       if (!files || files.length === 0) return
       const file = files[0]
-      // Reject oversized files before reading a byte — no busy state is entered.
+      // Reject oversized files before reading a byte — no busy state is entered. But still
+      // supersede the current session exactly as the valid path does: this selection is an
+      // intent to REPLACE the module, so leaving the previous one's Apply/Download/graph
+      // actionable behind the error is wrong. Bump the generation FIRST so an in-flight read
+      // of a previous selection early-returns (its onload/onabort sees gen !== genRef.current
+      // and never commits over this rejection), abort that reader, clear the session, and
+      // return to the WAT editor since no binary loaded.
       if (file.size > MAX_UPLOAD_BYTES) {
+        genRef.current++
+        readerRef.current?.abort()
+        readerRef.current = null
+        resetSession()
+        setSourceKind('wat')
         setStatus('error')
         setErrorMsg(`${file.name} is ${(file.size / (1024 * 1024)).toFixed(1)} MB — over the ${MAX_UPLOAD_MB} MB in-browser limit.`)
         return

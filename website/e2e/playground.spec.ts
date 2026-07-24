@@ -1,4 +1,16 @@
 import { test, expect } from '@playwright/test'
+import { writeFileSync, mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+// A file one byte over the 64 MB upload cap. Playwright's inline setInputFiles buffer is
+// capped at 50 MB, so the oversized case must come from a real path on disk. Written once.
+function oversizedWasmPath(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'wasm-tools-e2e-'))
+  const path = join(dir, 'huge.wasm')
+  writeFileSync(path, Buffer.alloc(64 * 1024 * 1024 + 1))
+  return path
+}
 
 // Surface browser-side failures (worker load errors, wasm faults, 404s) in the
 // Playwright output so a non-passing run is debuggable rather than opaque.
@@ -268,6 +280,53 @@ test('a failed binary read returns to the WAT editor (no stuck deactivated edito
   })
   await expect(page.getByLabel('WAT source')).toBeEnabled({ timeout: 60_000 })
   await expect(page.getByRole('button', { name: /Switch to WAT editor/i })).toHaveCount(0)
+})
+
+test('an oversized upload supersedes the current session', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  // Set up an applied edit on module A → it is downloadable.
+  await page.getByRole('button', { name: 'edit', exact: true }).click()
+  await page.getByLabel('Example').selectOption({ label: 'memory + mutable global + exports' })
+  await page.getByRole('button', { name: 'Inspect to edit' }).click()
+  const memInput = page.locator('input[type="number"]').first()
+  await expect(memInput).toBeVisible({ timeout: 60_000 })
+  await memInput.fill('2')
+  await page.getByRole('button', { name: /Apply edits/ }).click()
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toBeVisible({ timeout: 60_000 })
+
+  // Select a file over the 64 MB limit. It is rejected before any byte is read — but
+  // selecting it is an intent to REPLACE the module, so A's session must be torn down: the
+  // rejection previously left A's Apply/Download/graph actionable behind the error banner.
+  await page.locator('input[type="file"]').setInputFiles(oversizedWasmPath())
+  await expect(page.getByText(/over the 64 MB in-browser limit/i)).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Download .wasm' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /Apply edits/ })).toHaveCount(0)
+  // and the editor is returned to a clean state, not left deactivated behind the error.
+  await expect(page.getByLabel('WAT source')).toBeEnabled()
+})
+
+test('an over-limit WAT source is rejected before it is encoded', async ({ page }) => {
+  wireLogs(page)
+  await page.goto('/playground')
+  await expect.poll(() => page.evaluate(() => self.crossOriginIsolated), { timeout: 30_000 }).toBe(true)
+
+  // Push a source one character over the 64 MB char cap straight into the textarea's state
+  // (via the real onChange path), bypassing a multi-minute per-character type. Inspect must
+  // reject it up front instead of running TextEncoder().encode on the main thread.
+  await page.getByLabel('WAT source').evaluate((el, big) => {
+    const ta = el as HTMLTextAreaElement
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+    setter.call(ta, big)
+    ta.dispatchEvent(new Event('input', { bubbles: true }))
+  }, 'a'.repeat(64 * 1024 * 1024 + 1))
+
+  await page.getByRole('button', { name: 'Inspect module' }).click()
+  await expect(page.getByText(/over the 64 MB in-browser limit/i)).toBeVisible({ timeout: 30_000 })
+  // No graph was built — the source never reached the engine.
+  await expect(page.getByRole('img', { name: /module graph/i })).toHaveCount(0)
 })
 
 test('a funcref table renders a table node in the graph', async ({ page }) => {
