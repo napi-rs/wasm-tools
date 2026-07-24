@@ -1,6 +1,12 @@
 import type { ReactNode } from 'react'
 import '../app.css'
 import Footer from './_components/footer'
+// Hashed URLs for the two fonts that paint above the fold. They used to be preloaded
+// by absolute path from void.json's `head`, but the files now live in assets/ and are
+// content-hashed, so the URL is only known at build time. React 19 hoists <link> into
+// <head>, and this layout wraps every route, so one declaration covers all 7.
+import displayFont from '../assets/fonts/space-grotesk-var.woff2?url'
+import bodyFont from '../assets/fonts/inter-var.woff2?url'
 
 // Single source of truth for the header nav — rendered both inline (desktop) and
 // inside the mobile drawer.
@@ -13,6 +19,8 @@ const NAV: { href: string; label: string; external?: boolean }[] = [
 export default function Layout({ children }: { children: ReactNode }) {
   return (
     <>
+      <link rel="preload" as="font" type="font/woff2" crossOrigin="anonymous" href={displayFont} />
+      <link rel="preload" as="font" type="font/woff2" crossOrigin="anonymous" href={bodyFont} />
       {/* Mark JS-capable clients before first paint so scroll-reveal hidden state
           (gated behind html.js in app.css) only applies when JS can reveal it —
           no-JS / crawler HTML stays fully visible. Also closes the CSS-only mobile

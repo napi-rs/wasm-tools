@@ -2,27 +2,36 @@
 @import '@void/md/theme-content.css';
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* ── Self-hosted variable fonts (latin subset, woff2 in public/fonts) ───────── */
+/* ── Self-hosted variable fonts (latin subset) ─────────────────────────────────
+   These live in website/assets/fonts, NOT public/, so Vite content-hashes them into
+   /assets/ — the one prefix Void serves `max-age=31536000, immutable` on. From public/
+   they were served `max-age=0, must-revalidate`, and the origin ignores conditional
+   requests (If-None-Match on an unchanged font answers 200 with the full body, not
+   304), so all three were re-downloaded on EVERY navigation: 70.7 KB per page view,
+   ~57% of a docs page's weight, for files that never change. Cache-Control is not
+   overridable per-route — a routing.headers entry for /fonts/* did land a custom
+   header but its Cache-Control was ignored — so hashing is the fix. It also makes
+   cache-busting automatic: change a font and the hash changes. */
 @font-face {
   font-family: 'Space Grotesk';
   font-style: normal;
   font-display: swap;
   font-weight: 300 700;
-  src: url('/fonts/space-grotesk-var.woff2') format('woff2');
+  src: url('./assets/fonts/space-grotesk-var.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-display: swap;
   font-weight: 100 900;
-  src: url('/fonts/inter-var.woff2') format('woff2');
+  src: url('./assets/fonts/inter-var.woff2') format('woff2');
 }
 @font-face {
   font-family: 'JetBrains Mono';
   font-style: normal;
   font-display: swap;
   font-weight: 100 800;
-  src: url('/fonts/jetbrains-mono-var.woff2') format('woff2');
+  src: url('./assets/fonts/jetbrains-mono-var.woff2') format('woff2');
 }
 
 /* ══ DESIGN TOKENS — Direction C "Graph" (dark-only) ═══════════════════════════ */
