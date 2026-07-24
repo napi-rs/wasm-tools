@@ -151,8 +151,9 @@ mod.exports.addFunction('add', mod.functions.getByIndex(idx)!)
 
 const bytes = mod.emitWasm(false)
 
-// It really runs:
-const { instance } = await WebAssembly.instantiate(bytes)
+// It really runs (new Uint8Array narrows the buffer type so `instantiate` picks its
+// BufferSource overload — emitWasm's Uint8Array<ArrayBufferLike> resolves to the Module one):
+const { instance } = await WebAssembly.instantiate(new Uint8Array(bytes))
 const add = instance.exports.add as (a: number, b: number) => number
 console.log(add(2, 3)) // 5
 
@@ -180,7 +181,7 @@ const mem = mod.memories.addLocal(false, false, 1n, 2n)
 mod.exports.addGlobal('answer', answer)
 mod.exports.addMemory('memory', mem)
 
-const { instance } = await WebAssembly.instantiate(mod.emitWasm(false))
+const { instance } = await WebAssembly.instantiate(new Uint8Array(mod.emitWasm(false)))
 const answerGlobal = instance.exports.answer as WebAssembly.Global
 console.log(answerGlobal.value) // 42
 console.log(instance.exports.memory instanceof WebAssembly.Memory) // true

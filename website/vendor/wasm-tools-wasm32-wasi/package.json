@@ -1,0 +1,21 @@
+{
+  "name": "@napi-rs/wasm-tools-wasm32-wasi",
+  "version": "1.0.2-local",
+  "description": "Local pre-release wasm build of @napi-rs/wasm-tools (post #158/#159). Vendored so the website playground can use the full module-graph + IR-builder API before an official >=1.0.2 npm release. Replace with the published package once cut.",
+  "main": "walrus.wasi.cjs",
+  "browser": "walrus.wasi-browser.js",
+  "files": [
+    "walrus.wasm32-wasi.wasm",
+    "walrus.wasi.cjs",
+    "walrus.wasi-browser.js",
+    "wasi-worker.mjs",
+    "wasi-worker-browser.mjs"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "@napi-rs/wasm-runtime": "^1.0.3"
+  }
+}
