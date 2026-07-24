@@ -1,0 +1,187 @@
+name: Website
+
+# Build + browser-test the Void app in website/, and deploy it from main.
+#
+# Merged from the former website-ci.yml + website-deploy.yml: both ran an identical
+# setup (root wasm build → vendor into the site → install), so on a push to main the
+# Rust build and the Playwright suite each ran TWICE. Here `test` is the single gate,
+# `deploy` simply `needs:` it, and the wasm crosses between them as an artifact — so a
+# push to main builds the Rust once, runs the suite once, and deploys the EXACT bytes
+# that suite ran against rather than a separately rebuilt copy.
+#
+# Intentionally NOT wired into the npm publish gate: the published package is the Rust
+# binding, which is independent of the website's browser tests.
+#
+# The path filter is the set of inputs that feed the vendored wasm build or the site
+# itself; a change touching none of them skips this (heavier) workflow. It is repeated
+# per trigger because GitHub Actions does not support YAML anchors.
+on:
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'src/**'
+      - 'crates/**'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'patches/**'
+      - '.github/workflows/website.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'website/**'
+      - 'src/**'
+      - 'crates/**'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'patches/**'
+      - '.github/workflows/website.yml'
+
+# Latest push wins: cancel an in-flight run (including a deploy) for the same ref.
+concurrency:
+  group: website-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Build & e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # Build the repo's wasm32-wasi binary that the playground runs. Until
+      # @napi-rs/wasm-tools >= 1.0.2 (module-graph + IR-builder API) is on npm, the site
+      # consumes the repo's own build. Once that ships, drop this block + website/vendor
+      # + website/scripts/sync-vendor.mjs and depend on the published wasm32-wasi package.
+      - name: Rust toolchain (wasm32-wasip1-threads)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: wasm32-wasip1-threads
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.napi-rs
+            target/
+          key: wasm32-wasip1-threads-cargo-ubuntu
+      - name: Install repo deps
+        run: pnpm install --frozen-lockfile
+      - name: Build wasm (produces walrus.wasm32-wasi.wasm + glue at repo root)
+        run: pnpm build --target wasm32-wasip1-threads
+
+      # Hand the DEPLOY job exactly the build that is about to be vendored and tested
+      # below, so main ships the bytes that passed the browser suite instead of a second,
+      # separately produced artifact — and builds the Rust once per push, not twice.
+      # These are precisely the files website/scripts/sync-vendor.mjs copies.
+      - name: Upload the tested wasm build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm32-wasi-build
+          path: |
+            walrus.wasm32-wasi.wasm
+            walrus.wasi-browser.js
+            walrus.wasi.cjs
+            wasi-worker-browser.mjs
+            wasi-worker.mjs
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Install website deps
+        working-directory: website
+        run: npm ci
+      - name: Vendor the fresh wasm build into the site
+        working-directory: website
+        run: npm run sync-vendor
+
+      # Compile the production bundle so bundling / SSR build failures are caught here
+      # rather than at deploy time.
+      - name: Build (production bundle)
+        working-directory: website
+        run: npm run build
+
+      # The browser suite covers landing, docs, and the cross-origin-isolated playground.
+      # CI=true forces a fresh dev server, so it runs against the real vite.config
+      # isolation middleware; e2e/config.spec.ts additionally asserts that void.json's
+      # production COOP/COEP matches, so prod header drift is still caught here.
+      # (Runtime-testing the built artifact would need a faithful Void/Cloudflare SSR
+      # server — `vite preview` does not replicate it.)
+      - name: Install Playwright browser
+        working-directory: website
+        run: npx playwright install --with-deps chromium
+      - name: E2E
+        working-directory: website
+        env:
+          CI: 'true'
+        run: npm run test:e2e
+
+  deploy:
+    name: Deploy to Void
+    # `needs: test` IS the deploy gate — the build + browser suite above must pass first.
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # id-token: write lets `void deploy` mint a GitHub OIDC token and exchange it
+    # (audience "void") for a short-lived, project-scoped deploy token — no long-lived
+    # VOID_TOKEN secret. Scoped to this job so pull_request runs never get it.
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      VOID_API_URL: ${{ vars.VOID_API_URL || 'https://api.void.cloud' }}
+      # The Void project this site deploys to: https://napi-wasm-tools.void.app
+      VOID_PROJECT: napi-wasm-tools
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      # Ship the artifact the browser suite actually ran against. `test` uploaded the wasm
+      # it vendored; restore it to the repo root, where sync-vendor.mjs reads from. This is
+      # why the job needs no Rust toolchain, cargo cache, or root install: `void deploy`
+      # builds the SITE itself, and the only other input is this wasm.
+      - name: Download the tested wasm build
+        uses: actions/download-artifact@v8
+        with:
+          name: wasm32-wasi-build
+          path: .
+
+      - name: Install website deps
+        working-directory: website
+        run: npm ci
+      - name: Vendor the tested wasm build into the site
+        working-directory: website
+        run: npm run sync-vendor
+
+      # `void deploy` (>= 0.10.2) detects GitHub Actions, mints the OIDC token, exchanges
+      # it for a deploy token, builds, and deploys — no VOID_TOKEN secret.
+      - name: Deploy
+        working-directory: website
+        run: npx void deploy --project "$VOID_PROJECT"

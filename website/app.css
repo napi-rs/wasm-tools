@@ -1,0 +1,328 @@
+@import 'tailwindcss';
+@import '@void/md/theme-content.css';
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ── Self-hosted variable fonts (latin subset) ─────────────────────────────────
+   These live in website/assets/fonts, NOT public/, so Vite content-hashes them into
+   /assets/ — the one prefix Void serves `max-age=31536000, immutable` on. From public/
+   they were served `max-age=0, must-revalidate`, and the origin ignores conditional
+   requests (If-None-Match on an unchanged font answers 200 with the full body, not
+   304), so all three were re-downloaded on EVERY navigation: 70.7 KB per page view,
+   ~57% of a docs page's weight, for files that never change. Cache-Control is not
+   overridable per-route — a routing.headers entry for /fonts/* did land a custom
+   header but its Cache-Control was ignored — so hashing is the fix. It also makes
+   cache-busting automatic: change a font and the hash changes. */
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 700;
+  src: url('./assets/fonts/space-grotesk-var.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 900;
+  src: url('./assets/fonts/inter-var.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url('./assets/fonts/jetbrains-mono-var.woff2') format('woff2');
+}
+
+/* ══ DESIGN TOKENS — Direction C "Graph" (dark-only) ═══════════════════════════ */
+@theme {
+  /* surfaces & ink — deep engineering blue-black, cool off-white */
+  --color-bg: #0b1222; /* ground */
+  --color-surface-1: #0f1830; /* surface */
+  --color-surface-2: #13213e; /* elevated */
+  --color-border: rgb(231 236 255 / 0.08);
+  --color-border-strong: rgb(231 236 255 / 0.15);
+  --color-fg: #e7ecff; /* ink */
+  --color-muted: #8894b6; /* muted */
+  --color-faint: #6f7ca6; /* de-emphasised, still ≥4.5:1 on bg + surface-1 */
+
+  /* engineering grid + hairlines (the graph substrate) */
+  --color-grid: #17233f; /* fine grid line */
+  --color-hairline: #1c2b4a; /* structural hairline */
+
+  /* accent — cyan (nodes + edges) */
+  --color-accent: #5bc8ff;
+  --color-accent-strong: #8bd8ff;
+  --color-accent-muted: rgb(91 200 255 / 0.16);
+  --color-accent-glow: rgb(91 200 255 / 0.22);
+  --color-accent-fg: #06121f; /* dark ink on a cyan-filled surface */
+
+  /* edit — amber marks every mutation / write-back */
+  --color-edit: #ffb454;
+  --color-edit-strong: #ffc879;
+  --color-edit-muted: rgb(255 180 84 / 0.16);
+  --color-edit-glow: rgb(255 180 84 / 0.2);
+
+  /* semantic */
+  --color-good: #46d39a;
+  --color-warn: #ffb454;
+  --color-bad: #ff6b8a;
+
+  /* type families */
+  --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* fluid display scale */
+  --text-eyebrow: 0.78rem;
+  --text-eyebrow--line-height: 1;
+  --text-eyebrow--letter-spacing: 0.14em;
+
+  --text-display-xl: clamp(2.5rem, 6vw, 4.5rem);
+  --text-display-xl--line-height: 1.02;
+  --text-display-xl--letter-spacing: -0.02em;
+  --text-display-xl--font-weight: 600;
+
+  --text-display-lg: clamp(2rem, 4.5vw, 3rem);
+  --text-display-lg--line-height: 1.05;
+  --text-display-lg--letter-spacing: -0.02em;
+  --text-display-lg--font-weight: 600;
+
+  --text-h2: clamp(1.75rem, 3vw, 2.5rem);
+  --text-h2--line-height: 1.1;
+  --text-h2--letter-spacing: -0.01em;
+  --text-h2--font-weight: 600;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: dark;
+}
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: smooth;
+  /* Clear the sticky h-14 header when jumping to a #heading. Without this, a
+     deep-linked heading lands under the header and is invisible on arrival. */
+  scroll-padding-top: 4.5rem;
+}
+body {
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.6;
+  overflow-x: clip;
+}
+::selection {
+  background: var(--color-accent-muted);
+  color: var(--color-fg);
+}
+code,
+kbd,
+pre {
+  font-family: var(--font-mono);
+}
+.void-md {
+  --vmd-link: var(--color-accent);
+}
+
+/* @void/md gives every heading an aria-hidden permalink <a>#</a> and hides it with
+   opacity:0. An opacity-0 link is STILL FOCUSABLE, so tabbing a docs page hit 26
+   invisible stops where the focus ring landed on blank space and screen readers
+   announced nothing (axe: aria-hidden-focus, serious — the only structural a11y
+   failure on the site). `visibility: hidden` takes it out of the tab order entirely
+   and reveals identically on hover. Same selector shape as upstream's rules, and this
+   file is imported after the theme, so it wins on source order.
+   Still outstanding: the literal "#" sits in each heading's textContent, so text
+   extractors read "# Getting Started". That needs the glyph moved into a ::before,
+   which only @void/md can do — markdown-it-anchor's permalink is not configurable
+   through voidMarkdown()'s options (it exposes `shiki` only). */
+.void-md .header-anchor {
+  visibility: hidden;
+}
+.void-md h1:hover .header-anchor,
+.void-md h2:hover .header-anchor,
+.void-md h3:hover .header-anchor,
+.void-md h4:hover .header-anchor,
+.void-md h5:hover .header-anchor,
+.void-md h6:hover .header-anchor {
+  visibility: visible;
+}
+
+/* fine engineering grid — fixed, decorative, behind everything */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--color-grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--color-grid) 1px, transparent 1px);
+  background-size: 44px 44px;
+  opacity: 0.35;
+  mask-image: radial-gradient(120% 90% at 50% 0%, black 30%, transparent 78%);
+  -webkit-mask-image: radial-gradient(120% 90% at 50% 0%, black 30%, transparent 78%);
+}
+
+/* faint film grain — fixed, decorative, never intercepts pointer events */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.02;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* ── Reusable primitives layer ─────────────────────────────────────────────── */
+@layer components {
+  .container-page {
+    margin-inline: auto;
+    width: 100%;
+    max-width: 1140px;
+    padding-inline: 1.5rem;
+  }
+  @media (min-width: 768px) {
+    .container-page {
+      padding-inline: 2rem;
+    }
+  }
+
+  /* The playground is a three-pane tool (editor | graph | detail), not a reading
+     column: inside container-page's 1140px the graph pane collapsed to ~320px and
+     clipped its own nodes. Wider max, same gutters. */
+  .container-wide {
+    margin-inline: auto;
+    width: 100%;
+    max-width: 1500px;
+    padding-inline: 1.5rem;
+  }
+  @media (min-width: 768px) {
+    .container-wide {
+      padding-inline: 2rem;
+    }
+  }
+
+  .site-header {
+    background: color-mix(in oklab, var(--color-bg) 82%, transparent);
+    backdrop-filter: saturate(140%) blur(12px);
+    -webkit-backdrop-filter: saturate(140%) blur(12px);
+  }
+
+  /* cyan radial glow — drop behind a hero/cta section (position:relative parent) */
+  .accent-glow {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(60% 50% at 50% 0%, var(--color-accent-glow), transparent 70%);
+  }
+
+  /* mono uppercase eyebrow */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: var(--text-eyebrow);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-accent);
+  }
+
+  /* scroll-reveal, gated behind html.js so no-JS/crawler HTML renders visible */
+  .reveal {
+    transition:
+      opacity 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: opacity, transform;
+  }
+  .js .reveal {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  .reveal.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .js .reveal {
+      opacity: 1;
+      transform: none;
+    }
+    .reveal {
+      transition: none;
+    }
+  }
+}
+
+/* ── Module-graph animation (hero) — cyan edges pulse, amber edit node glows.
+   Every motion is gated behind prefers-reduced-motion. ── */
+@keyframes graph-edge-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+@keyframes graph-node-pulse {
+  0%,
+  100% {
+    opacity: 0.85;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes graph-edit-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 2px var(--color-edit-glow));
+  }
+  50% {
+    filter: drop-shadow(0 0 7px var(--color-edit));
+  }
+}
+.graph-edge {
+  stroke-dasharray: 5 7;
+  animation: graph-edge-flow 1.6s linear infinite;
+}
+.graph-node-pulse {
+  animation: graph-node-pulse 3.4s ease-in-out infinite;
+}
+.graph-edit {
+  animation: graph-edit-glow 2.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .graph-edge,
+  .graph-node-pulse,
+  .graph-edit {
+    animation: none;
+  }
+}
+
+/* ── Mobile nav (CSS-only disclosure) — intentionally UNLAYERED so it beats
+   Tailwind's @layer utilities `.hidden` / `.md:hidden` without !important. ── */
+#nav-toggle:checked ~ .nav-drawer {
+  display: block;
+}
+#nav-toggle:checked ~ .container-page .nav-icon-open {
+  display: none;
+}
+#nav-toggle:checked ~ .container-page .nav-icon-close {
+  display: block;
+}
+#nav-toggle:focus-visible ~ .container-page .nav-toggle-btn {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+.nav-caret {
+  transition: transform 0.18s ease;
+}
+details[open] > summary .nav-caret {
+  transform: rotate(180deg);
+}
