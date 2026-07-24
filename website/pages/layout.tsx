@@ -40,7 +40,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             >
               @napi-rs/wasm-tools
             </a>
-            <nav className="hidden items-center gap-6 text-sm text-(--color-muted) md:flex">
+            <nav aria-label="Main" className="hidden items-center gap-6 text-sm text-(--color-muted) md:flex">
               {NAV.map((item) => (
                 <a
                   key={item.href}
@@ -84,6 +84,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           </div>
           <nav
             id="nav-menu"
+            aria-label="Main, mobile"
             className="nav-drawer hidden border-t border-(--color-border) bg-(--color-bg) md:!hidden"
           >
             <div className="container-page flex flex-col py-2">

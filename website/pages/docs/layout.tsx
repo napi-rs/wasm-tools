@@ -30,7 +30,7 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
             ▾
           </span>
         </summary>
-        <nav className="flex flex-col gap-1 px-2 pb-2 text-sm">
+        <nav aria-label="Documentation, mobile" className="flex flex-col gap-1 px-2 pb-2 text-sm">
           {NAV.map((item) => (
             <a
               key={item.href}
@@ -44,8 +44,10 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
       </details>
       <div className="flex gap-10 lg:gap-16">
         <aside className="hidden w-56 shrink-0 md:block">
-          <nav className="sticky top-24 flex flex-col gap-1 text-sm">
-            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-(--color-muted) opacity-60">
+          <nav aria-label="Documentation" className="sticky top-24 flex flex-col gap-1 text-sm">
+            {/* no opacity-60: it composited --color-muted down to #56607b, 2.98:1 on
+                the page background — under the 4.5:1 floor for a label this size. */}
+            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-(--color-muted)">
               Documentation
             </p>
             {NAV.map((item) => (

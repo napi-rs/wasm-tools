@@ -133,11 +133,11 @@ const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 const READ_TIMEOUT_MS = 30_000
 
 // ── Static (non-isolated) fallback: a no-wasm code tour ──────────────────────
+// The page heading + intro are STATIC markup in index.island.tsx (so they exist without
+// JS); everything below renders only the tool body, in all three states.
 function StaticFallback() {
   return (
-    <div className="container-page py-16">
-      <p className="eyebrow mb-3">Playground</p>
-      <h1 className="text-display-lg mb-4 font-display text-(--color-fg)">See the shape of your wasm</h1>
+    <div>
       <div className="mb-10 rounded-xl border border-(--color-border) bg-(--color-surface-1) p-6">
         <p className="mb-2 font-medium text-(--color-fg)">In-browser demo unavailable</p>
         <p className="text-sm text-(--color-muted)">
@@ -627,11 +627,14 @@ export default function Playground() {
   }, [buildPreset, buildArgs])
 
   // ----- SSR shell (before mount) -----
+  // RESERVES the hydrated tool's height. Without it the island expanded ~484px on mount
+  // and shoved the footer down about a second after paint: CLS 0.35 desktop / 0.47 mobile,
+  // versus 0 on every other route. The two numbers are the measured hydrated heights of
+  // the tool body (mobile stacks the columns, lg+ puts them side by side).
   if (!mounted) {
     return (
-      <div className="container-page py-16">
-        <p className="eyebrow mb-3">Playground</p>
-        <div className="flex min-h-52 items-center justify-center rounded-xl border border-(--color-border) bg-(--color-surface-1) text-sm text-(--color-muted)">
+      <div className="min-h-[1104px] md:min-h-[1024px] lg:min-h-[650px]">
+        <div className="flex h-full min-h-52 items-center justify-center rounded-xl border border-(--color-border) bg-(--color-surface-1) text-sm text-(--color-muted)">
           Loading…
         </div>
       </div>
@@ -650,10 +653,7 @@ export default function Playground() {
   const busy = status === 'running'
 
   return (
-    <div className="container-wide py-12">
-      <p className="eyebrow mb-3">Playground</p>
-      <h1 className="text-display-lg mb-6 font-display text-(--color-fg)">See the shape of your wasm</h1>
-
+    <div>
       {/* stale-binary banner */}
       <div className="mb-6 flex items-start gap-3 rounded-xl border border-(--color-edit-muted) bg-(--color-edit-muted) px-4 py-3 text-sm text-(--color-edit-strong)">
         <span aria-hidden="true">⚠</span>

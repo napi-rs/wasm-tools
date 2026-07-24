@@ -94,6 +94,9 @@ html {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   scroll-behavior: smooth;
+  /* Clear the sticky h-14 header when jumping to a #heading. Without this, a
+     deep-linked heading lands under the header and is invisible on arrival. */
+  scroll-padding-top: 4.5rem;
 }
 body {
   background: var(--color-bg);
@@ -114,6 +117,29 @@ pre {
 }
 .void-md {
   --vmd-link: var(--color-accent);
+}
+
+/* @void/md gives every heading an aria-hidden permalink <a>#</a> and hides it with
+   opacity:0. An opacity-0 link is STILL FOCUSABLE, so tabbing a docs page hit 26
+   invisible stops where the focus ring landed on blank space and screen readers
+   announced nothing (axe: aria-hidden-focus, serious — the only structural a11y
+   failure on the site). `visibility: hidden` takes it out of the tab order entirely
+   and reveals identically on hover. Same selector shape as upstream's rules, and this
+   file is imported after the theme, so it wins on source order.
+   Still outstanding: the literal "#" sits in each heading's textContent, so text
+   extractors read "# Getting Started". That needs the glyph moved into a ::before,
+   which only @void/md can do — markdown-it-anchor's permalink is not configurable
+   through voidMarkdown()'s options (it exposes `shiki` only). */
+.void-md .header-anchor {
+  visibility: hidden;
+}
+.void-md h1:hover .header-anchor,
+.void-md h2:hover .header-anchor,
+.void-md h3:hover .header-anchor,
+.void-md h4:hover .header-anchor,
+.void-md h5:hover .header-anchor,
+.void-md h6:hover .header-anchor {
+  visibility: visible;
 }
 
 /* fine engineering grid — fixed, decorative, behind everything */

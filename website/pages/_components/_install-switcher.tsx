@@ -55,10 +55,15 @@ export default function InstallSwitcher() {
           )
         })}
       </div>
-      <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-(--color-border) bg-(--color-surface-1) px-4 py-3 font-mono text-sm">
-        <span className="flex min-w-0 items-center gap-2">
+      {/* The command WRAPS instead of truncating. `truncate` clipped it to
+          "$ pnpm add @napi-rs/..." at every phone width — the package name and the
+          -D/-d flag were unreadable and unrecoverable (no reflow on zoom), while
+          Copy still copied the whole thing. Desktop has room, so it stays one line
+          there; only a narrow viewport breaks it across two. */}
+      <div className="mt-3 flex items-start justify-between gap-3 rounded-lg border border-(--color-border) bg-(--color-surface-1) px-4 py-3 font-mono text-sm">
+        <span className="flex min-w-0 items-start gap-2">
           <span className="text-(--color-faint)">$</span>
-          <span className="truncate text-(--color-fg)">{activeCmd}</span>
+          <span className="break-words text-(--color-fg)">{activeCmd}</span>
         </span>
         <CopyButton text={activeCmd} />
       </div>
