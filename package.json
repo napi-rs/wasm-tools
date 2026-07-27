@@ -129,20 +129,20 @@
     "singleQuote": true,
     "arrowParens": "always"
   },
-  "packageManager": "pnpm@11.15.1",
+  "packageManager": "pnpm@11.17.0",
   "optionalDependencies": {
-    "@napi-rs/wasm-tools-darwin-x64": "1.0.1",
-    "@napi-rs/wasm-tools-darwin-arm64": "1.0.1",
-    "@napi-rs/wasm-tools-linux-x64-gnu": "1.0.1",
-    "@napi-rs/wasm-tools-win32-x64-msvc": "1.0.1",
-    "@napi-rs/wasm-tools-linux-x64-musl": "1.0.1",
-    "@napi-rs/wasm-tools-linux-arm64-gnu": "1.0.1",
-    "@napi-rs/wasm-tools-win32-ia32-msvc": "1.0.1",
-    "@napi-rs/wasm-tools-android-arm64": "1.0.1",
-    "@napi-rs/wasm-tools-freebsd-x64": "1.0.1",
-    "@napi-rs/wasm-tools-linux-arm64-musl": "1.0.1",
-    "@napi-rs/wasm-tools-win32-arm64-msvc": "1.0.1",
-    "@napi-rs/wasm-tools-android-arm-eabi": "1.0.1",
-    "@napi-rs/wasm-tools-wasm32-wasi": "1.0.1"
+    "@napi-rs/wasm-tools-darwin-x64": "1.1.0",
+    "@napi-rs/wasm-tools-darwin-arm64": "1.1.0",
+    "@napi-rs/wasm-tools-linux-x64-gnu": "1.1.0",
+    "@napi-rs/wasm-tools-win32-x64-msvc": "1.1.0",
+    "@napi-rs/wasm-tools-linux-x64-musl": "1.1.0",
+    "@napi-rs/wasm-tools-linux-arm64-gnu": "1.1.0",
+    "@napi-rs/wasm-tools-win32-ia32-msvc": "1.1.0",
+    "@napi-rs/wasm-tools-android-arm64": "1.1.0",
+    "@napi-rs/wasm-tools-freebsd-x64": "1.1.0",
+    "@napi-rs/wasm-tools-linux-arm64-musl": "1.1.0",
+    "@napi-rs/wasm-tools-win32-arm64-msvc": "1.1.0",
+    "@napi-rs/wasm-tools-android-arm-eabi": "1.1.0",
+    "@napi-rs/wasm-tools-wasm32-wasi": "1.1.0"
   }
 }

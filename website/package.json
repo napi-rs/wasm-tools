@@ -15,24 +15,24 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@napi-rs/wasm-tools": "1.0.1",
+    "@napi-rs/wasm-tools": "1.1.0",
     "@napi-rs/wasm-tools-wasm32-wasi": "file:./vendor/wasm-tools-wasm32-wasi",
-    "@void/md": "0.10.2",
-    "@void/react": "0.10.2",
+    "@void/md": "0.10.10",
+    "@void/react": "0.10.10",
     "buffer": "^6.0.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "shiki": "^4.0.2",
-    "void": "0.10.2",
+    "void": "0.10.10",
     "wabt": "^1.0.39"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
-    "@tailwindcss/vite": "4.3.2",
+    "@tailwindcss/vite": "4.3.3",
     "@types/node": "^24.10.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "tailwindcss": "4.3.2",
+    "tailwindcss": "4.3.3",
     "typescript": "^7.0.0",
     "vite": "^8.0.0"
   }
