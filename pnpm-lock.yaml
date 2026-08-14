@@ -103,19 +103,19 @@ importers:
   crates/panic:
     devDependencies:
       '@napi-rs/cli':
-        specifier: ^3.1.2
-        version: 3.8.6(@emnapi/core@2.0.0-alpha.4)(@emnapi/runtime@2.0.0-alpha.4)(@types/node@26.2.0)(emnapi@1.11.3)
+        specifier: ^3.8.6
+        version: 3.8.6(@emnapi/core@2.0.0-alpha.4)(@emnapi/runtime@2.0.0-alpha.4)(@types/node@26.2.0)(emnapi@2.0.0-alpha.4)
       '@napi-rs/wasm-runtime':
-        specifier: ^1.0.3
+        specifier: ^1.2.3
         version: 1.2.3(@emnapi/core@2.0.0-alpha.4)(@emnapi/runtime@2.0.0-alpha.4)
       '@napi-rs/wasm-tools':
         specifier: workspace:*
         version: link:../..
       emnapi:
-        specifier: ^1.4.5
-        version: 1.11.3
+        specifier: ^2.0.0-alpha.4
+        version: 2.0.0-alpha.4
       npm-run-all2:
-        specifier: ^9.0.0
+        specifier: ^9.0.3
         version: 9.0.3
 
 packages:
@@ -1272,14 +1272,6 @@ packages:
     resolution: {integrity: sha512-FLtgn/CGBXiX3ZtPAm5q4LWWepHChOt55J9u01WFu3dyap2U7IwptlrqoE1COR/kxwdy/DOxIBALSxIW449I1g==}
     engines: {node: '>=22'}
 
-  emnapi@1.11.3:
-    resolution: {integrity: sha512-+/ZS90YK/rYfVOHtGLHkGffVsnmD/MAKaBHio+Y4XAtg75RLr4cveV/w0jTkUdLM1CcAlaRgG76mpIemWAlk0A==}
-    peerDependencies:
-      node-addon-api: '>= 6.1.0'
-    peerDependenciesMeta:
-      node-addon-api:
-        optional: true
-
   emnapi@2.0.0-alpha.4:
     resolution: {integrity: sha512-nunHTwW00/hM8v0QGdToZGQ+OoI1yD09vDPbhPdO+bzQrih/m8NokPVj26J02dDimaF6cE87l5H4xZdSX7RiIw==}
     peerDependencies:
@@ -1991,38 +1983,6 @@ snapshots:
       tar: 7.5.13
     transitivePeerDependencies:
       - encoding
-      - supports-color
-
-  '@napi-rs/cli@3.8.6(@emnapi/core@2.0.0-alpha.4)(@emnapi/runtime@2.0.0-alpha.4)(@types/node@26.2.0)(emnapi@1.11.3)':
-    dependencies:
-      '@inquirer/prompts': 8.5.2(@types/node@26.2.0)
-      '@napi-rs/cross-toolchain': 1.0.3(@emnapi/core@2.0.0-alpha.4)(@emnapi/runtime@2.0.0-alpha.4)
-      '@napi-rs/wasm-tools': 1.1.0
-      '@octokit/rest': 22.0.1
-      clipanion: 4.0.0-rc.4(typanion@3.14.0)
-      colorette: 2.0.20
-      es-toolkit: 1.50.0
-      js-yaml: 4.3.1
-      obug: 2.1.4
-      semver: 7.8.5
-      typanion: 3.14.0
-      typescript: 6.0.3
-    optionalDependencies:
-      '@emnapi/core': 2.0.0-alpha.4
-      '@emnapi/runtime': 2.0.0-alpha.4
-      emnapi: 1.11.3
-    transitivePeerDependencies:
-      - '@napi-rs/cross-toolchain-arm64-target-aarch64'
-      - '@napi-rs/cross-toolchain-arm64-target-armv7'
-      - '@napi-rs/cross-toolchain-arm64-target-ppc64le'
-      - '@napi-rs/cross-toolchain-arm64-target-s390x'
-      - '@napi-rs/cross-toolchain-arm64-target-x86_64'
-      - '@napi-rs/cross-toolchain-x64-target-aarch64'
-      - '@napi-rs/cross-toolchain-x64-target-armv7'
-      - '@napi-rs/cross-toolchain-x64-target-ppc64le'
-      - '@napi-rs/cross-toolchain-x64-target-s390x'
-      - '@napi-rs/cross-toolchain-x64-target-x86_64'
-      - '@types/node'
       - supports-color
 
   '@napi-rs/cli@3.8.6(@emnapi/core@2.0.0-alpha.4)(@emnapi/runtime@2.0.0-alpha.4)(@types/node@26.2.0)(emnapi@2.0.0-alpha.4)':
@@ -2788,8 +2748,6 @@ snapshots:
   detect-libc@2.1.2: {}
 
   emittery@2.0.0: {}
-
-  emnapi@1.11.3: {}
 
   emnapi@2.0.0-alpha.4: {}
 

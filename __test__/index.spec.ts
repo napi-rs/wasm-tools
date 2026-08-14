@@ -15,14 +15,14 @@ test('should be able to parse wasm', (t) => {
 })
 
 test('should throw panic with source info', (t) => {
-  try {
-    panic()
-  } catch (err: any) {
-    const [line2, line3] = err.stack
-      .split('\n')
-      .slice(2, 4)
-      .map((line: string) => line.trim())
-    t.true(line2.startsWith('at panic.wasm.std::sys::pal::wasi::helpers::abort_internal'))
-    t.true(line3.startsWith('at panic.wasm.std::process::abort'))
-  }
+  const err = t.throws(() => panic()) as Error
+  const frames = err.stack!.split('\n').map((line) => line.trim())
+  // rustc name-section symbols now include a crate hash (`std[9a03…]::…`)
+  // and dropped the `helpers::` segment; keep matching the abort frames.
+  t.true(
+    frames.some((line) =>
+      /at panic\.wasm\.std(?:\[[0-9a-f]+\])?::sys::pal::wasi::(?:helpers::)?abort_internal/.test(line),
+    ),
+  )
+  t.true(frames.some((line) => /at panic\.wasm\.std(?:\[[0-9a-f]+\])?::process::abort/.test(line)))
 })

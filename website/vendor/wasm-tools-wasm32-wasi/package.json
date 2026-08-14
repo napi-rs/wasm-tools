@@ -16,6 +16,6 @@
     "node": ">=14.0.0"
   },
   "dependencies": {
-    "@napi-rs/wasm-runtime": "^1.0.3"
+    "@napi-rs/wasm-runtime": "^1.2.3"
   }
 }
