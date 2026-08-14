@@ -19,10 +19,15 @@ test('should throw panic with source info', (t) => {
   const frames = err.stack!.split('\n').map((line) => line.trim())
   // rustc name-section symbols now include a crate hash (`std[9a03…]::…`)
   // and dropped the `helpers::` segment; keep matching the abort frames.
+  const stack = frames.join('\n')
   t.true(
     frames.some((line) =>
       /at panic\.wasm\.std(?:\[[0-9a-f]+\])?::sys::pal::wasi::(?:helpers::)?abort_internal/.test(line),
     ),
+    stack,
   )
-  t.true(frames.some((line) => /at panic\.wasm\.std(?:\[[0-9a-f]+\])?::process::abort/.test(line)))
+  t.true(
+    frames.some((line) => /at panic\.wasm\.std(?:\[[0-9a-f]+\])?::process::abort/.test(line)),
+    stack,
+  )
 })
