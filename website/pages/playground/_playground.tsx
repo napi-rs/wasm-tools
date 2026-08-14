@@ -148,8 +148,8 @@ function StaticFallback() {
       <div className="mb-10 rounded-xl border border-(--color-border) bg-(--color-surface-1) p-6">
         <p className="mb-2 font-medium text-(--color-fg)">In-browser demo unavailable</p>
         <p className="text-sm text-(--color-muted)">
-          Your browser could not enable cross-origin isolation (SharedArrayBuffer), which the
-          in-browser wasm engine needs. Try a recent Chrome or Firefox, or run the tools locally:
+          Your browser could not enable cross-origin isolation (SharedArrayBuffer), which the in-browser wasm engine
+          needs. Try a recent Chrome or Firefox, or run the tools locally:
         </p>
         <pre className="mt-4 overflow-x-auto rounded-lg border border-(--color-border) bg-(--color-bg) px-4 py-3 font-mono text-xs text-(--color-fg)">
           npm i @napi-rs/wasm-tools
@@ -264,10 +264,7 @@ export default function Playground() {
     result: number | string
     instructions: BuildInstrDesc[]
   } | null>(null)
-  const activePreset = useMemo(
-    () => BUILD_PRESETS.find((p) => p.id === buildPreset) ?? BUILD_PRESETS[0],
-    [buildPreset],
-  )
+  const activePreset = useMemo(() => BUILD_PRESETS.find((p) => p.id === buildPreset) ?? BUILD_PRESETS[0], [buildPreset])
   // One parse result per arg input; drives per-field error styling and the Build gate.
   const argChecks = useMemo(
     () => activePreset.argLabels.map((_, i) => parseI32Arg(buildArgs[i] ?? '')),
@@ -308,10 +305,7 @@ export default function Playground() {
     [displayResult, selectedId],
   )
 
-  const pendingEdits = useMemo(
-    () => (form && baseline ? diffEdits(baseline, form) : []),
-    [form, baseline],
-  )
+  const pendingEdits = useMemo(() => (form && baseline ? diffEdits(baseline, form) : []), [form, baseline])
 
   // Memory-pages fields must be non-negative integers. A CHANGED-but-invalid field
   // (empty, decimal, non-numeric) is dropped by diffEdits, so without this guard Apply
@@ -487,7 +481,9 @@ export default function Playground() {
         resetSession()
         setSourceKind('wat')
         setStatus('error')
-        setErrorMsg(`${file.name} is ${(file.size / (1024 * 1024)).toFixed(1)} MB — over the ${MAX_UPLOAD_MB} MB in-browser limit.`)
+        setErrorMsg(
+          `${file.name} is ${(file.size / (1024 * 1024)).toFixed(1)} MB — over the ${MAX_UPLOAD_MB} MB in-browser limit.`,
+        )
         return
       }
       // Stamp the generation NOW (synchronously, at selection time) so ordering is
@@ -712,237 +708,240 @@ export default function Playground() {
         <div className="flex flex-col gap-4 lg:w-96 lg:shrink-0">
           {!isBuild ? (
             <>
-          <div className="flex items-center justify-between gap-3">
-            <label htmlFor="pg-example" className="font-mono text-xs text-(--color-muted)">
-              Example
-            </label>
-            <select
-              id="pg-example"
-              className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-surface-1) px-3 py-1.5 font-mono text-xs text-(--color-fg) disabled:opacity-50"
-              onChange={(e) => {
-                const s = WAT_SAMPLES[Number(e.target.value)]
-                if (s) changeSource(s.wat)
-              }}
-              disabled={busy || sourceKind === 'wasm'}
-              defaultValue="0"
-            >
-              {WAT_SAMPLES.map((s, i) => (
-                <option key={s.name} value={i}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <textarea
-            spellCheck={false}
-            value={wat}
-            onChange={(e) => changeSource(e.target.value)}
-            disabled={busy || sourceKind === 'wasm'}
-            className="min-h-72 w-full resize-y rounded-xl border border-(--color-border) bg-(--color-surface-1) p-4 font-mono text-xs leading-relaxed text-(--color-fg) focus:border-(--color-accent) focus:outline-none disabled:opacity-60"
-            aria-label="WAT source"
-          />
-
-          <div
-            onDrop={handleDrop}
-            onDragOver={(e) => {
-              e.preventDefault()
-              setDragging(true)
-            }}
-            onDragLeave={() => setDragging(false)}
-            className={[
-              'flex flex-col items-center gap-2 rounded-xl border-2 border-dashed p-4 text-center transition-colors',
-              dragging
-                ? 'border-(--color-accent) bg-(--color-accent-muted)'
-                : 'border-(--color-border-strong) bg-(--color-surface-1)',
-            ].join(' ')}
-          >
-            <p className="text-xs text-(--color-muted)">Drop a .wasm file, or</p>
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={busy}
-              className="rounded-lg border border-(--color-border-strong) px-3 py-1.5 font-mono text-xs text-(--color-fg) hover:bg-(--color-surface-2) disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Choose .wasm
-            </button>
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".wasm,application/wasm"
-            className="hidden"
-            onChange={(e) => {
-              handleFiles(e.target.files)
-              // Clear the selection so re-picking the SAME file (e.g. to retry a failed
-              // read) still fires a change event. handleFiles has already captured the
-              // File, so the in-flight read is unaffected.
-              e.target.value = ''
-            }}
-          />
-
-          {/* Binary source is active: the WAT editor above is inert (it can't represent
-              this file). Surface which file drives the graph/edits, and offer a way back. */}
-          {sourceKind === 'wasm' ? (
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-(--color-border-strong) bg-(--color-surface-1) px-4 py-3">
-              <span className="min-w-0 truncate font-mono text-xs text-(--color-muted)">
-                Binary loaded: <span className="text-(--color-fg)">{sourceLabel}</span> — the graph and
-                edits act on this file.
-              </span>
-              <button
-                type="button"
-                onClick={() => changeSource(wat)}
-                disabled={busy}
-                className="shrink-0 rounded-lg border border-(--color-border-strong) px-3 py-1.5 font-mono text-xs text-(--color-fg) hover:bg-(--color-surface-2) disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Switch to WAT editor
-              </button>
-            </div>
-          ) : null}
-
-          <button
-            type="button"
-            onClick={inspectWat}
-            disabled={status === 'running' || isBuild || sourceKind === 'wasm'}
-            className="w-full rounded-lg bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-accent-strong) disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {status === 'running' && !applying ? 'Parsing…' : mode === 'edit' ? 'Inspect to edit' : 'Inspect module'}
-          </button>
-
-          {mode === 'edit' && !result ? (
-            <p className="text-center font-mono text-xs text-(--color-faint)">
-              Inspect a module first, then tweak its exports, globals, memory, and name below.
-            </p>
-          ) : null}
-
-          {/* ---- Edit controls (amber accent = mutation) ---- */}
-          {mode === 'edit' && result && form ? (
-            <div className="flex flex-col gap-4 rounded-xl border border-(--color-edit-muted) bg-(--color-surface-1) p-4">
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-xs tracking-wide text-(--color-edit-strong) uppercase">Edits</span>
-                <span className="font-mono text-xs text-(--color-faint)">{pendingEdits.length} pending</span>
+              <div className="flex items-center justify-between gap-3">
+                <label htmlFor="pg-example" className="font-mono text-xs text-(--color-muted)">
+                  Example
+                </label>
+                <select
+                  id="pg-example"
+                  className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-surface-1) px-3 py-1.5 font-mono text-xs text-(--color-fg) disabled:opacity-50"
+                  onChange={(e) => {
+                    const s = WAT_SAMPLES[Number(e.target.value)]
+                    if (s) changeSource(s.wat)
+                  }}
+                  disabled={busy || sourceKind === 'wasm'}
+                  defaultValue="0"
+                >
+                  {WAT_SAMPLES.map((s, i) => (
+                    <option key={s.name} value={i}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              {/* module name */}
-              <label className="flex flex-col gap-1">
-                <span className="font-mono text-xs text-(--color-muted)">module name</span>
-                <input
-                  type="text"
-                  value={form.moduleName}
-                  placeholder="(unnamed)"
-                  disabled={busy || clipInfo.moduleName}
-                  title={clipInfo.moduleName ? 'Name is too long to edit here' : undefined}
-                  onChange={(e) => setForm((f) => (f ? { ...f, moduleName: e.target.value } : f))}
-                  className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                />
-                {clipInfo.moduleName ? (
-                  <span className="font-mono text-xs text-(--color-faint)">Name too long to edit here.</span>
-                ) : null}
-              </label>
+              <textarea
+                spellCheck={false}
+                value={wat}
+                onChange={(e) => changeSource(e.target.value)}
+                disabled={busy || sourceKind === 'wasm'}
+                className="min-h-72 w-full resize-y rounded-xl border border-(--color-border) bg-(--color-surface-1) p-4 font-mono text-xs leading-relaxed text-(--color-fg) focus:border-(--color-accent) focus:outline-none disabled:opacity-60"
+                aria-label="WAT source"
+              />
 
-              {/* exports → rename */}
-              {result.nodes.some((n) => n.kind === 'export') ? (
-                <div className="flex flex-col gap-2">
-                  <span className="font-mono text-xs text-(--color-muted)">exports · rename</span>
-                  {result.nodes
-                    .filter((n) => n.kind === 'export')
-                    .map((n) => (
-                      <div key={n.id} className="flex items-center gap-2">
-                        <span className="w-6 shrink-0 text-right font-mono text-xs text-(--color-faint)">#{n.index}</span>
-                        <input
-                          type="text"
-                          value={form.exportNames[n.index] ?? ''}
-                          disabled={busy || clipInfo.exports.has(n.index)}
-                          title={clipInfo.exports.has(n.index) ? 'Name is too long to edit here' : undefined}
-                          onChange={(e) =>
-                            setForm((f) =>
-                              f ? { ...f, exportNames: { ...f.exportNames, [n.index]: e.target.value } } : f,
-                            )
-                          }
-                          className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-                        />
-                      </div>
-                    ))}
+              <div
+                onDrop={handleDrop}
+                onDragOver={(e) => {
+                  e.preventDefault()
+                  setDragging(true)
+                }}
+                onDragLeave={() => setDragging(false)}
+                className={[
+                  'flex flex-col items-center gap-2 rounded-xl border-2 border-dashed p-4 text-center transition-colors',
+                  dragging
+                    ? 'border-(--color-accent) bg-(--color-accent-muted)'
+                    : 'border-(--color-border-strong) bg-(--color-surface-1)',
+                ].join(' ')}
+              >
+                <p className="text-xs text-(--color-muted)">Drop a .wasm file, or</p>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={busy}
+                  className="rounded-lg border border-(--color-border-strong) px-3 py-1.5 font-mono text-xs text-(--color-fg) hover:bg-(--color-surface-2) disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Choose .wasm
+                </button>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".wasm,application/wasm"
+                className="hidden"
+                onChange={(e) => {
+                  handleFiles(e.target.files)
+                  // Clear the selection so re-picking the SAME file (e.g. to retry a failed
+                  // read) still fires a change event. handleFiles has already captured the
+                  // File, so the in-flight read is unaffected.
+                  e.target.value = ''
+                }}
+              />
+
+              {/* Binary source is active: the WAT editor above is inert (it can't represent
+              this file). Surface which file drives the graph/edits, and offer a way back. */}
+              {sourceKind === 'wasm' ? (
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-(--color-border-strong) bg-(--color-surface-1) px-4 py-3">
+                  <span className="min-w-0 truncate font-mono text-xs text-(--color-muted)">
+                    Binary loaded: <span className="text-(--color-fg)">{sourceLabel}</span> — the graph and edits act on
+                    this file.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => changeSource(wat)}
+                    disabled={busy}
+                    className="shrink-0 rounded-lg border border-(--color-border-strong) px-3 py-1.5 font-mono text-xs text-(--color-fg) hover:bg-(--color-surface-2) disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Switch to WAT editor
+                  </button>
                 </div>
               ) : null}
 
-              {/* globals → toggle mutable */}
-              {result.nodes.some((n) => n.kind === 'global') ? (
-                <div className="flex flex-col gap-2">
-                  <span className="font-mono text-xs text-(--color-muted)">globals · mutable</span>
-                  {result.nodes
-                    .filter((n) => n.kind === 'global')
-                    .map((n) => (
-                      <label key={n.id} className="flex cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={form.globalMutable[n.index] ?? false}
-                          disabled={busy}
-                          onChange={(e) =>
-                            setForm((f) =>
-                              f ? { ...f, globalMutable: { ...f.globalMutable, [n.index]: e.target.checked } } : f,
-                            )
-                          }
-                          className="accent-(--color-edit) disabled:cursor-not-allowed disabled:opacity-50"
-                        />
-                        <span className="truncate font-mono text-xs text-(--color-fg)">{n.label}</span>
-                      </label>
-                    ))}
-                </div>
-              ) : null}
+              <button
+                type="button"
+                onClick={inspectWat}
+                disabled={status === 'running' || isBuild || sourceKind === 'wasm'}
+                className="w-full rounded-lg bg-(--color-accent) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-accent-strong) disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {status === 'running' && !applying
+                  ? 'Parsing…'
+                  : mode === 'edit'
+                    ? 'Inspect to edit'
+                    : 'Inspect module'}
+              </button>
 
-              {/* memories → initial pages */}
-              {result.nodes.some((n) => n.kind === 'memory') ? (
-                <div className="flex flex-col gap-2">
-                  <span className="font-mono text-xs text-(--color-muted)">memories · initial pages</span>
-                  {result.nodes
-                    .filter((n) => n.kind === 'memory')
-                    .map((n) => (
-                      <div key={n.id} className="flex items-center gap-2">
-                        <span className="truncate font-mono text-xs text-(--color-fg)">{n.label}</span>
-                        <input
-                          type="number"
-                          min={0}
-                          value={form.memoryInitial[n.index] ?? '0'}
-                          disabled={busy}
-                          aria-invalid={memoryErrors.has(n.index)}
-                          title={memoryErrors.has(n.index) ? 'Enter a whole number of pages' : undefined}
-                          onChange={(e) =>
-                            setForm((f) =>
-                              f ? { ...f, memoryInitial: { ...f.memoryInitial, [n.index]: e.target.value } } : f,
-                            )
-                          }
-                          className={`ml-auto w-24 rounded-lg border ${memoryErrors.has(n.index) ? 'border-(--color-bad)' : 'border-(--color-border)'} bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50`}
-                        />
-                      </div>
-                    ))}
-                </div>
-              ) : null}
-
-              {!editFormValid ? (
-                <p className="font-mono text-xs text-(--color-bad)">
-                  Memory pages must be a whole number — fix the highlighted field to apply.
+              {mode === 'edit' && !result ? (
+                <p className="text-center font-mono text-xs text-(--color-faint)">
+                  Inspect a module first, then tweak its exports, globals, memory, and name below.
                 </p>
               ) : null}
 
-              <button
-                type="button"
-                onClick={runApplyEdits}
-                disabled={busy || pendingEdits.length === 0 || !editFormValid}
-                className="w-full rounded-lg bg-(--color-edit) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-edit-strong) disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {applying ? 'Applying…' : `Apply edits${pendingEdits.length ? ` (${pendingEdits.length})` : ''}`}
-              </button>
-            </div>
-          ) : null}
+              {/* ---- Edit controls (amber accent = mutation) ---- */}
+              {mode === 'edit' && result && form ? (
+                <div className="flex flex-col gap-4 rounded-xl border border-(--color-edit-muted) bg-(--color-surface-1) p-4">
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-xs tracking-wide text-(--color-edit-strong) uppercase">Edits</span>
+                    <span className="font-mono text-xs text-(--color-faint)">{pendingEdits.length} pending</span>
+                  </div>
 
+                  {/* module name */}
+                  <label className="flex flex-col gap-1">
+                    <span className="font-mono text-xs text-(--color-muted)">module name</span>
+                    <input
+                      type="text"
+                      value={form.moduleName}
+                      placeholder="(unnamed)"
+                      disabled={busy || clipInfo.moduleName}
+                      title={clipInfo.moduleName ? 'Name is too long to edit here' : undefined}
+                      onChange={(e) => setForm((f) => (f ? { ...f, moduleName: e.target.value } : f))}
+                      className="w-full rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                    />
+                    {clipInfo.moduleName ? (
+                      <span className="font-mono text-xs text-(--color-faint)">Name too long to edit here.</span>
+                    ) : null}
+                  </label>
+
+                  {/* exports → rename */}
+                  {result.nodes.some((n) => n.kind === 'export') ? (
+                    <div className="flex flex-col gap-2">
+                      <span className="font-mono text-xs text-(--color-muted)">exports · rename</span>
+                      {result.nodes
+                        .filter((n) => n.kind === 'export')
+                        .map((n) => (
+                          <div key={n.id} className="flex items-center gap-2">
+                            <span className="w-6 shrink-0 text-right font-mono text-xs text-(--color-faint)">
+                              #{n.index}
+                            </span>
+                            <input
+                              type="text"
+                              value={form.exportNames[n.index] ?? ''}
+                              disabled={busy || clipInfo.exports.has(n.index)}
+                              title={clipInfo.exports.has(n.index) ? 'Name is too long to edit here' : undefined}
+                              onChange={(e) =>
+                                setForm((f) =>
+                                  f ? { ...f, exportNames: { ...f.exportNames, [n.index]: e.target.value } } : f,
+                                )
+                              }
+                              className="min-w-0 flex-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                          </div>
+                        ))}
+                    </div>
+                  ) : null}
+
+                  {/* globals → toggle mutable */}
+                  {result.nodes.some((n) => n.kind === 'global') ? (
+                    <div className="flex flex-col gap-2">
+                      <span className="font-mono text-xs text-(--color-muted)">globals · mutable</span>
+                      {result.nodes
+                        .filter((n) => n.kind === 'global')
+                        .map((n) => (
+                          <label key={n.id} className="flex cursor-pointer items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={form.globalMutable[n.index] ?? false}
+                              disabled={busy}
+                              onChange={(e) =>
+                                setForm((f) =>
+                                  f ? { ...f, globalMutable: { ...f.globalMutable, [n.index]: e.target.checked } } : f,
+                                )
+                              }
+                              className="accent-(--color-edit) disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                            <span className="truncate font-mono text-xs text-(--color-fg)">{n.label}</span>
+                          </label>
+                        ))}
+                    </div>
+                  ) : null}
+
+                  {/* memories → initial pages */}
+                  {result.nodes.some((n) => n.kind === 'memory') ? (
+                    <div className="flex flex-col gap-2">
+                      <span className="font-mono text-xs text-(--color-muted)">memories · initial pages</span>
+                      {result.nodes
+                        .filter((n) => n.kind === 'memory')
+                        .map((n) => (
+                          <div key={n.id} className="flex items-center gap-2">
+                            <span className="truncate font-mono text-xs text-(--color-fg)">{n.label}</span>
+                            <input
+                              type="number"
+                              min={0}
+                              value={form.memoryInitial[n.index] ?? '0'}
+                              disabled={busy}
+                              aria-invalid={memoryErrors.has(n.index)}
+                              title={memoryErrors.has(n.index) ? 'Enter a whole number of pages' : undefined}
+                              onChange={(e) =>
+                                setForm((f) =>
+                                  f ? { ...f, memoryInitial: { ...f.memoryInitial, [n.index]: e.target.value } } : f,
+                                )
+                              }
+                              className={`ml-auto w-24 rounded-lg border ${memoryErrors.has(n.index) ? 'border-(--color-bad)' : 'border-(--color-border)'} bg-(--color-bg) px-3 py-1.5 font-mono text-xs text-(--color-fg) focus:border-(--color-edit) focus:outline-none disabled:cursor-not-allowed disabled:opacity-50`}
+                            />
+                          </div>
+                        ))}
+                    </div>
+                  ) : null}
+
+                  {!editFormValid ? (
+                    <p className="font-mono text-xs text-(--color-bad)">
+                      Memory pages must be a whole number — fix the highlighted field to apply.
+                    </p>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    onClick={runApplyEdits}
+                    disabled={busy || pendingEdits.length === 0 || !editFormValid}
+                    className="w-full rounded-lg bg-(--color-edit) px-4 py-2.5 text-sm font-semibold text-(--color-accent-fg) transition-opacity hover:bg-(--color-edit-strong) disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {applying ? 'Applying…' : `Apply edits${pendingEdits.length ? ` (${pendingEdits.length})` : ''}`}
+                  </button>
+                </div>
+              ) : null}
             </>
           ) : (
             /* ---- Build controls (cyan accent = generative) ---- */
             <div className="flex flex-col gap-4 rounded-xl border border-(--color-border) bg-(--color-surface-1) p-4">
-              <span className="font-mono text-xs tracking-wide text-(--color-accent) uppercase">
-                Build a function
-              </span>
+              <span className="font-mono text-xs tracking-wide text-(--color-accent) uppercase">Build a function</span>
 
               <label className="flex flex-col gap-1">
                 <span className="font-mono text-xs text-(--color-muted)">preset</span>
@@ -967,9 +966,7 @@ export default function Playground() {
                   <span className="font-mono text-xs text-(--color-muted)">args</span>
                   {activePreset.argLabels.map((lab, i) => (
                     <div key={lab} className="flex items-center gap-2">
-                      <span className="w-6 shrink-0 text-right font-mono text-xs text-(--color-faint)">
-                        {lab}
-                      </span>
+                      <span className="w-6 shrink-0 text-right font-mono text-xs text-(--color-faint)">{lab}</span>
                       <input
                         type="number"
                         value={buildArgs[i] ?? ''}
@@ -1034,14 +1031,10 @@ export default function Playground() {
                 <>
                   {/* the returned value, prominent */}
                   <div className="rounded-xl border border-(--color-accent-muted) bg-(--color-surface-1) p-6">
-                    <p className="mb-3 font-mono text-xs tracking-wide text-(--color-accent) uppercase">
-                      Result
-                    </p>
+                    <p className="mb-3 font-mono text-xs tracking-wide text-(--color-accent) uppercase">Result</p>
                     <p className="font-mono text-xl break-words text-(--color-fg)">
                       {buildResult.name}({buildResult.args.join(', ')}) ={' '}
-                      <span className="font-semibold text-(--color-accent)">
-                        {String(buildResult.result)}
-                      </span>
+                      <span className="font-semibold text-(--color-accent)">{String(buildResult.result)}</span>
                     </p>
                   </div>
 
@@ -1069,74 +1062,74 @@ export default function Playground() {
             </div>
           ) : (
             <>
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <div className="inline-flex rounded-lg border border-(--color-border) bg-(--color-surface-1) p-1">
-              {(['graph', 'tree'] as View[]).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setView(v)}
-                  className={[
-                    'rounded-md px-4 py-1.5 font-mono text-xs capitalize transition-colors',
-                    view === v
-                      ? 'bg-(--color-accent) text-(--color-accent-fg)'
-                      : 'text-(--color-muted) hover:text-(--color-fg)',
-                  ].join(' ')}
-                >
-                  {v}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-3">
-              {mode === 'edit' && afterResult ? (
-                <>
-                  <span className="inline-flex items-center rounded-full bg-(--color-edit-muted) px-2.5 py-0.5 font-mono text-xs text-(--color-edit-strong)">
-                    After edits
-                  </span>
-                  <button
-                    type="button"
-                    onClick={downloadEmitted}
-                    disabled={busy}
-                    className="rounded-lg border border-(--color-edit) bg-(--color-edit-muted) px-3 py-1.5 font-mono text-xs text-(--color-edit-strong) transition-colors hover:bg-(--color-edit-glow) disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Download .wasm
-                  </button>
-                </>
-              ) : null}
-              {displayResult ? (
-                <span className="font-mono text-xs text-(--color-faint)">
-                  {sourceLabel}
-                  {displayResult.moduleName ? ` · ${displayResult.moduleName}` : ''}
-                </span>
-              ) : null}
-            </div>
-          </div>
-
-          {displayResult?.edgesTruncated ? (
-            <p className="mb-3 rounded-lg border border-(--color-edit-muted) bg-(--color-edit-muted) px-3 py-2 font-mono text-xs text-(--color-edit-strong)">
-              Large module — some edges are omitted, so the graph is a partial view. The tree tab still
-              lists full section counts.
-            </p>
-          ) : null}
-
-          {!displayResult ? (
-            <div className="flex min-h-72 items-center justify-center rounded-xl border border-(--color-border) bg-(--color-surface-1) text-sm text-(--color-faint)">
-              {status === 'running' ? 'Parsing module…' : 'Inspect a module to see its graph.'}
-            </div>
-          ) : (
-            // items-start: the detail panel is usually the taller of the two, and a
-            // stretched graph pane just draws a mostly-empty box beside it.
-            <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
-              <div className="min-w-0">
-                {view === 'graph' ? (
-                  <GraphView result={displayResult} selectedId={selectedId} onSelect={setSelectedId} />
-                ) : (
-                  <TreeView result={displayResult} selectedId={selectedId} onSelect={setSelectedId} />
-                )}
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="inline-flex rounded-lg border border-(--color-border) bg-(--color-surface-1) p-1">
+                  {(['graph', 'tree'] as View[]).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setView(v)}
+                      className={[
+                        'rounded-md px-4 py-1.5 font-mono text-xs capitalize transition-colors',
+                        view === v
+                          ? 'bg-(--color-accent) text-(--color-accent-fg)'
+                          : 'text-(--color-muted) hover:text-(--color-fg)',
+                      ].join(' ')}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-3">
+                  {mode === 'edit' && afterResult ? (
+                    <>
+                      <span className="inline-flex items-center rounded-full bg-(--color-edit-muted) px-2.5 py-0.5 font-mono text-xs text-(--color-edit-strong)">
+                        After edits
+                      </span>
+                      <button
+                        type="button"
+                        onClick={downloadEmitted}
+                        disabled={busy}
+                        className="rounded-lg border border-(--color-edit) bg-(--color-edit-muted) px-3 py-1.5 font-mono text-xs text-(--color-edit-strong) transition-colors hover:bg-(--color-edit-glow) disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        Download .wasm
+                      </button>
+                    </>
+                  ) : null}
+                  {displayResult ? (
+                    <span className="font-mono text-xs text-(--color-faint)">
+                      {sourceLabel}
+                      {displayResult.moduleName ? ` · ${displayResult.moduleName}` : ''}
+                    </span>
+                  ) : null}
+                </div>
               </div>
-              <DetailPanel node={selectedNode} />
-            </div>
-          )}
+
+              {displayResult?.edgesTruncated ? (
+                <p className="mb-3 rounded-lg border border-(--color-edit-muted) bg-(--color-edit-muted) px-3 py-2 font-mono text-xs text-(--color-edit-strong)">
+                  Large module — some edges are omitted, so the graph is a partial view. The tree tab still lists full
+                  section counts.
+                </p>
+              ) : null}
+
+              {!displayResult ? (
+                <div className="flex min-h-72 items-center justify-center rounded-xl border border-(--color-border) bg-(--color-surface-1) text-sm text-(--color-faint)">
+                  {status === 'running' ? 'Parsing module…' : 'Inspect a module to see its graph.'}
+                </div>
+              ) : (
+                // items-start: the detail panel is usually the taller of the two, and a
+                // stretched graph pane just draws a mostly-empty box beside it.
+                <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[minmax(0,1fr)_18rem]">
+                  <div className="min-w-0">
+                    {view === 'graph' ? (
+                      <GraphView result={displayResult} selectedId={selectedId} onSelect={setSelectedId} />
+                    ) : (
+                      <TreeView result={displayResult} selectedId={selectedId} onSelect={setSelectedId} />
+                    )}
+                  </div>
+                  <DetailPanel node={selectedNode} />
+                </div>
+              )}
             </>
           )}
         </div>

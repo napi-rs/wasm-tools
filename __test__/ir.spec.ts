@@ -1787,7 +1787,14 @@ test('F-fix2 (Finding 3): a LoadSimd load/store-lane kind with a coerced lane th
         [],
         [],
         [],
-        [{ type: 'LoadSimd', memory: 0, loadSimdKind: { type: 'V128Store8Lane', lane: 256 }, memArg: { align: 1, offset: 0n } }],
+        [
+          {
+            type: 'LoadSimd',
+            memory: 0,
+            loadSimdKind: { type: 'V128Store8Lane', lane: 256 },
+            memArg: { align: 1, offset: 0n },
+          },
+        ],
       ),
     { message: /lane must be an integer in 0\.\.=255/ },
   )
@@ -4593,10 +4600,18 @@ test('H2 review-fix: a RELEVANT poisoned index field throws in PREFLIGHT with th
       /field must be an integer in 0\.\.=4294967295/,
     ],
     // `typeIndex` IS consumed by ArrayGet -> caught by validate_array.
-    ['ArrayGet.typeIndex', () => ({ type: 'ArrayGet', typeIndex: NaN }), /typeIndex must be an integer in 0\.\.=4294967295/],
+    [
+      'ArrayGet.typeIndex',
+      () => ({ type: 'ArrayGet', typeIndex: NaN }),
+      /typeIndex must be an integer in 0\.\.=4294967295/,
+    ],
     // `memory` IS consumed by AtomicRmw -> caught by validate_atomic (memory is
     // checked FIRST, before the atomicOp/atomicWidth/memArg presence checks).
-    ['AtomicRmw.memory', () => ({ type: 'AtomicRmw', memory: 2 ** 32 }), /memory must be an integer in 0\.\.=4294967295/],
+    [
+      'AtomicRmw.memory',
+      () => ({ type: 'AtomicRmw', memory: 2 ** 32 }),
+      /memory must be an integer in 0\.\.=4294967295/,
+    ],
   ]
   for (const [name, mkPoison, re] of probes) {
     const { m, s, a } = mk()

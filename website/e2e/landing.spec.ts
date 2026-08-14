@@ -29,9 +29,7 @@ test('sections below the hero reveal on scroll (landing page hydrates)', async (
     })
     .toBeGreaterThan(5)
   // and they are actually painted, not just class-tagged
-  const opacity = await page.evaluate(
-    () => getComputedStyle(document.querySelector('.reveal.is-visible')!).opacity,
-  )
+  const opacity = await page.evaluate(() => getComputedStyle(document.querySelector('.reveal.is-visible')!).opacity)
   expect(opacity).toBe('1')
 })
 
@@ -45,10 +43,7 @@ test('no horizontal page scroll at phone width', async ({ page }) => {
   for (const route of ['/', '/docs/building-functions', '/playground']) {
     await page.goto(route)
     await page.waitForTimeout(300)
-    const [scrollWidth, inner] = await page.evaluate(() => [
-      document.documentElement.scrollWidth,
-      window.innerWidth,
-    ])
+    const [scrollWidth, inner] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth])
     expect(scrollWidth, `${route} scrolls sideways`).toBeLessThanOrEqual(inner + 1)
   }
 })

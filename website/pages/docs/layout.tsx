@@ -47,9 +47,7 @@ export default function DocsLayout({ children }: { children: ReactNode }) {
           <nav aria-label="Documentation" className="sticky top-24 flex flex-col gap-1 text-sm">
             {/* no opacity-60: it composited --color-muted down to #56607b, 2.98:1 on
                 the page background — under the 4.5:1 floor for a label this size. */}
-            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-(--color-muted)">
-              Documentation
-            </p>
+            <p className="mb-3 font-mono text-xs uppercase tracking-wider text-(--color-muted)">Documentation</p>
             {NAV.map((item) => (
               <a
                 key={item.href}

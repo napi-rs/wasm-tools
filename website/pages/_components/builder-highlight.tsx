@@ -19,8 +19,8 @@ export default function BuilderHighlight({ html }: { html: string }) {
               label="Instruction builder"
               title={
                 <>
-                  Describe <span className="font-mono text-(--color-accent)">add(a, b)</span>,
-                  run it, get <span className="text-(--color-good)">5</span>
+                  Describe <span className="font-mono text-(--color-accent)">add(a, b)</span>, run it, get{' '}
+                  <span className="text-(--color-good)">5</span>
                 </>
               }
               subhead="buildFunction takes params, results, the locals that are params, and an instruction-descriptor tree. Export it, emit, and WebAssembly.instantiate runs the real thing. The body round-trips back to the same descriptors."
@@ -30,9 +30,7 @@ export default function BuilderHighlight({ html }: { html: string }) {
                   two lines on a narrow card rather than squeezing the pill until
                   "= 5" breaks across lines inside it. */}
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 font-mono text-sm">
-                <span className="whitespace-nowrap text-(--color-muted)">
-                  instance.exports.add(2, 3)
-                </span>
+                <span className="whitespace-nowrap text-(--color-muted)">instance.exports.add(2, 3)</span>
                 <span className="shrink-0 whitespace-nowrap rounded-md bg-(--color-accent-muted) px-2.5 py-1 font-medium text-(--color-accent-strong)">
                   = 5
                 </span>

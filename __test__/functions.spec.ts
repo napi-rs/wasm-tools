@@ -213,7 +213,10 @@ test('delete drops the orphaned internal entry type of the last local function',
   const err = t.throws(() =>
     m.types.addStruct([
       {
-        storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: entryIndex } } },
+        storage: {
+          type: 'Val',
+          value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: entryIndex } },
+        },
         mutable: false,
       },
     ]),

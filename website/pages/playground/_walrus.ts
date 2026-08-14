@@ -173,12 +173,7 @@ export interface WasmModule {
   readonly tags: Collection<WTag>
   // Build mode: module-wide locals + the IR builder.
   readonly locals: LocalCollection
-  buildFunction(
-    params: ValType[],
-    results: ValType[],
-    argLocalIndices: number[],
-    body: InstrDesc[],
-  ): number
+  buildFunction(params: ValType[], results: ValType[], argLocalIndices: number[], body: InstrDesc[]): number
   // Emit the (possibly edited) module into an in-memory wasm buffer.
   // `demangle` runs Rust name demangling; false for a plain passthrough.
   emitWasm(demangle: boolean): Uint8Array

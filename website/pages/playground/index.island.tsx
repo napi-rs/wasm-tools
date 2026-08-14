@@ -10,15 +10,12 @@ export default function PlaygroundPage() {
   return (
     <section className="container-wide py-12">
       <p className="eyebrow mb-3">Playground</p>
-      <h1 className="text-display-lg mb-4 font-display text-(--color-fg)">
-        WebAssembly playground
-      </h1>
+      <h1 className="text-display-lg mb-4 font-display text-(--color-fg)">WebAssembly playground</h1>
       <p className="mb-8 max-w-2xl text-(--color-muted)">
-        Compile WAT or drop in a <span className="font-mono text-(--color-fg)">.wasm</span> file and
-        walk its module graph in the browser — types, functions, globals, memories, tables, imports
-        and exports, each one a live handle. Rename an export or grow a memory and re-emit the
-        bytes, or compose a function from an instruction tree and run it. Everything runs locally
-        in a Web Worker; no module ever leaves the page.
+        Compile WAT or drop in a <span className="font-mono text-(--color-fg)">.wasm</span> file and walk its module
+        graph in the browser — types, functions, globals, memories, tables, imports and exports, each one a live handle.
+        Rename an export or grow a memory and re-emit the bytes, or compose a function from an instruction tree and run
+        it. Everything runs locally in a Web Worker; no module ever leaves the page.
       </p>
       <Playground />
     </section>

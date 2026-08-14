@@ -78,7 +78,9 @@ export class PlaygroundEngine {
       const timer = setTimeout(() => {
         // Presume the worker is wedged: fail everything and rebuild on next run().
         this.failAll(
-          new Error(`Timed out after ${REQUEST_TIMEOUT_MS / 1000}s — the module may be too large to process in-browser.`),
+          new Error(
+            `Timed out after ${REQUEST_TIMEOUT_MS / 1000}s — the module may be too large to process in-browser.`,
+          ),
         )
       }, REQUEST_TIMEOUT_MS)
       this.pending.set(id, { resolve, reject, timer })

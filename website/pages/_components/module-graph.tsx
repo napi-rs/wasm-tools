@@ -111,15 +111,7 @@ export default function ModuleGraph({ className }: { className?: string }) {
                 className={n.edit ? 'graph-edit' : 'graph-node-pulse'}
               />
               {n.edit ? (
-                <circle
-                  cx={n.x}
-                  cy={n.y}
-                  r={13}
-                  fill="none"
-                  stroke="#ffb454"
-                  strokeOpacity="0.35"
-                  strokeWidth="1"
-                />
+                <circle cx={n.x} cy={n.y} r={13} fill="none" stroke="#ffb454" strokeOpacity="0.35" strokeWidth="1" />
               ) : null}
               <text
                 x={n.x + dx}

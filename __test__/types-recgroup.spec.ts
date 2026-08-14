@@ -301,10 +301,7 @@ test('the RecGroup heap variant is rejected outside addRecGroup (catchably, neve
   const m = empty()
 
   // globals.addLocal
-  t.regex(
-    t.throws(() => m.globals.addLocal(recGroupRef(0), false, false, ConstExpr.i32(0)))!.message,
-    /addRecGroup/,
-  )
+  t.regex(t.throws(() => m.globals.addLocal(recGroupRef(0), false, false, ConstExpr.i32(0)))!.message, /addRecGroup/)
   // buildFunction (param signature conversion rejects it before any mutation)
   t.regex(t.throws(() => m.buildFunction([recGroupRef(0)], [], [], []))!.message, /addRecGroup/)
   // ConstExpr.refNull (pure, no module access)

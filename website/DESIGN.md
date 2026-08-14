@@ -8,26 +8,27 @@ marks every mutation/edit**.
 
 ### Palette (tokens live in `app.css` `@theme`)
 
-| Token | Value | Role |
-|---|---|---|
-| `--color-bg` | `#0b1222` | ground |
-| `--color-surface-1` | `#0f1830` | surface |
-| `--color-surface-2` | `#13213e` | elevated |
-| `--color-fg` | `#e7ecff` | ink |
-| `--color-muted` | `#8894b6` | muted text |
-| `--color-faint` | `#6f7ca6` | de-emphasised (AA on bg/surface) |
-| `--color-grid` | `#17233f` | fine grid line (`body::before`) |
-| `--color-hairline` | `#1c2b4a` | structural hairline / card borders |
-| `--color-accent` | `#5bc8ff` | cyan — nodes, edges, links, primary |
-| `--color-accent-strong` | `#8bd8ff` | cyan hover / emphasis |
-| `--color-edit` | `#ffb454` | amber — **every mutation / write-back** |
-| `--color-good / warn / bad` | `#46d39a / #ffb454 / #ff6b8a` | semantic |
+| Token                       | Value                         | Role                                    |
+| --------------------------- | ----------------------------- | --------------------------------------- |
+| `--color-bg`                | `#0b1222`                     | ground                                  |
+| `--color-surface-1`         | `#0f1830`                     | surface                                 |
+| `--color-surface-2`         | `#13213e`                     | elevated                                |
+| `--color-fg`                | `#e7ecff`                     | ink                                     |
+| `--color-muted`             | `#8894b6`                     | muted text                              |
+| `--color-faint`             | `#6f7ca6`                     | de-emphasised (AA on bg/surface)        |
+| `--color-grid`              | `#17233f`                     | fine grid line (`body::before`)         |
+| `--color-hairline`          | `#1c2b4a`                     | structural hairline / card borders      |
+| `--color-accent`            | `#5bc8ff`                     | cyan — nodes, edges, links, primary     |
+| `--color-accent-strong`     | `#8bd8ff`                     | cyan hover / emphasis                   |
+| `--color-edit`              | `#ffb454`                     | amber — **every mutation / write-back** |
+| `--color-good / warn / bad` | `#46d39a / #ffb454 / #ff6b8a` | semantic                                |
 
 Accent-derived: `--color-accent-muted/-glow/-fg`, `--color-edit-muted/-strong/-glow`.
 
 **Swap only the `@theme` block to re-palette.** Everything else reads the tokens.
 
 ### Type
+
 - `--font-display` Space Grotesk (headings via `text-display-xl/lg/h2`)
 - `--font-sans` Inter (body)
 - `--font-mono` JetBrains Mono (eyebrows, code, wordmark, labels, `tabular-nums`)
@@ -35,6 +36,7 @@ Accent-derived: `--color-accent-muted/-glow/-fg`, `--color-edit-muted/-strong/-g
 All three self-hosted woff2 in `public/fonts/`, wired in `app.css` `@font-face`.
 
 ### Motion (all gated behind `prefers-reduced-motion`)
+
 - `.graph-edge` — cyan edges flow (dashed stroke offset)
 - `.graph-node-pulse` — nodes breathe
 - `.graph-edit` — amber edit node/edge glows
@@ -60,6 +62,7 @@ website/
 ```
 
 ### Landing sections (in `index.tsx` order)
+
 1. `Hero` — headline "See the shape of your wasm", CTAs, `InstallSwitcher`, `ModuleGraph`.
 2. `Verbs` — Inspect / Edit / Build, each a Shiki snippet card.
 3. `LiveHandleStory` — edit an export → re-emit → re-parse proves it persists.
@@ -72,6 +75,7 @@ hardcoded sample module (no runtime wasm — landing stays prerenderable). The o
 node/edge is the export renamed `run → main`.
 
 ### Component prop contract (for the playground agent)
+
 - `Button` — `variant: 'primary'|'secondary'|'ghost'`, renders `<a>`, spreads anchor attrs.
 - `CodeBlock` — `{ html, copyText?, filename?, className? }`, injects Shiki HTML.
 - `CopyButton` — `{ text }` (client).
@@ -82,12 +86,14 @@ node/edge is the export renamed `run → main`.
 - `ModuleGraph` — `{ className? }`, no client JS.
 
 ### Loader pattern
+
 `highlight()` runs inside `defineHandler` in `*.server.ts` at request time (workerd SSR).
 `prerender=false` + `void.json revalidate {"*":0}` = instant-live deploys. Shiki uses the
 pure-JS regex engine (`createJavaScriptRegexEngine`, `forgiving:true`) because workerd
 forbids runtime `WebAssembly.instantiate` — keep this if you add more highlighting.
 
 ### Playground note (next agent)
+
 `/playground` COOP/COEP headers are already staged in `void.json` and the Vite
 `playground-isolation-dev` middleware, and `worker.format:'es'` is set. The published
 `@napi-rs/wasm-tools-wasm32-wasi@1.0.1` predates the module-graph / buildFunction API

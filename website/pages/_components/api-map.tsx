@@ -92,9 +92,7 @@ export default function ApiMap() {
               <div className="flex h-full flex-col rounded-2xl border border-(--color-hairline) bg-(--color-surface-1)/50 p-6">
                 <div className="flex items-baseline justify-between">
                   <h3 className="font-display text-lg text-(--color-fg)">{g.label}</h3>
-                  <span className="font-mono text-xs text-(--color-faint) tabular-nums">
-                    {g.items.length}
-                  </span>
+                  <span className="font-mono text-xs text-(--color-faint) tabular-nums">{g.items.length}</span>
                 </div>
                 <p className="mt-2 text-sm text-(--color-muted)">{g.blurb}</p>
                 <div className="mt-5 flex flex-wrap gap-2">
@@ -116,13 +114,13 @@ export default function ApiMap() {
           <div className="rounded-2xl border border-(--color-hairline) bg-(--color-surface-1)/50 p-6">
             <div className="flex items-baseline justify-between">
               <h3 className="font-display text-lg text-(--color-fg)">Value types</h3>
-              <span className="font-mono text-xs text-(--color-faint) tabular-nums">
-                {VALTYPES.length}
-              </span>
+              <span className="font-mono text-xs text-(--color-faint) tabular-nums">{VALTYPES.length}</span>
             </div>
             <p className="mt-2 text-sm text-(--color-muted)">
               Numeric types and the nullable reference types, exported as constants —{' '}
-              <span className="font-mono text-(--color-accent)">import {'{'} I32 {'}'}</span>{' '}
+              <span className="font-mono text-(--color-accent)">
+                import {'{'} I32 {'}'}
+              </span>{' '}
               instead of <span className="font-mono text-(--color-faint)">{"{ type: 'I32' }"}</span>.
             </p>
             <div className="mt-5 flex flex-wrap gap-2">

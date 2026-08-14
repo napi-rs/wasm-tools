@@ -19,11 +19,7 @@ export default function TreeView({
   return (
     <div className="flex flex-col gap-2">
       {populated.map((section) => (
-        <details
-          key={section.kind}
-          open
-          className="rounded-xl border border-(--color-border) bg-(--color-surface-1)"
-        >
+        <details key={section.kind} open className="rounded-xl border border-(--color-border) bg-(--color-surface-1)">
           <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 select-none">
             <span className="flex items-center gap-2">
               <svg
@@ -59,9 +55,7 @@ export default function TreeView({
                   >
                     <span className="truncate font-mono text-sm text-(--color-fg)">{node.label}</span>
                     {node.sub ? (
-                      <span className="shrink-0 truncate font-mono text-xs text-(--color-faint)">
-                        {node.sub}
-                      </span>
+                      <span className="shrink-0 truncate font-mono text-xs text-(--color-faint)">{node.sub}</span>
                     ) : null}
                   </button>
                 </li>

@@ -10,7 +10,19 @@
 // the emitted bytes (a comment alone is stripped by minification and does NOT change the hash). Bump
 // it whenever the COEP/serving story changes and a clean asset URL is needed.
 import { Buffer } from 'buffer'
-import type { WorkerRequest, WorkerResponse, InspectResult, GraphNode, GraphEdge, SectionSummary, NodeKind, PropPair, Edit, BuildPresetId, BuildInstrDesc } from './protocol'
+import type {
+  WorkerRequest,
+  WorkerResponse,
+  InspectResult,
+  GraphNode,
+  GraphEdge,
+  SectionSummary,
+  NodeKind,
+  PropPair,
+  Edit,
+  BuildPresetId,
+  BuildInstrDesc,
+} from './protocol'
 import type { WalrusMod, WasmModule, WType, WImport, WExport, WFunction, InstrDesc } from './_walrus'
 import { valTypeLabel } from './_walrus'
 
@@ -836,11 +848,16 @@ function buildPreset(
   if (preset === 'add') {
     const a = m.locals.add(I32)
     const b = m.locals.add(I32)
-    idx = m.buildFunction([I32, I32], [I32], [a.index, b.index], [
-      { type: 'LocalGet', local: a.index },
-      { type: 'LocalGet', local: b.index },
-      { type: 'Binop', op: 'I32Add' },
-    ])
+    idx = m.buildFunction(
+      [I32, I32],
+      [I32],
+      [a.index, b.index],
+      [
+        { type: 'LocalGet', local: a.index },
+        { type: 'LocalGet', local: b.index },
+        { type: 'Binop', op: 'I32Add' },
+      ],
+    )
     name = 'add'
   } else if (preset === 'const42') {
     idx = m.buildFunction([], [I32], [], [{ type: 'Const', value: { type: 'I32', value: 42 } }])

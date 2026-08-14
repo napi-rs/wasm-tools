@@ -26,8 +26,7 @@ export default function LiveHandleStory({ html }: { html: string }) {
               label="Live handles"
               title={
                 <>
-                  Edit an export, re-emit,{' '}
-                  <span className="text-(--color-edit)">it persists</span>
+                  Edit an export, re-emit, <span className="text-(--color-edit)">it persists</span>
                 </>
               }
               subhead="There is no separate mutation API and no rebuild step. A handle is a window onto the module — reads read through, writes write back. Round-trip through the bytes to prove it."

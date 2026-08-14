@@ -53,11 +53,7 @@ export default function Verbs({
         <SectionHeader
           index="01"
           label="Three verbs"
-          title={
-            <>
-              Inspect. Edit. Build.
-            </>
-          }
+          title={<>Inspect. Edit. Build.</>}
           subhead="One module handle, three things to do with it. The same graph you read is the graph you mutate and the graph you emit."
         />
 
@@ -68,22 +64,14 @@ export default function Verbs({
             <Reveal key={v.key} className="min-w-0" delay={i * 80}>
               <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-(--color-hairline) bg-(--color-surface-1)/50">
                 <div className="flex items-center gap-3 border-b border-(--color-border) px-5 py-4">
-                  <span
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ background: v.color }}
-                    aria-hidden="true"
-                  />
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: v.color }} aria-hidden="true" />
                   <span className="font-mono text-sm font-medium text-(--color-fg)">{v.tag}</span>
                 </div>
                 <div className="px-5 py-5">
                   <p className="text-sm text-(--color-muted)">{v.desc}</p>
                 </div>
                 <div className="mt-auto px-5 pb-5">
-                  <CodeBlock
-                    html={htmlByKey[v.key]}
-                    copyText={rawByKey[v.key]}
-                    filename={v.filename}
-                  />
+                  <CodeBlock html={htmlByKey[v.key]} copyText={rawByKey[v.key]} filename={v.filename} />
                 </div>
               </div>
             </Reveal>

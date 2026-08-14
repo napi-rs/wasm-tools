@@ -30,7 +30,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: 'pnpm'
 
       - name: Install
@@ -90,7 +90,7 @@ jobs:
           - host: ubuntu-latest
             target: wasm32-wasip1-threads
             build: pnpm build --target wasm32-wasip1-threads
-    name: stable - ${{ matrix.settings.target }} - node@22
+    name: stable - ${{ matrix.settings.target }} - node@24
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@v7
@@ -99,7 +99,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - name: Install
         uses: dtolnay/rust-toolchain@stable
@@ -120,7 +120,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         if: ${{ contains(matrix.settings.target, 'musl') }}
         with:
-          version: 0.14.1
+          version: 0.15.1
       - name: Setup toolchain
         run: ${{ matrix.settings.setup }}
         if: ${{ matrix.settings.setup }}
@@ -220,7 +220,8 @@ jobs:
             target: aarch64-apple-darwin
             architecture: arm64
         node:
-          - '22'
+          - '24'
+          - '26'
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@v7
@@ -257,7 +258,8 @@ jobs:
           - aarch64-unknown-linux-gnu
           - aarch64-unknown-linux-musl
         node:
-          - '22'
+          - '24'
+          - '26'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -323,7 +325,7 @@ jobs:
       - name: Setup node
         uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
       - name: Install dependencies
         run: pnpm install

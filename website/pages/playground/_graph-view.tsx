@@ -258,22 +258,10 @@ export default function GraphView({
                   stroke={stroke}
                   strokeWidth={selected ? 2 : 1.2}
                 />
-                <text
-                  x={12}
-                  y={19}
-                  fontSize={12}
-                  fontFamily="var(--font-mono)"
-                  fill="var(--color-fg)"
-                >
+                <text x={12} y={19} fontSize={12} fontFamily="var(--font-mono)" fill="var(--color-fg)">
                   {truncate(node.label, 20)}
                 </text>
-                <text
-                  x={12}
-                  y={35}
-                  fontSize={10}
-                  fontFamily="var(--font-mono)"
-                  fill="var(--color-faint)"
-                >
+                <text x={12} y={35} fontSize={10} fontFamily="var(--font-mono)" fill="var(--color-faint)">
                   {truncate(node.sub ?? node.kind, 22)}
                 </text>
               </g>

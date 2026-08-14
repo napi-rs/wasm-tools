@@ -14,11 +14,9 @@ export default function Hero() {
             See the shape of your <span className="text-(--color-accent)">wasm</span>
           </h1>
           <p className="mt-6 max-w-xl text-lg text-(--color-muted)">
-            Read, edit and build WebAssembly modules from JavaScript. Every function,
-            global, memory, import and export is a{' '}
-            <span className="text-(--color-fg)">live handle</span> — read through to the
-            module, write straight back, then{' '}
-            <span className="font-mono text-(--color-edit-strong)">emitWasm()</span>.
+            Read, edit and build WebAssembly modules from JavaScript. Every function, global, memory, import and export
+            is a <span className="text-(--color-fg)">live handle</span> — read through to the module, write straight
+            back, then <span className="font-mono text-(--color-edit-strong)">emitWasm()</span>.
           </p>
 
           <div className="mt-8 flex flex-wrap items-center gap-4">

@@ -6,16 +6,7 @@
 
 // The ten node families we surface from a module, one per WasmModule collection.
 export type NodeKind =
-  | 'type'
-  | 'import'
-  | 'function'
-  | 'global'
-  | 'memory'
-  | 'table'
-  | 'data'
-  | 'element'
-  | 'tag'
-  | 'export'
+  'type' | 'import' | 'function' | 'global' | 'memory' | 'table' | 'data' | 'element' | 'tag' | 'export'
 
 // A single row of the detail panel (ordered key → value display pairs).
 export type PropPair = { key: string; value: string }
