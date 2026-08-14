@@ -1213,7 +1213,7 @@ test('CH-fix2 (normal BrTable): a real small `labels` + `defaultLabel` round-tri
 //      `try_reserve`-guarded, so exhaustion is CATCHABLE and the process survives.
 //
 // The WASI run is the real proof for BOTH: a genuine UAF or OOM abort there tears
-// down the whole test run, so a full green suite under `NAPI_RS_FORCE_WASI=1` is
+// down the whole test run, so a full green suite under `NAPI_RS_FORCE_WASI=true` is
 // the evidence the holes are closed on the `panic=abort` target, not just native.
 // ---------------------------------------------------------------------------
 
