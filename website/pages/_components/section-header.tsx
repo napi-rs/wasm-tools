@@ -20,9 +20,7 @@ export default function SectionHeader({
     <div className={cx('flex flex-col', centered && 'items-center text-center')}>
       <span className="eyebrow">{index ? `${index} — ${label}` : label}</span>
       <h2 className="mt-4 font-display text-h2 text-(--color-fg)">{title}</h2>
-      {subhead ? (
-        <p className={cx('mt-4 max-w-2xl text-(--color-muted)', centered && 'mx-auto')}>{subhead}</p>
-      ) : null}
+      {subhead ? <p className={cx('mt-4 max-w-2xl text-(--color-muted)', centered && 'mx-auto')}>{subhead}</p> : null}
     </div>
   )
 }

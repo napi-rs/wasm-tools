@@ -35,17 +35,9 @@ export default function Layout({ children }: { children: ReactNode }) {
       />
       <div className="min-h-screen">
         <header className="site-header sticky top-0 z-50 border-b border-(--color-border)">
-          <input
-            id="nav-toggle"
-            type="checkbox"
-            className="sr-only md:hidden"
-            aria-label="Toggle navigation menu"
-          />
+          <input id="nav-toggle" type="checkbox" className="sr-only md:hidden" aria-label="Toggle navigation menu" />
           <div className="container-page flex h-14 items-center justify-between gap-4">
-            <a
-              href="/"
-              className="font-mono text-sm font-medium tracking-tight whitespace-nowrap text-(--color-fg)"
-            >
+            <a href="/" className="font-mono text-sm font-medium tracking-tight whitespace-nowrap text-(--color-fg)">
               @napi-rs/wasm-tools
             </a>
             <nav aria-label="Main" className="hidden items-center gap-6 text-sm text-(--color-muted) md:flex">

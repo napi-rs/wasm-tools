@@ -6,13 +6,7 @@ import BuilderHighlight from './_components/builder-highlight'
 import ApiMap from './_components/api-map'
 import CtaBand from './_components/cta-band'
 
-export default function Home({
-  inspectHtml,
-  editHtml,
-  buildHtml,
-  storyHtml,
-  builderHtml,
-}: Props) {
+export default function Home({ inspectHtml, editHtml, buildHtml, storyHtml, builderHtml }: Props) {
   return (
     <>
       <Hero />

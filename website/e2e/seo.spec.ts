@@ -4,13 +4,7 @@ import { test, expect } from '@playwright/test'
 // deployed site. Each spec pins the specific thing that was broken, so the fix cannot
 // silently regress. Measured numbers in the comments are the pre-fix values.
 
-const DOCS = [
-  '/docs',
-  '/docs/api-reference',
-  '/docs/building-functions',
-  '/docs/module-graph',
-  '/docs/value-types',
-]
+const DOCS = ['/docs', '/docs/api-reference', '/docs/building-functions', '/docs/module-graph', '/docs/value-types']
 
 test('the landing head points at the host actually serving the page', async ({ page }) => {
   // og:url was hardcoded to https://wasm-tools.napi.rs, which does not resolve
@@ -26,10 +20,7 @@ test('summary_large_image is backed by an image that resolves', async ({ page })
   // The card type promised an image while zero og:image/twitter:image existed on any
   // route, so X rendered no card at all.
   await page.goto('/')
-  await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute(
-    'content',
-    'summary_large_image',
-  )
+  await expect(page.locator('meta[name="twitter:card"]')).toHaveAttribute('content', 'summary_large_image')
 
   const src = await page.locator('meta[property="og:image"]').getAttribute('content')
   expect(src).toBeTruthy()
@@ -89,9 +80,8 @@ test('heading permalinks are not keyboard-focusable', async ({ page }) => {
 
     const focusable = await page.evaluate(
       () =>
-        [...document.querySelectorAll('a.header-anchor')].filter(
-          (a) => getComputedStyle(a).visibility !== 'hidden',
-        ).length,
+        [...document.querySelectorAll('a.header-anchor')].filter((a) => getComputedStyle(a).visibility !== 'hidden')
+          .length,
     )
     expect(focusable, `${route} has focusable aria-hidden anchors`).toBe(0)
   }

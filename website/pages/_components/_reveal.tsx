@@ -39,11 +39,7 @@ export default function Reveal({
   }, [])
 
   return (
-    <Tag
-      ref={ref}
-      className={cx('reveal', className)}
-      style={{ transitionDelay: delay ? `${delay}ms` : undefined }}
-    >
+    <Tag ref={ref} className={cx('reveal', className)} style={{ transitionDelay: delay ? `${delay}ms` : undefined }}>
       {children}
     </Tag>
   )

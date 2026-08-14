@@ -12,12 +12,9 @@ export default function Footer() {
       <div className="container-page py-12">
         <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
           <div className="flex flex-col gap-3">
-            <span className="font-mono text-sm font-medium text-(--color-fg) tracking-tight">
-              @napi-rs/wasm-tools
-            </span>
+            <span className="font-mono text-sm font-medium text-(--color-fg) tracking-tight">@napi-rs/wasm-tools</span>
             <p className="text-sm text-(--color-muted) max-w-xs">
-              walrus bindings for JavaScript — read, edit and build WebAssembly modules
-              through live handles.
+              walrus bindings for JavaScript — read, edit and build WebAssembly modules through live handles.
             </p>
           </div>
 

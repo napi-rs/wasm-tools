@@ -316,12 +316,15 @@ test('an over-limit WAT source is rejected before it is encoded', async ({ page 
   // Push a source one character over the 64 MB char cap straight into the textarea's state
   // (via the real onChange path), bypassing a multi-minute per-character type. Inspect must
   // reject it up front instead of running TextEncoder().encode on the main thread.
-  await page.getByLabel('WAT source').evaluate((el, big) => {
-    const ta = el as HTMLTextAreaElement
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
-    setter.call(ta, big)
-    ta.dispatchEvent(new Event('input', { bubbles: true }))
-  }, 'a'.repeat(64 * 1024 * 1024 + 1))
+  await page.getByLabel('WAT source').evaluate(
+    (el, big) => {
+      const ta = el as HTMLTextAreaElement
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+      setter.call(ta, big)
+      ta.dispatchEvent(new Event('input', { bubbles: true }))
+    },
+    'a'.repeat(64 * 1024 * 1024 + 1),
+  )
 
   await page.getByRole('button', { name: 'Inspect module' }).click()
   await expect(page.getByText(/over the 64 MB in-browser limit/i)).toBeVisible({ timeout: 30_000 })

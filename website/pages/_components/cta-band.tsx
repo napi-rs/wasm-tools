@@ -12,8 +12,8 @@ export default function CtaBand() {
             Walk your module in the <span className="text-(--color-accent)">browser</span>
           </h2>
           <p className="mt-5 text-base text-(--color-muted) max-w-md mx-auto">
-            Paste WAT or drop a .wasm and watch the graph build itself — parse, inspect,
-            edit and re-emit, all client-side.
+            Paste WAT or drop a .wasm and watch the graph build itself — parse, inspect, edit and re-emit, all
+            client-side.
           </p>
           <div className="mt-10 flex flex-wrap items-center justify-center gap-4">
             <Button variant="primary" href="/playground">

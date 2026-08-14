@@ -360,7 +360,11 @@ test('a struct field can be a concrete ref to another type (the crux) and round-
   t.truthy(rb)
   const field = rb!.structFields()[0]
   // Narrow for TS then read the concrete target index.
-  if (field.storage.type !== 'Val' || field.storage.value.type !== 'Ref' || field.storage.value.heap.type !== 'Concrete') {
+  if (
+    field.storage.type !== 'Val' ||
+    field.storage.value.type !== 'Ref' ||
+    field.storage.value.heap.type !== 'Concrete'
+  ) {
     return t.fail('expected a concrete ref field')
   }
   const target = reparsed.types.getByIndex(field.storage.value.heap.typeIndex)
@@ -417,7 +421,10 @@ test('concrete-ref to an internal entry-type index throws catchably (WASI-safe, 
   const err = t.throws(() =>
     m.types.addStruct([
       {
-        storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: entryIndex } } },
+        storage: {
+          type: 'Val',
+          value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: entryIndex } },
+        },
         mutable: false,
       },
     ]),
@@ -615,7 +622,10 @@ test('addComposite: a struct field that is a concrete ref to an existing type ro
       type: 'Struct',
       fields: [
         {
-          storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: a.index } } },
+          storage: {
+            type: 'Val',
+            value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: a.index } },
+          },
           mutable: false,
         },
       ],
@@ -640,7 +650,11 @@ test('addComposite: a struct field that is a concrete ref to an existing type ro
   })
   t.truthy(rb)
   const field = rb!.structFields()[0]
-  if (field.storage.type !== 'Val' || field.storage.value.type !== 'Ref' || field.storage.value.heap.type !== 'Concrete') {
+  if (
+    field.storage.type !== 'Val' ||
+    field.storage.value.type !== 'Ref' ||
+    field.storage.value.heap.type !== 'Concrete'
+  ) {
     return t.fail('expected a concrete ref field')
   }
   const target = reparsed.types.getByIndex(field.storage.value.heap.typeIndex)
@@ -657,7 +671,10 @@ test('addComposite: a field referencing a nonexistent type index throws (no abor
         type: 'Struct',
         fields: [
           {
-            storage: { type: 'Val', value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: 9999 } } },
+            storage: {
+              type: 'Val',
+              value: { type: 'Ref', nullable: true, heap: { type: 'Concrete', typeIndex: 9999 } },
+            },
             mutable: false,
           },
         ],

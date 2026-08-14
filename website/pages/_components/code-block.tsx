@@ -14,19 +14,10 @@ export default function CodeBlock({
   className?: string
 }) {
   return (
-    <div
-      className={cx(
-        'overflow-hidden rounded-xl border border-(--color-border) bg-(--color-surface-1)',
-        className,
-      )}
-    >
+    <div className={cx('overflow-hidden rounded-xl border border-(--color-border) bg-(--color-surface-1)', className)}>
       {filename || copyText ? (
         <div className="flex items-center justify-between border-b border-(--color-border) px-4 py-2">
-          {filename ? (
-            <span className="font-mono text-xs text-(--color-faint)">{filename}</span>
-          ) : (
-            <span />
-          )}
+          {filename ? <span className="font-mono text-xs text-(--color-faint)">{filename}</span> : <span />}
           {copyText ? <CopyButton text={copyText} /> : null}
         </div>
       ) : null}
