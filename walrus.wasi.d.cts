@@ -410,12 +410,7 @@ export declare class WasmElements {
    * matched to `table64`); a stored-but-invalid module is the caller's
    * responsibility, catchable via `WebAssembly.validate` / re-parse.
    */
-  addFunctions(
-    kind: ElementKindTag,
-    funcIndices: Array<number>,
-    table?: WasmTable | undefined | null,
-    offset?: ConstExpr | undefined | null,
-  ): WasmElement
+  addFunctions(kind: ElementKindTag, funcIndices: Array<number>, table?: WasmTable | undefined | null, offset?: ConstExpr | undefined | null): WasmElement
   /**
    * Add a new element segment whose items are constant EXPRESSIONS
    * (`ElementItems::Expressions`), returning a live handle to it.
@@ -436,13 +431,7 @@ export declare class WasmElements {
    * the caller's responsibility, catchable via `WebAssembly.validate` /
    * re-parse.
    */
-  addExpressions(
-    kind: ElementKindTag,
-    elementTy: ValType,
-    exprs: Array<ConstExpr>,
-    table?: WasmTable | undefined | null,
-    offset?: ConstExpr | undefined | null,
-  ): WasmElement
+  addExpressions(kind: ElementKindTag, elementTy: ValType, exprs: Array<ConstExpr>, table?: WasmTable | undefined | null, offset?: ConstExpr | undefined | null): WasmElement
 }
 
 /**
@@ -886,15 +875,7 @@ export declare class WasmImports {
    * out-of-`u64`-range size is still rejected (via `bigint_to_u64`), because
    * that is silent data corruption rather than a semantic-validity question.
    */
-  addMemory(
-    moduleName: string,
-    name: string,
-    shared: boolean,
-    memory64: boolean,
-    initial: bigint,
-    maximum?: bigint | undefined | null,
-    pageSizeLog2?: number | undefined | null,
-  ): WasmMemory
+  addMemory(moduleName: string, name: string, shared: boolean, memory64: boolean, initial: bigint, maximum?: bigint | undefined | null, pageSizeLog2?: number | undefined | null): WasmMemory
   /**
    * Add an imported table under `moduleName`/`name`, returning a live handle to
    * the newly created (imported) table.
@@ -914,14 +895,7 @@ export declare class WasmImports {
    * MIRROR-WALRUS: the sizes are stored verbatim (no `initial <= maximum`
    * check); an out-of-`u64`-range size is still rejected (silent corruption).
    */
-  addTable(
-    moduleName: string,
-    name: string,
-    table64: boolean,
-    initial: bigint,
-    maximum: bigint | undefined | null,
-    elementType: ValType,
-  ): WasmTable
+  addTable(moduleName: string, name: string, table64: boolean, initial: bigint, maximum: bigint | undefined | null, elementType: ValType): WasmTable
   /**
    * Add an imported global under `moduleName`/`name`, returning a live handle to
    * the newly created (imported) global.
@@ -1042,13 +1016,7 @@ export declare class WasmMemories {
    * The returned handle holds its own strong reference to the module (same as
    * the accessor handles), so it stays valid as long as it is held.
    */
-  addLocal(
-    shared: boolean,
-    memory64: boolean,
-    initial: bigint,
-    maximum?: bigint | undefined | null,
-    pageSizeLog2?: number | undefined | null,
-  ): WasmMemory
+  addLocal(shared: boolean, memory64: boolean, initial: bigint, maximum?: bigint | undefined | null, pageSizeLog2?: number | undefined | null): WasmMemory
 }
 
 /**
@@ -1187,12 +1155,7 @@ export declare class WasmModule {
    * builder finishes, so a body cannot `Call` the function it is defining (the
    * index names no live function yet, and that errs).
    */
-  buildFunction(
-    params: Array<ValType>,
-    results: Array<ValType>,
-    argLocalIndices: Array<number>,
-    body: Array<InstrDesc>,
-  ): number
+  buildFunction(params: Array<ValType>, results: Array<ValType>, argLocalIndices: Array<number>, body: Array<InstrDesc>): number
   /**
    * Replace an EXPORTED, locally-defined function's body with one built from an
    * instruction-descriptor array, returning the NEW function's stable index.
@@ -1527,13 +1490,7 @@ export declare class WasmTables {
    * The returned handle holds its own strong reference to the module (same as
    * the accessor handles), so it stays valid as long as it is held.
    */
-  addLocalWithInit(
-    table64: boolean,
-    initial: bigint,
-    maximum: bigint | undefined | null,
-    elementTy: ValType,
-    init?: ConstExpr | undefined | null,
-  ): WasmTable
+  addLocalWithInit(table64: boolean, initial: bigint, maximum: bigint | undefined | null, elementTy: ValType, init?: ConstExpr | undefined | null): WasmTable
 }
 
 /**
@@ -1926,7 +1883,7 @@ export declare const enum AbstractHeapType {
   /** The abstract `exn` heap type (exceptions). */
   Exn = 'Exn',
   /** The abstract `noexn` heap type (bottom type for exception refs). */
-  NoExn = 'NoExn',
+  NoExn = 'NoExn'
 }
 
 /**
@@ -1963,7 +1920,7 @@ export declare const enum AtomicOp {
   /** Atomic bitwise xor (`*.atomic.rmw.xor`). */
   Xor = 'Xor',
   /** Atomic exchange (`*.atomic.rmw.xchg`). */
-  Xchg = 'Xchg',
+  Xchg = 'Xchg'
 }
 
 /**
@@ -1993,7 +1950,7 @@ export declare const enum AtomicWidth {
   /** A 16-bit-wide atomic op on an `i64` value. */
   I64_16 = 'I64_16',
   /** A 32-bit-wide atomic op on an `i64` value. */
-  I64_32 = 'I64_32',
+  I64_32 = 'I64_32'
 }
 
 /**
@@ -2010,11 +1967,10 @@ export declare const enum AtomicWidth {
  */
 export type BlockType =
   | { type: 'Empty' }
-  | { type: 'Value'; /** The single result value type. */ value: ValType }
-  | {
-      type: 'MultiValue' /** The stable index of the function type describing this block's signature. */
-      typeIndex: number
-    }
+  | { type: 'Value'; /** The single result value type. */
+value: ValType }
+| { type: 'MultiValue'; /** The stable index of the function type describing this block's signature. */
+typeIndex: number }
 
 /**
  * A single catch clause of a `TryTable` (modern, phase-4) OR a legacy `Try`
@@ -2103,13 +2059,13 @@ export interface CatchClause {
  * in the module resolves (a bad/entry-type index is rejected catchably).
  */
 export type CompositeType =
-  | { type: 'Struct'; /** The struct's fields, in order. */ fields: Array<FieldType> }
-  | { type: 'Array'; /** The element field type. */ element: FieldType }
-  | {
-      type: 'Function' /** The parameter value types. */
-      params: Array<ValType> /** The result value types. */
-      results: Array<ValType>
-    }
+  | { type: 'Struct'; /** The struct's fields, in order. */
+fields: Array<FieldType> }
+| { type: 'Array'; /** The element field type. */
+element: FieldType }
+| { type: 'Function'; /** The parameter value types. */
+params: Array<ValType>; /** The result value types. */
+results: Array<ValType> }
 
 /**
  * The discriminant of a [`ConstExpr`], mirroring the five `walrus::ConstExpr`
@@ -2125,7 +2081,7 @@ export declare const enum ConstExprKind {
   /** A function reference (`ref.func`). */
   RefFunc = 'RefFunc',
   /** An extended constant expression (a sequence of const operations). */
-  Extended = 'Extended',
+  Extended = 'Extended'
 }
 
 /**
@@ -2151,11 +2107,16 @@ export declare const enum ConstExprKind {
  * rename keeps the field precisely typed.
  */
 export type ConstValue =
-  | { type: 'I32'; /** The constant value. */ value: number }
-  | { type: 'I64'; /** The constant value. */ value: bigint }
-  | { type: 'F32'; /** The constant value. */ value: number }
-  | { type: 'F64'; /** The constant value. */ value: number }
-  | { type: 'V128'; /** The raw 16 bytes of the vector, least-significant first. */ value: Uint8Array }
+  | { type: 'I32'; /** The constant value. */
+value: number }
+| { type: 'I64'; /** The constant value. */
+value: bigint }
+| { type: 'F32'; /** The constant value. */
+value: number }
+| { type: 'F64'; /** The constant value. */
+value: number }
+| { type: 'V128'; /** The raw 16 bytes of the vector, least-significant first. */
+value: Uint8Array }
 
 /**
  * Whether a data segment is active (auto-initialized into a memory at
@@ -2170,7 +2131,7 @@ export declare const enum DataKindTag {
   /** An active data segment (initialized into a memory at a fixed offset). */
   Active = 'Active',
   /** A passive data segment (copied on demand via `memory.init`). */
-  Passive = 'Passive',
+  Passive = 'Passive'
 }
 
 /**
@@ -2191,7 +2152,7 @@ export declare const enum ElementItemsTag {
   /** The segment's items are function references (`Functions`). */
   Functions = 'Functions',
   /** The segment's items are constant expressions (`Expressions`). */
-  Expressions = 'Expressions',
+  Expressions = 'Expressions'
 }
 
 /**
@@ -2214,7 +2175,7 @@ export declare const enum ElementKindTag {
    * An active element segment (copied into a table at a fixed offset at
    * instantiation).
    */
-  Active = 'Active',
+  Active = 'Active'
 }
 
 /**
@@ -2248,7 +2209,7 @@ export declare const enum ExportItemTag {
   /** An exported global. */
   Global = 'Global',
   /** An exported tag (exception handling). */
-  Tag = 'Tag',
+  Tag = 'Tag'
 }
 
 /**
@@ -2268,7 +2229,7 @@ export declare const enum ExtendedLoad {
   /** Zero-extend the narrow value to the full result width. */
   ZeroExtend = 'ZeroExtend',
   /** Zero-extend an atomic narrow load to the full result width. */
-  ZeroExtendAtomic = 'ZeroExtendAtomic',
+  ZeroExtendAtomic = 'ZeroExtendAtomic'
 }
 
 /**
@@ -2327,7 +2288,7 @@ export declare const enum FunctionKindTag {
    * internal walrus transient (it should not appear on a fully parsed module),
    * exposed for completeness.
    */
-  Uninitialized = 'Uninitialized',
+  Uninitialized = 'Uninitialized'
 }
 
 /**
@@ -2341,7 +2302,7 @@ export declare const enum GlobalKind {
   /** An imported global (its initializer lives in the host). */
   Import = 'Import',
   /** A locally defined global (has an in-module initializer). */
-  Local = 'Local',
+  Local = 'Local'
 }
 
 /**
@@ -2403,7 +2364,7 @@ export declare const enum ImportKindTag {
   /** An imported global. */
   Global = 'Global',
   /** An imported tag (exception handling). */
-  Tag = 'Tag',
+  Tag = 'Tag'
 }
 
 /**
@@ -2631,16 +2592,23 @@ export interface InstrDesc {
  * deferred `LoadSimd` instruction).
  */
 export type LoadKind =
-  | { type: 'I32'; /** Whether this is the atomic form. */ atomic: boolean }
-  | { type: 'I64'; /** Whether this is the atomic form. */ atomic: boolean }
-  | { type: 'F32' }
-  | { type: 'F64' }
-  | { type: 'V128' }
-  | { type: 'I32_8'; /** The extension behavior. */ kind: ExtendedLoad }
-  | { type: 'I32_16'; /** The extension behavior. */ kind: ExtendedLoad }
-  | { type: 'I64_8'; /** The extension behavior. */ kind: ExtendedLoad }
-  | { type: 'I64_16'; /** The extension behavior. */ kind: ExtendedLoad }
-  | { type: 'I64_32'; /** The extension behavior. */ kind: ExtendedLoad }
+  | { type: 'I32'; /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64'; /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'F32' }
+| { type: 'F64' }
+| { type: 'V128' }
+| { type: 'I32_8'; /** The extension behavior. */
+kind: ExtendedLoad }
+| { type: 'I32_16'; /** The extension behavior. */
+kind: ExtendedLoad }
+| { type: 'I64_8'; /** The extension behavior. */
+kind: ExtendedLoad }
+| { type: 'I64_16'; /** The extension behavior. */
+kind: ExtendedLoad }
+| { type: 'I64_32'; /** The extension behavior. */
+kind: ExtendedLoad }
 
 /**
  * The kind of a `LoadSimd` instruction, mirroring `walrus::ir::LoadSimdKind`
@@ -2680,14 +2648,22 @@ export type LoadSimdKind =
   | { type: 'V128Load32x2U' }
   | { type: 'V128Load32Zero' }
   | { type: 'V128Load64Zero' }
-  | { type: 'V128Load8Lane'; /** The lane index the value is loaded into. */ lane: number }
-  | { type: 'V128Load16Lane'; /** The lane index the value is loaded into. */ lane: number }
-  | { type: 'V128Load32Lane'; /** The lane index the value is loaded into. */ lane: number }
-  | { type: 'V128Load64Lane'; /** The lane index the value is loaded into. */ lane: number }
-  | { type: 'V128Store8Lane'; /** The lane index whose value is stored. */ lane: number }
-  | { type: 'V128Store16Lane'; /** The lane index whose value is stored. */ lane: number }
-  | { type: 'V128Store32Lane'; /** The lane index whose value is stored. */ lane: number }
-  | { type: 'V128Store64Lane'; /** The lane index whose value is stored. */ lane: number }
+  | { type: 'V128Load8Lane'; /** The lane index the value is loaded into. */
+lane: number }
+| { type: 'V128Load16Lane'; /** The lane index the value is loaded into. */
+lane: number }
+| { type: 'V128Load32Lane'; /** The lane index the value is loaded into. */
+lane: number }
+| { type: 'V128Load64Lane'; /** The lane index the value is loaded into. */
+lane: number }
+| { type: 'V128Store8Lane'; /** The lane index whose value is stored. */
+lane: number }
+| { type: 'V128Store16Lane'; /** The lane index whose value is stored. */
+lane: number }
+| { type: 'V128Store32Lane'; /** The lane index whose value is stored. */
+lane: number }
+| { type: 'V128Store64Lane'; /** The lane index whose value is stored. */
+lane: number }
 
 /**
  * The alignment and offset immediate of a `Load`/`Store`, mirroring
@@ -2805,8 +2781,10 @@ export interface RecGroupMember {
  * [`crate::types::WasmTypes::add_rec_group`] member descriptor.
  */
 export type RecGroupRef =
-  | { type: 'RecGroup'; /** The position of the referenced member in the `members` array. */ recIndex: number }
-  | { type: 'Existing'; /** The stable `.index()` of the referenced existing type. */ typeIndex: number }
+  | { type: 'RecGroup'; /** The position of the referenced member in the `members` array. */
+recIndex: number }
+| { type: 'Existing'; /** The stable `.index()` of the referenced existing type. */
+typeIndex: number }
 
 /**
  * The reference type carried by a `RefNull` instruction, mirroring
@@ -2843,7 +2821,10 @@ export interface RefType {
  * `i32`. The `Val` variant wraps any ordinary [`ValType`] (including a
  * `(ref $t)` reference to another type).
  */
-export type StorageType = { type: 'I8' } | { type: 'I16' } | { type: 'Val'; value: ValType }
+export type StorageType =
+  | { type: 'I8' }
+  | { type: 'I16' }
+  | { type: 'Val'; value: ValType }
 
 /**
  * The kind of a `Store` instruction, mirroring `walrus::ir::StoreKind`
@@ -2863,16 +2844,23 @@ export type StorageType = { type: 'I8' } | { type: 'I16' } | { type: 'Val'; valu
  * `LoadSimd` instruction).
  */
 export type StoreKind =
-  | { type: 'I32'; /** Whether this is the atomic form. */ atomic: boolean }
-  | { type: 'I64'; /** Whether this is the atomic form. */ atomic: boolean }
-  | { type: 'F32' }
-  | { type: 'F64' }
-  | { type: 'V128' }
-  | { type: 'I32_8'; /** Whether this is the atomic form. */ atomic: boolean }
-  | { type: 'I32_16'; /** Whether this is the atomic form. */ atomic: boolean }
-  | { type: 'I64_8'; /** Whether this is the atomic form. */ atomic: boolean }
-  | { type: 'I64_16'; /** Whether this is the atomic form. */ atomic: boolean }
-  | { type: 'I64_32'; /** Whether this is the atomic form. */ atomic: boolean }
+  | { type: 'I32'; /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64'; /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'F32' }
+| { type: 'F64' }
+| { type: 'V128' }
+| { type: 'I32_8'; /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I32_16'; /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64_8'; /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64_16'; /** Whether this is the atomic form. */
+atomic: boolean }
+| { type: 'I64_32'; /** Whether this is the atomic form. */
+atomic: boolean }
 
 /**
  * The `structref` reference type (`(ref null struct)`) — a ready-made
@@ -2891,7 +2879,7 @@ export declare const enum TagKindTag {
   /** An imported tag (defined by the host). */
   Import = 'Import',
   /** A locally defined tag. */
-  Local = 'Local',
+  Local = 'Local'
 }
 
 /**
@@ -2908,7 +2896,7 @@ export declare const enum TypeKind {
   /** A GC struct type. */
   Struct = 'Struct',
   /** A GC array type. */
-  Array = 'Array',
+  Array = 'Array'
 }
 
 /**

@@ -1967,9 +1967,9 @@ export declare const enum AtomicWidth {
  */
 export type BlockType =
   | { type: 'Empty' }
-  | { type: 'Value', /** The single result value type. */
+  | { type: 'Value'; /** The single result value type. */
 value: ValType }
-| { type: 'MultiValue', /** The stable index of the function type describing this block's signature. */
+| { type: 'MultiValue'; /** The stable index of the function type describing this block's signature. */
 typeIndex: number }
 
 /**
@@ -2059,12 +2059,12 @@ export interface CatchClause {
  * in the module resolves (a bad/entry-type index is rejected catchably).
  */
 export type CompositeType =
-  | { type: 'Struct', /** The struct's fields, in order. */
+  | { type: 'Struct'; /** The struct's fields, in order. */
 fields: Array<FieldType> }
-| { type: 'Array', /** The element field type. */
+| { type: 'Array'; /** The element field type. */
 element: FieldType }
-| { type: 'Function', /** The parameter value types. */
-params: Array<ValType>, /** The result value types. */
+| { type: 'Function'; /** The parameter value types. */
+params: Array<ValType>; /** The result value types. */
 results: Array<ValType> }
 
 /**
@@ -2107,15 +2107,15 @@ export declare const enum ConstExprKind {
  * rename keeps the field precisely typed.
  */
 export type ConstValue =
-  | { type: 'I32', /** The constant value. */
+  | { type: 'I32'; /** The constant value. */
 value: number }
-| { type: 'I64', /** The constant value. */
+| { type: 'I64'; /** The constant value. */
 value: bigint }
-| { type: 'F32', /** The constant value. */
+| { type: 'F32'; /** The constant value. */
 value: number }
-| { type: 'F64', /** The constant value. */
+| { type: 'F64'; /** The constant value. */
 value: number }
-| { type: 'V128', /** The raw 16 bytes of the vector, least-significant first. */
+| { type: 'V128'; /** The raw 16 bytes of the vector, least-significant first. */
 value: Uint8Array }
 
 /**
@@ -2322,10 +2322,10 @@ export declare const enum GlobalKind {
  * on the READ path.
  */
 export type HeapType =
-  | { type: 'Abstract', kind: AbstractHeapType }
-  | { type: 'Concrete', typeIndex: number }
-  | { type: 'Exact', typeIndex: number }
-  | { type: 'RecGroup', recIndex: number }
+  | { type: 'Abstract'; kind: AbstractHeapType }
+  | { type: 'Concrete'; typeIndex: number }
+  | { type: 'Exact'; typeIndex: number }
+  | { type: 'RecGroup'; recIndex: number }
 
 /**
  * The `i31ref` reference type (`(ref null i31)`) — a ready-made [`ValType`]
@@ -2592,22 +2592,22 @@ export interface InstrDesc {
  * deferred `LoadSimd` instruction).
  */
 export type LoadKind =
-  | { type: 'I32', /** Whether this is the atomic form. */
+  | { type: 'I32'; /** Whether this is the atomic form. */
 atomic: boolean }
-| { type: 'I64', /** Whether this is the atomic form. */
+| { type: 'I64'; /** Whether this is the atomic form. */
 atomic: boolean }
 | { type: 'F32' }
 | { type: 'F64' }
 | { type: 'V128' }
-| { type: 'I32_8', /** The extension behavior. */
+| { type: 'I32_8'; /** The extension behavior. */
 kind: ExtendedLoad }
-| { type: 'I32_16', /** The extension behavior. */
+| { type: 'I32_16'; /** The extension behavior. */
 kind: ExtendedLoad }
-| { type: 'I64_8', /** The extension behavior. */
+| { type: 'I64_8'; /** The extension behavior. */
 kind: ExtendedLoad }
-| { type: 'I64_16', /** The extension behavior. */
+| { type: 'I64_16'; /** The extension behavior. */
 kind: ExtendedLoad }
-| { type: 'I64_32', /** The extension behavior. */
+| { type: 'I64_32'; /** The extension behavior. */
 kind: ExtendedLoad }
 
 /**
@@ -2648,21 +2648,21 @@ export type LoadSimdKind =
   | { type: 'V128Load32x2U' }
   | { type: 'V128Load32Zero' }
   | { type: 'V128Load64Zero' }
-  | { type: 'V128Load8Lane', /** The lane index the value is loaded into. */
+  | { type: 'V128Load8Lane'; /** The lane index the value is loaded into. */
 lane: number }
-| { type: 'V128Load16Lane', /** The lane index the value is loaded into. */
+| { type: 'V128Load16Lane'; /** The lane index the value is loaded into. */
 lane: number }
-| { type: 'V128Load32Lane', /** The lane index the value is loaded into. */
+| { type: 'V128Load32Lane'; /** The lane index the value is loaded into. */
 lane: number }
-| { type: 'V128Load64Lane', /** The lane index the value is loaded into. */
+| { type: 'V128Load64Lane'; /** The lane index the value is loaded into. */
 lane: number }
-| { type: 'V128Store8Lane', /** The lane index whose value is stored. */
+| { type: 'V128Store8Lane'; /** The lane index whose value is stored. */
 lane: number }
-| { type: 'V128Store16Lane', /** The lane index whose value is stored. */
+| { type: 'V128Store16Lane'; /** The lane index whose value is stored. */
 lane: number }
-| { type: 'V128Store32Lane', /** The lane index whose value is stored. */
+| { type: 'V128Store32Lane'; /** The lane index whose value is stored. */
 lane: number }
-| { type: 'V128Store64Lane', /** The lane index whose value is stored. */
+| { type: 'V128Store64Lane'; /** The lane index whose value is stored. */
 lane: number }
 
 /**
@@ -2781,9 +2781,9 @@ export interface RecGroupMember {
  * [`crate::types::WasmTypes::add_rec_group`] member descriptor.
  */
 export type RecGroupRef =
-  | { type: 'RecGroup', /** The position of the referenced member in the `members` array. */
+  | { type: 'RecGroup'; /** The position of the referenced member in the `members` array. */
 recIndex: number }
-| { type: 'Existing', /** The stable `.index()` of the referenced existing type. */
+| { type: 'Existing'; /** The stable `.index()` of the referenced existing type. */
 typeIndex: number }
 
 /**
@@ -2824,7 +2824,7 @@ export interface RefType {
 export type StorageType =
   | { type: 'I8' }
   | { type: 'I16' }
-  | { type: 'Val', value: ValType }
+  | { type: 'Val'; value: ValType }
 
 /**
  * The kind of a `Store` instruction, mirroring `walrus::ir::StoreKind`
@@ -2844,22 +2844,22 @@ export type StorageType =
  * `LoadSimd` instruction).
  */
 export type StoreKind =
-  | { type: 'I32', /** Whether this is the atomic form. */
+  | { type: 'I32'; /** Whether this is the atomic form. */
 atomic: boolean }
-| { type: 'I64', /** Whether this is the atomic form. */
+| { type: 'I64'; /** Whether this is the atomic form. */
 atomic: boolean }
 | { type: 'F32' }
 | { type: 'F64' }
 | { type: 'V128' }
-| { type: 'I32_8', /** Whether this is the atomic form. */
+| { type: 'I32_8'; /** Whether this is the atomic form. */
 atomic: boolean }
-| { type: 'I32_16', /** Whether this is the atomic form. */
+| { type: 'I32_16'; /** Whether this is the atomic form. */
 atomic: boolean }
-| { type: 'I64_8', /** Whether this is the atomic form. */
+| { type: 'I64_8'; /** Whether this is the atomic form. */
 atomic: boolean }
-| { type: 'I64_16', /** Whether this is the atomic form. */
+| { type: 'I64_16'; /** Whether this is the atomic form. */
 atomic: boolean }
-| { type: 'I64_32', /** Whether this is the atomic form. */
+| { type: 'I64_32'; /** Whether this is the atomic form. */
 atomic: boolean }
 
 /**
@@ -2925,4 +2925,4 @@ export type ValType =
   | { type: 'F32' }
   | { type: 'F64' }
   | { type: 'V128' }
-  | { type: 'Ref', nullable: boolean, heap: HeapType }
+  | { type: 'Ref'; nullable: boolean; heap: HeapType }
