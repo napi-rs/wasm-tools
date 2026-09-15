@@ -75,7 +75,7 @@ test('a failed re-apply removes the stale download (edit-mode integrity)', async
   // previous binary must NOT remain downloadable (it wouldn't match the form).
   await initial.fill('3')
   await page.getByRole('button', { name: /Apply edits/ }).click()
-  await expect(page.getByText(/minimum|maximum|error/i).first()).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('alert')).toBeVisible({ timeout: 60_000 })
   await expect(page.getByRole('button', { name: 'Download .wasm' })).toHaveCount(0)
 })
 

@@ -1004,7 +1004,10 @@ export default function Playground() {
             </div>
           )}
           {status === 'error' ? (
-            <p className="rounded-lg border border-(--color-border-strong) bg-(--color-surface-1) px-3 py-2 font-mono text-xs break-words text-(--color-bad)">
+            <p
+              role="alert"
+              className="rounded-lg border border-(--color-border-strong) bg-(--color-surface-1) px-3 py-2 font-mono text-xs break-words text-(--color-bad)"
+            >
               {errorMsg}
             </p>
           ) : null}
