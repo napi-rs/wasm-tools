@@ -9,6 +9,10 @@
       "groupName": "napi-rs"
     },
     {
+      "matchPackageNames": ["pnpm"],
+      "allowedVersions": "!/^11\\.28\\.3$/"
+    },
+    {
       "matchPackagePatterns": ["^eslint", "^@typescript-eslint"],
       "groupName": "linter"
     }
