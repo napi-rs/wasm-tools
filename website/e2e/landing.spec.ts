@@ -52,8 +52,13 @@ test('the install switcher swaps the package-manager command', async ({ page }) 
   await page.goto('/')
   await expect(page.getByText(/pnpm add @napi-rs\/wasm-tools/).first()).toBeVisible()
 
-  await page.getByRole('button', { name: 'yarn', exact: true }).first().click()
-  await expect(page.getByText(/yarn add @napi-rs\/wasm-tools/).first()).toBeVisible()
+  // The buttons are server-rendered, but only respond once the page hydrates, which
+  // can land after the `load` event. A click made before then is silently dropped, so
+  // retry the click until it takes effect instead of racing hydration.
+  await expect(async () => {
+    await page.getByRole('button', { name: 'yarn', exact: true }).first().click()
+    await expect(page.getByText(/yarn add @napi-rs\/wasm-tools/).first()).toBeVisible({ timeout: 1000 })
+  }).toPass({ timeout: 15_000 })
 
   await page.getByRole('button', { name: 'npm', exact: true }).first().click()
   await expect(page.getByText(/npm i -D @napi-rs\/wasm-tools/).first()).toBeVisible()
