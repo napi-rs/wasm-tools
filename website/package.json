@@ -17,13 +17,13 @@
   "dependencies": {
     "@napi-rs/wasm-tools": "1.1.0",
     "@napi-rs/wasm-tools-wasm32-wasi": "file:./vendor/wasm-tools-wasm32-wasi",
-    "@void/md": "0.26.1",
-    "@void/react": "0.26.1",
+    "@void/md": "0.27.0",
+    "@void/react": "0.27.0",
     "buffer": "^6.0.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "shiki": "^4.0.2",
-    "void": "0.26.1",
+    "void": "0.27.0",
     "wabt": "^1.0.39"
   },
   "devDependencies": {
