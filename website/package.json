@@ -23,7 +23,7 @@
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "shiki": "^4.0.2",
-    "void": "0.28.0",
+    "void": "1.1.11",
     "wabt": "^1.0.39"
   },
   "devDependencies": {
