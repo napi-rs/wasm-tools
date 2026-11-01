@@ -171,7 +171,7 @@ jobs:
           environment_variables: 'DEBUG RUSTUP_IO_THREADS'
           shell: bash
           run: |
-            sudo pkg install -y -f curl node libnghttp2 npm cmake
+            sudo pkg install -y -f curl node libnghttp2 npm cmake-core
             sudo npm install -g corepack
             curl https://sh.rustup.rs -sSf --output rustup.sh
             sh rustup.sh -y --profile minimal --default-toolchain stable
@@ -305,7 +305,6 @@ jobs:
         uses: docker/setup-qemu-action@v4
         with:
           platforms: all
-      - run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
       - name: Test bindings
         uses: tj-actions/docker-run@v2
         with:
