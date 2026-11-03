@@ -180,8 +180,10 @@ jobs:
         working-directory: website
         run: npm run sync-vendor
 
-      # `void deploy` (>= 0.10.2) detects GitHub Actions, mints the OIDC token, exchanges
-      # it for a deploy token, builds, and deploys — no VOID_TOKEN secret.
+      # Register the platform on this fresh runner before `void deploy` resolves it.
+      # --no-login leaves authentication to the existing GitHub OIDC exchange.
       - name: Deploy
         working-directory: website
-        run: npx void deploy --project "$VOID_PROJECT"
+        run: |
+          npx void connect "$VOID_API_URL" --no-login
+          npx void deploy --platform void --project "$VOID_PROJECT"
