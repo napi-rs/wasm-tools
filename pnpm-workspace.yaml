@@ -1,14 +1,23 @@
 packages:
   - '.'
   - 'crates/*'
+  - 'website'
+  - 'website/vendor/*'
 
 minimumReleaseAgeExclude:
   - '@emnapi/*'
   - '@napi-rs/*'
   - '@oxc-node/*'
   - '@oxlint/*'
+  - '@tailwindcss/*'
   - emnapi
   - oxlint
+  - tailwindcss
   - typescript
 
 forceIgnoresPlatform: true
+
+# These packages use their platform binaries without running install scripts.
+allowBuilds:
+  esbuild: false
+  workerd: false

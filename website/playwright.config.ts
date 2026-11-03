@@ -16,7 +16,7 @@ export default defineConfig({
   // one so the gate can't pass against a stale server missing the vite.config
   // cross-origin-isolation middleware the playground depends on.
   webServer: {
-    command: 'npm run dev',
+    command: 'pnpm run dev',
     url: `${BASE_URL}/`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
