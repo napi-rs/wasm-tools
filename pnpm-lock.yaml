@@ -219,44 +219,44 @@ importers:
         version: 7.0.2
     optionalDependencies:
       '@napi-rs/wasm-tools-android-arm-eabi':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-android-arm64':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-darwin-arm64':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-darwin-x64':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-freebsd-x64':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-linux-arm64-gnu':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-linux-arm64-musl':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-linux-x64-gnu':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-linux-x64-musl':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-wasm32-wasi':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-win32-arm64-msvc':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-win32-ia32-msvc':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
       '@napi-rs/wasm-tools-win32-x64-msvc':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.1.1
+        version: 1.1.1
 
   crates/panic:
     devDependencies:
@@ -714,8 +714,20 @@ packages:
     cpu: [arm]
     os: [android]
 
+  '@napi-rs/wasm-tools-android-arm-eabi@1.1.1':
+    resolution: {integrity: sha512-oN0fcn/y+3yuFz9hMqzkedb1fymdSefvphtPYE8VwZ8Eh00f0BEO4UhTvxjpIs8PRTBSp9Cb0g2FDj6cI7bykw==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [arm]
+    os: [android]
+
   '@napi-rs/wasm-tools-android-arm64@1.1.0':
     resolution: {integrity: sha512-lWoKN3suypeBSCIRPIw+++sH9V2K6nQkhtdt1opu7XY3v9JwLs6Gw063HWRqkNjphlYpkd/Qy8XcfSPGbJj7nQ==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [arm64]
+    os: [android]
+
+  '@napi-rs/wasm-tools-android-arm64@1.1.1':
+    resolution: {integrity: sha512-+e6YpPb6R9G6a1ZXi9MdW8GVMIzx3jnalzoPbe792UhKPcVKImIdbRY6OIK8bGuq471MCxLYaQiRX8+wW0BgSQ==}
     engines: {node: '>= 12.22.0'}
     cpu: [arm64]
     os: [android]
@@ -726,8 +738,20 @@ packages:
     cpu: [arm64]
     os: [darwin]
 
+  '@napi-rs/wasm-tools-darwin-arm64@1.1.1':
+    resolution: {integrity: sha512-OPs9DhELYIFsVaJjE6481cCBFti7+Sy/dPqBleLjs1W8Fhssjt914NAdE9ZkKKwVA/sY05Fn3pQsIHHaCp+PSQ==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [arm64]
+    os: [darwin]
+
   '@napi-rs/wasm-tools-darwin-x64@1.1.0':
     resolution: {integrity: sha512-R+pjeudAB7BYdH1vKkOJM61Tfv5jB6uXkxmFscYd+KKpdUpWBlNG+s4hr0w4i1rMBM91VhIAETZn2pz+MDHK9A==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@napi-rs/wasm-tools-darwin-x64@1.1.1':
+    resolution: {integrity: sha512-XfjBsSlpqUPiwSO48w3lDetbfUL+jL6rdfXeuC6gFZaj/pDAzVSbmbizhpShUiyMeCOp3e1U7p3YZr20xzRLvQ==}
     engines: {node: '>= 12.22.0'}
     cpu: [x64]
     os: [darwin]
@@ -738,8 +762,21 @@ packages:
     cpu: [x64]
     os: [freebsd]
 
+  '@napi-rs/wasm-tools-freebsd-x64@1.1.1':
+    resolution: {integrity: sha512-S+Mr4GyqJHYBykoBUkhsYgRn1bFv44MlX8kpijW7+A4UfxmGcyeSgNqAUjsFDonP4IfrMjp7a+8hKBVzjRU0Sw==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [x64]
+    os: [freebsd]
+
   '@napi-rs/wasm-tools-linux-arm64-gnu@1.1.0':
     resolution: {integrity: sha512-1TAXJxUHsWGar90k3W/MknavvBMwOWzjh7Q6Spxo8twRcWJbBD5Kow/Q2KhhDq5hxh2sKGDXn3uLc1tdtz4WUg==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [glibc]
+
+  '@napi-rs/wasm-tools-linux-arm64-gnu@1.1.1':
+    resolution: {integrity: sha512-zNgk7ACjDuKjJHRJ7zcO7CPzaAszuBpLhScKef7CXQcSDjNZrxi165HwK4XE7+LT+MZ0EDDvGLQj01E34JMZ/g==}
     engines: {node: '>= 12.22.0'}
     cpu: [arm64]
     os: [linux]
@@ -752,8 +789,22 @@ packages:
     os: [linux]
     libc: [musl]
 
+  '@napi-rs/wasm-tools-linux-arm64-musl@1.1.1':
+    resolution: {integrity: sha512-pTUon8M32i69T1AFIZQXywMmB6Nx4sf9A3HRqWjV+WMgKgPfRB2kDU7ZsfooeofE5sOhY9L2c1BuTuWgl+ArLg==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
   '@napi-rs/wasm-tools-linux-x64-gnu@1.1.0':
     resolution: {integrity: sha512-1sel0t9MRjI/tdT89M8Dd6gPfANeeFP24Xa46R11WeHNwhjsXXZh+xUk50uWCRTSGcaCy3ugm3AMK/lmHYQJkg==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
+  '@napi-rs/wasm-tools-linux-x64-gnu@1.1.1':
+    resolution: {integrity: sha512-PPbbx7kF2kuwf0hB2cpeVJPPwp7BpP3/3pjx6C81y9Qgd1sIPhbFqoY9mops1Uh/UDG1YU7zRQ+o1H5hwo+CMA==}
     engines: {node: '>= 12.22.0'}
     cpu: [x64]
     os: [linux]
@@ -766,13 +817,30 @@ packages:
     os: [linux]
     libc: [musl]
 
+  '@napi-rs/wasm-tools-linux-x64-musl@1.1.1':
+    resolution: {integrity: sha512-I6Qxl69uRTGvTVJsX6KH8yHlRCBFPSv0vUM6KaroOn9X/i94L+K9I4PAccxcxcTbbGYoSmxTuKuIcRgqLl4Wow==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
   '@napi-rs/wasm-tools-wasm32-wasi@1.1.0':
     resolution: {integrity: sha512-s6YDtDR1UWrsqJPtaxf+JLYLceWVyn3l8OpQYElHkDhf3Qfz9R6Ba3S0OgznTBv38L5/TIHysQ9Q4yO73Z0csg==}
     engines: {node: '>=14.0.0'}
     cpu: [wasm32]
 
+  '@napi-rs/wasm-tools-wasm32-wasi@1.1.1':
+    resolution: {integrity: sha512-Pz5vrFz+g+a6i0B4tNGzUTulUt68QjCink/R0751x895UuRoavLN9WPpJxX/rVc5kctvGs6j2I0bkwXWI2UbkA==}
+    engines: {node: ^20.19.0 || ^22.13.0 || >=23.5.0}
+
   '@napi-rs/wasm-tools-win32-arm64-msvc@1.1.0':
     resolution: {integrity: sha512-x+NuxbG84VxU68tU8w7Rf5lSyq0l584M6dVlke5DTweHYFZoMyeqkpbwEq+qsyAX6ivfipK8xRsmFwamb5uDnA==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@napi-rs/wasm-tools-win32-arm64-msvc@1.1.1':
+    resolution: {integrity: sha512-iadVDB0hcdCTNYB3gz1m4IsyRRPY/kagRkJ5jTjWsWi1SSWfNR0wGzdGl+OO7stbKtTbs9wyO80fI7+P6FsXsA==}
     engines: {node: '>= 12.22.0'}
     cpu: [arm64]
     os: [win32]
@@ -783,8 +851,20 @@ packages:
     cpu: [ia32]
     os: [win32]
 
+  '@napi-rs/wasm-tools-win32-ia32-msvc@1.1.1':
+    resolution: {integrity: sha512-1Yp8D2lgWjP/y81ECTt6kqd7U1MI4+5BPnnwAEkCvCpU8qnazn+5guXtE7G6AkdhJ2fkhtGRJZ7ey2ddsxiXKQ==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [ia32]
+    os: [win32]
+
   '@napi-rs/wasm-tools-win32-x64-msvc@1.1.0':
     resolution: {integrity: sha512-bVVjuvhlyVX++3eJXfDR63cXdw1ay5QYac6iq0MKQw8wZARInTM+bXCtByDT4fzVFI3+7ZthYb/ERWRdBNIqgQ==}
+    engines: {node: '>= 12.22.0'}
+    cpu: [x64]
+    os: [win32]
+
+  '@napi-rs/wasm-tools-win32-x64-msvc@1.1.1':
+    resolution: {integrity: sha512-cJPnCW8WWXfos8toBrisk/Qd+rjP3dguNpgMcFj55eAdzdJ9lJIQHvqNptsjb3xOeCHcbHFSCyf912cFkFyjDw==}
     engines: {node: '>= 12.22.0'}
     cpu: [x64]
     os: [win32]
@@ -2320,28 +2400,55 @@ snapshots:
   '@napi-rs/wasm-tools-android-arm-eabi@1.1.0':
     optional: true
 
+  '@napi-rs/wasm-tools-android-arm-eabi@1.1.1':
+    optional: true
+
   '@napi-rs/wasm-tools-android-arm64@1.1.0':
+    optional: true
+
+  '@napi-rs/wasm-tools-android-arm64@1.1.1':
     optional: true
 
   '@napi-rs/wasm-tools-darwin-arm64@1.1.0':
     optional: true
 
+  '@napi-rs/wasm-tools-darwin-arm64@1.1.1':
+    optional: true
+
   '@napi-rs/wasm-tools-darwin-x64@1.1.0':
+    optional: true
+
+  '@napi-rs/wasm-tools-darwin-x64@1.1.1':
     optional: true
 
   '@napi-rs/wasm-tools-freebsd-x64@1.1.0':
     optional: true
 
+  '@napi-rs/wasm-tools-freebsd-x64@1.1.1':
+    optional: true
+
   '@napi-rs/wasm-tools-linux-arm64-gnu@1.1.0':
+    optional: true
+
+  '@napi-rs/wasm-tools-linux-arm64-gnu@1.1.1':
     optional: true
 
   '@napi-rs/wasm-tools-linux-arm64-musl@1.1.0':
     optional: true
 
+  '@napi-rs/wasm-tools-linux-arm64-musl@1.1.1':
+    optional: true
+
   '@napi-rs/wasm-tools-linux-x64-gnu@1.1.0':
     optional: true
 
+  '@napi-rs/wasm-tools-linux-x64-gnu@1.1.1':
+    optional: true
+
   '@napi-rs/wasm-tools-linux-x64-musl@1.1.0':
+    optional: true
+
+  '@napi-rs/wasm-tools-linux-x64-musl@1.1.1':
     optional: true
 
   '@napi-rs/wasm-tools-wasm32-wasi@1.1.0':
@@ -2351,13 +2458,29 @@ snapshots:
       '@napi-rs/wasm-runtime': 1.2.7(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)
     optional: true
 
+  '@napi-rs/wasm-tools-wasm32-wasi@1.1.1':
+    dependencies:
+      '@emnapi/core': 2.0.0-beta.3
+      '@emnapi/runtime': 2.0.0-beta.3
+      '@napi-rs/wasm-runtime': 1.2.7(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)
+    optional: true
+
   '@napi-rs/wasm-tools-win32-arm64-msvc@1.1.0':
+    optional: true
+
+  '@napi-rs/wasm-tools-win32-arm64-msvc@1.1.1':
     optional: true
 
   '@napi-rs/wasm-tools-win32-ia32-msvc@1.1.0':
     optional: true
 
+  '@napi-rs/wasm-tools-win32-ia32-msvc@1.1.1':
+    optional: true
+
   '@napi-rs/wasm-tools-win32-x64-msvc@1.1.0':
+    optional: true
+
+  '@napi-rs/wasm-tools-win32-x64-msvc@1.1.1':
     optional: true
 
   '@napi-rs/wasm-tools@1.1.0':
