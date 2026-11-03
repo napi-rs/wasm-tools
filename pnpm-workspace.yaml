@@ -3,8 +3,12 @@ packages:
   - 'crates/*'
 
 minimumReleaseAgeExclude:
+  - '@emnapi/*'
   - '@napi-rs/*'
   - '@oxc-node/*'
   - '@oxlint/*'
+  - emnapi
   - oxlint
   - typescript
+
+forceIgnoresPlatform: true
