@@ -173,8 +173,8 @@ importers:
         specifier: ^2.0.0-beta.3
         version: 2.0.0-beta.3
       '@napi-rs/cli':
-        specifier: ^3.10.10
-        version: 3.10.10(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@26.6.6)(emnapi@2.0.0-beta.3)
+        specifier: ^3.10.11
+        version: 3.10.11(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@26.6.6)(emnapi@2.0.0-beta.3)
       '@napi-rs/wasm-runtime':
         specifier: ^1.2.7
         version: 1.2.7(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)
@@ -262,7 +262,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: ^3.8.6
-        version: 3.10.10(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@26.6.6)(emnapi@2.0.0-beta.2)
+        version: 3.10.11(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@26.6.6)(emnapi@2.0.0-beta.3)
       '@napi-rs/wasm-runtime':
         specifier: ^1.2.3
         version: 1.2.7(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)
@@ -271,7 +271,7 @@ importers:
         version: link:../..
       emnapi:
         specifier: ^2.0.0-alpha.4
-        version: 2.0.0-beta.2
+        version: 2.0.0-beta.3
       npm-run-all2:
         specifier: ^9.0.3
         version: 9.0.4
@@ -443,8 +443,8 @@ packages:
     engines: {node: '>=18'}
     hasBin: true
 
-  '@napi-rs/cli@3.10.10':
-    resolution: {integrity: sha512-vkeG0mchlQOEZ6DH9CVczAEQwEy/ZA5by94/3Dv3EakWMDIgaDKg4tzPmh75khkib1/m51Q1invNzFJXj2ZPTg==}
+  '@napi-rs/cli@3.10.11':
+    resolution: {integrity: sha512-hOu+e0NJ+1OdssvTchb+83V3n14Iay0cNvSYNYxUTmVn2RoPVxmOjig+awwOzaAaquB/is0xjd2URmRRcG/FuQ==}
     engines: {node: ^20.17.0 || ^22.13.0 || >= 23.5.0}
     hasBin: true
     peerDependencies:
@@ -1492,14 +1492,6 @@ packages:
     resolution: {integrity: sha512-zpmLSuVIqrtTPDR2IYiTbxXB6XgrS7+rRk5uT4w6qgmxeNvtdnSaAOGNNbVokgm+0F6zrRufshUfSlnsPc7d8g==}
     engines: {node: '>=22'}
 
-  emnapi@2.0.0-beta.2:
-    resolution: {integrity: sha512-ZO2KS7bFQNo8zcDl5nWW55nvZBfC+msrGRezZn6OoJJQKXGOWVp6RYw25wdJkDIIADrAJjf4XEQAbtancmeH7w==}
-    peerDependencies:
-      node-addon-api: '>= 6.1.0'
-    peerDependenciesMeta:
-      node-addon-api:
-        optional: true
-
   emnapi@2.0.0-beta.3:
     resolution: {integrity: sha512-Qf19h1+9LJgSYHMnQ2Us11AlAH9OaRlg9d3LBrP+4VirfbTcy3W9+muJUPFmmKx8K5kqfS58XuYY9wAJJXIAzQ==}
     peerDependencies:
@@ -2182,39 +2174,7 @@ snapshots:
       - encoding
       - supports-color
 
-  '@napi-rs/cli@3.10.10(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@26.6.6)(emnapi@2.0.0-beta.2)':
-    dependencies:
-      '@inquirer/prompts': 8.7.5(@types/node@26.6.6)
-      '@napi-rs/cross-toolchain': 1.0.3
-      '@napi-rs/wasm-tools': 1.1.0
-      '@octokit/rest': 22.0.1
-      clipanion: 4.0.0-rc.4(typanion@3.14.0)
-      colorette: 2.0.20
-      es-toolkit: 1.53.1
-      js-yaml: 5.5.0
-      obug: 3.0.0
-      semver: 7.8.5
-      typanion: 3.14.0
-      typescript: 6.0.3
-    optionalDependencies:
-      '@emnapi/core': 2.0.0-beta.3
-      '@emnapi/runtime': 2.0.0-beta.3
-      emnapi: 2.0.0-beta.2
-    transitivePeerDependencies:
-      - '@napi-rs/cross-toolchain-arm64-target-aarch64'
-      - '@napi-rs/cross-toolchain-arm64-target-armv7'
-      - '@napi-rs/cross-toolchain-arm64-target-ppc64le'
-      - '@napi-rs/cross-toolchain-arm64-target-s390x'
-      - '@napi-rs/cross-toolchain-arm64-target-x86_64'
-      - '@napi-rs/cross-toolchain-x64-target-aarch64'
-      - '@napi-rs/cross-toolchain-x64-target-armv7'
-      - '@napi-rs/cross-toolchain-x64-target-ppc64le'
-      - '@napi-rs/cross-toolchain-x64-target-s390x'
-      - '@napi-rs/cross-toolchain-x64-target-x86_64'
-      - '@types/node'
-      - supports-color
-
-  '@napi-rs/cli@3.10.10(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@26.6.6)(emnapi@2.0.0-beta.3)':
+  '@napi-rs/cli@3.10.11(@emnapi/core@2.0.0-beta.3)(@emnapi/runtime@2.0.0-beta.3)(@types/node@26.6.6)(emnapi@2.0.0-beta.3)':
     dependencies:
       '@inquirer/prompts': 8.7.5(@types/node@26.6.6)
       '@napi-rs/cross-toolchain': 1.0.3
@@ -2985,8 +2945,6 @@ snapshots:
   detect-libc@2.1.2: {}
 
   emittery@2.2.0: {}
-
-  emnapi@2.0.0-beta.2: {}
 
   emnapi@2.0.0-beta.3: {}
 
