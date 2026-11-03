@@ -15,7 +15,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@napi-rs/wasm-tools": "1.1.1",
+    "@napi-rs/wasm-tools": "1.1.2",
     "@napi-rs/wasm-tools-wasm32-wasi": "workspace:*",
     "@void/md": "1.5.0",
     "@void/react": "1.5.0",
