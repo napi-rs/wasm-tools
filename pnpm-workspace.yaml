@@ -9,8 +9,10 @@ minimumReleaseAgeExclude:
   - '@napi-rs/*'
   - '@oxc-node/*'
   - '@oxlint/*'
+  - '@tailwindcss/*'
   - emnapi
   - oxlint
+  - tailwindcss
   - typescript
 
 forceIgnoresPlatform: true
