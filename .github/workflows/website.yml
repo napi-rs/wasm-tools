@@ -86,7 +86,7 @@ jobs:
             ~/.napi-rs
             target/
           key: wasm32-wasip1-threads-cargo-ubuntu
-      - name: Install repo deps
+      - name: Install workspace deps
         run: pnpm install --frozen-lockfile
       - name: Build wasm (produces walrus.wasm32-wasi.wasm + glue at repo root)
         run: pnpm build --target wasm32-wasip1-threads
@@ -109,18 +109,15 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Install website deps
-        working-directory: website
-        run: npm ci
       - name: Vendor the fresh wasm build into the site
         working-directory: website
-        run: npm run sync-vendor
+        run: pnpm run sync-vendor
 
       # Compile the production bundle so bundling / SSR build failures are caught here
       # rather than at deploy time.
       - name: Build (production bundle)
         working-directory: website
-        run: npm run build
+        run: pnpm run build
 
       # The browser suite covers landing, docs, and the cross-origin-isolated playground.
       # CI=true forces a fresh dev server, so it runs against the real vite.config
@@ -130,12 +127,12 @@ jobs:
       # server — `vite preview` does not replicate it.)
       - name: Install Playwright browser
         working-directory: website
-        run: npx playwright install --with-deps chromium
+        run: pnpm exec playwright install --with-deps chromium
       - name: E2E
         working-directory: website
         env:
           CI: 'true'
-        run: npm run test:e2e
+        run: pnpm run test:e2e
 
   deploy:
     name: Deploy to Void
@@ -156,16 +153,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 26
-          cache: npm
-          cache-dependency-path: website/package-lock.json
+          cache: pnpm
 
       # Ship the artifact the browser suite actually ran against. `test` uploaded the wasm
       # it vendored; restore it to the repo root, where sync-vendor.mjs reads from. This is
-      # why the job needs no Rust toolchain, cargo cache, or root install: `void deploy`
+      # why the job needs no Rust toolchain or cargo cache: `void deploy`
       # builds the SITE itself, and the only other input is this wasm.
       - name: Download the tested wasm build
         uses: actions/download-artifact@v8
@@ -173,17 +171,16 @@ jobs:
           name: wasm32-wasi-build
           path: .
 
-      - name: Install website deps
-        working-directory: website
-        run: npm ci
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile
       - name: Vendor the tested wasm build into the site
         working-directory: website
-        run: npm run sync-vendor
+        run: pnpm run sync-vendor
 
       # Register the platform on this fresh runner before `void deploy` resolves it.
       # --no-login leaves authentication to the existing GitHub OIDC exchange.
       - name: Deploy
         working-directory: website
         run: |
-          npx void connect "$VOID_API_URL" --no-login
-          npx void deploy --platform void --project "$VOID_PROJECT"
+          pnpm exec void connect "$VOID_API_URL" --no-login
+          pnpm exec void deploy --platform void --project "$VOID_PROJECT"

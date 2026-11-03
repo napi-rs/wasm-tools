@@ -1,6 +1,8 @@
 packages:
   - '.'
   - 'crates/*'
+  - 'website'
+  - 'website/vendor/*'
 
 minimumReleaseAgeExclude:
   - '@emnapi/*'
@@ -12,3 +14,8 @@ minimumReleaseAgeExclude:
   - typescript
 
 forceIgnoresPlatform: true
+
+# These packages use their platform binaries without running install scripts.
+allowBuilds:
+  esbuild: false
+  workerd: false
