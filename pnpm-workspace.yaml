@@ -10,6 +10,7 @@ minimumReleaseAgeExclude:
   - '@oxc-node/*'
   - '@oxlint/*'
   - '@tailwindcss/*'
+  - '@void/*'
   - emnapi
   - oxlint
   - tailwindcss
