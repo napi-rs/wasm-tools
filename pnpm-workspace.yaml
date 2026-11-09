@@ -5,6 +5,7 @@ packages:
   - 'website/vendor/*'
 
 minimumReleaseAgeExclude:
+  - '@cloudflare/*'
   - '@emnapi/*'
   - '@napi-rs/*'
   - '@oxc-node/*'
@@ -15,6 +16,7 @@ minimumReleaseAgeExclude:
   - oxlint
   - tailwindcss
   - typescript
+  - void
 
 forceIgnoresPlatform: true
 
