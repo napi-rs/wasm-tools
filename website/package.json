@@ -18,12 +18,12 @@
     "@napi-rs/wasm-tools": "1.1.2",
     "@napi-rs/wasm-tools-wasm32-wasi": "workspace:*",
     "@void/md": "1.7.0",
-    "@void/react": "1.6.2",
+    "@void/react": "1.7.0",
     "buffer": "^6.0.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",
     "shiki": "^4.0.2",
-    "void": "1.6.2",
+    "void": "1.7.0",
     "wabt": "^1.0.39"
   },
   "devDependencies": {
