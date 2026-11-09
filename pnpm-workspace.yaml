@@ -5,6 +5,7 @@ packages:
   - 'website/vendor/*'
 
 minimumReleaseAgeExclude:
+  - '@cloudflare/*'
   - '@emnapi/*'
   - '@napi-rs/*'
   - '@oxc-node/*'
