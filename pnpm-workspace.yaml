@@ -16,6 +16,7 @@ minimumReleaseAgeExclude:
   - oxlint
   - tailwindcss
   - typescript
+  - void
 
 forceIgnoresPlatform: true
 
