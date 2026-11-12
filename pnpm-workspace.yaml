@@ -12,7 +12,10 @@ minimumReleaseAgeExclude:
   - '@oxlint/*'
   - '@tailwindcss/*'
   - '@void/*'
+  - cf
   - emnapi
+  - hono
+  - miniflare
   - oxlint
   - tailwindcss
   - typescript
