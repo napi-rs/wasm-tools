@@ -304,11 +304,11 @@ importers:
         specifier: workspace:*
         version: link:vendor/wasm-tools-wasm32-wasi
       '@void/md':
-        specifier: 1.12.0
-        version: 1.12.0(@types/markdown-it@14.2.0)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.0)
+        specifier: 1.12.2
+        version: 1.12.2(@types/markdown-it@14.2.0)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.2)
       '@void/react':
-        specifier: 1.12.0
-        version: 1.12.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.0)
+        specifier: 1.12.2
+        version: 1.12.2(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.2)
       buffer:
         specifier: ^6.0.0
         version: 6.0.3
@@ -322,8 +322,8 @@ importers:
         specifier: ^4.0.2
         version: 4.6.0
       void:
-        specifier: 1.12.0
-        version: 1.12.0(@types/node@26.6.6)(@void/md@1.12.0)(arktype@2.2.9)(kysely@0.29.8)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(valibot@1.5.0(typescript@7.0.2))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(workerd@1.20261123.1)(zod@4.6.7)
+        specifier: 1.12.2
+        version: 1.12.2(@types/node@26.6.6)(@void/md@1.12.2)(arktype@2.2.9)(kysely@0.29.8)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(valibot@1.5.0(typescript@7.0.2))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(workerd@1.20261123.1)(zod@4.6.7)
       wabt:
         specifier: ^1.0.39
         version: 1.0.39
@@ -2495,34 +2495,34 @@ packages:
       oxc-transform-react:
         optional: true
 
-  '@void/deploy-cloudflare@1.12.0':
-    resolution: {integrity: sha512-cLctoTHeEM/FwU6ToRha07eanX4o61kySSkx2PKtWTq/y3yRyfKtfR6IR/9Wj+DFkcRTUa1TfSM8o0tovBpZww==}
+  '@void/deploy-cloudflare@1.12.2':
+    resolution: {integrity: sha512-e7b2Fssd2JWew5qwtgxpzBiWAxBpWeJl3WNkSJ4wqEjWVkh+dUgkIV9yAHDWA9C4+GT503s0Bbs8okmNsq8Rjg==}
 
-  '@void/deploy-core@1.12.0':
-    resolution: {integrity: sha512-R5A9n2fQrRGWIfu1QMkdv91I6wAMfID7P5+ktFDFz2RQsZmRQi3fVGXqbz2eQh1rU73HZLJioplZ1Kjf8gPG3Q==}
+  '@void/deploy-core@1.12.2':
+    resolution: {integrity: sha512-VP9PKF6nZeCg2mB6RyaHanflRTThb4YD23Yjh/MdhkGOS72Su5Z9iS/D9NkDjaZeMOXmjt+hn2NuaXdMgV/PdQ==}
 
-  '@void/edge@1.12.0':
-    resolution: {integrity: sha512-83OkrJIjkjQtZt/+FcoC6+WiKv+8qOb/GGvpAHLvhEv1RmnmzESkS4UUb2bUYNWB/mekosAcX0aSBjsBZOVT/A==}
+  '@void/edge@1.12.2':
+    resolution: {integrity: sha512-R/kqFosWYVZBS1SmJ88XJYGN5pRMPHaFkM1xwjXQ+Cfv6SY96ET5ibBHVzlXqGDNY7eyrNTy6YiHtAw4YvZMhg==}
 
-  '@void/isr@1.12.0':
-    resolution: {integrity: sha512-RbltWd/jijjoL0Lum/yR1C6UFYl1TO2qACZI/Q94+a3HgvpI1+fb8IFgdOR8/nWZ20MIg543Rl8f8GBljM1MzQ==}
+  '@void/isr@1.12.2':
+    resolution: {integrity: sha512-Nyl4H+EuHQP+3lc0tWr6F8u3ABXlE2/jbhQVKPzuD5gCv2dmAmruVc0GvnWZ4pRGfdVOKTnMwh0sMK/wY1gFXg==}
 
-  '@void/md@1.12.0':
-    resolution: {integrity: sha512-sEPi5Arg18keGl31fkBBCbaM5JfyiMM7A8ndH0U8QNAzn4X+Cz88wSoPC8WiOsJ4KAaxTjnTX0AmTeXnMCKOlg==}
+  '@void/md@1.12.2':
+    resolution: {integrity: sha512-yzVeGi56r8rJuqknPCnvSgodvEsYaqvgGt+deo3wZjqMtPNy05qZg57eitsaGrBA5ZKy1ryl1ZzR+xxbbsQDxQ==}
     peerDependencies:
       vite: ^8.0.0
-      void: 1.12.0
+      void: 1.12.2
 
-  '@void/platform@1.12.0':
-    resolution: {integrity: sha512-rjd2+KtgGLTyaGOO4vRSVducihGrzXw0UkNee+peBchvu4Yb1vTIoaIm1x32vACPhKXNZb2FIz/DLeOcD9FqZQ==}
+  '@void/platform@1.12.2':
+    resolution: {integrity: sha512-uJH2NqwqkZTu7lTKQMj2mMVs6Zn/r2YZ2wFnpEyIRFxPVg0Vr4eNH/1vZHvtwkEf6IT/MhtxGBMfRGLEA3p5WA==}
 
-  '@void/react@1.12.0':
-    resolution: {integrity: sha512-7Yc321BHg/6wWi7LxjQzrEuBLkygt3HhI8CeJLsH5YSNNHvBBbLg3zpYiQnc4RFfNmgETjEQ7YDaTjLA2BFUgg==}
+  '@void/react@1.12.2':
+    resolution: {integrity: sha512-Jm7LNTz/yHltctQsZmFPdzMYdefTjhLWmkl8PcXs3b+iOBEaAV36mnlYrM6t7AHLYBYNc1y9T15ua8jsFvnmiQ==}
     peerDependencies:
       react: ^19.0.0
       react-dom: ^19.0.0
       vite: ^8.0.0
-      void: 1.12.0
+      void: 1.12.2
 
   abbrev@3.0.1:
     resolution: {integrity: sha512-AO2ac6pjRB3SJmGJo+v5/aK6Omggp6fsLrs6wN9bd35ulu4cCwaAU9+7ZhXjeqHVkaHThLuzH0nZr0YpCDhygg==}
@@ -4038,12 +4038,12 @@ packages:
       yaml:
         optional: true
 
-  void@1.12.0:
-    resolution: {integrity: sha512-C6qQoNO/IBDJvenlDwjKn6xjX/DSAsHpEvdHWzgVx/LlEVBfPHdYl8D9WEEowpk8DK5DNG2nNcIBUndeu+LriA==}
+  void@1.12.2:
+    resolution: {integrity: sha512-Eha5fa4cCKkYqipCcgneZdbGEQcZOiruvG9xqcEOa8LDyTMb8SoFOMYwwkp+doBJjRRA5pnqDT7/ZNdY7WJ8xw==}
     engines: {node: ^24.22.0 || >=26.12.0}
     hasBin: true
     peerDependencies:
-      '@void/md': 1.12.0
+      '@void/md': 1.12.2
       arktype: '>=2.0.0'
       valibot: '>=1.0.0-beta.7'
       vite: ^8.0.0
@@ -5622,23 +5622,23 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
 
-  '@void/deploy-cloudflare@1.12.0':
+  '@void/deploy-cloudflare@1.12.2':
     dependencies:
-      '@void/deploy-core': 1.12.0
+      '@void/deploy-core': 1.12.2
       jsonc-parser: 3.3.1
 
-  '@void/deploy-core@1.12.0': {}
+  '@void/deploy-core@1.12.2': {}
 
-  '@void/edge@1.12.0':
+  '@void/edge@1.12.2':
     dependencies:
-      '@void/deploy-core': 1.12.0
+      '@void/deploy-core': 1.12.2
 
-  '@void/isr@1.12.0':
+  '@void/isr@1.12.2':
     dependencies:
       '@cloudflare/workers-types': 5.20261125.1
-      '@void/edge': 1.12.0
+      '@void/edge': 1.12.2
 
-  '@void/md@1.12.0(@types/markdown-it@14.2.0)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.0)':
+  '@void/md@1.12.2(@types/markdown-it@14.2.0)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.2)':
     dependencies:
       '@pierre/highlights': 0.5.2
       gray-matter: 4.0.3
@@ -5652,22 +5652,22 @@ snapshots:
       pathslash: 0.1.0
       tinyglobby: 0.2.17
       vite: 8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
-      void: 1.12.0(@types/node@26.6.6)(@void/md@1.12.0)(arktype@2.2.9)(kysely@0.29.8)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(valibot@1.5.0(typescript@7.0.2))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(workerd@1.20261123.1)(zod@4.6.7)
+      void: 1.12.2(@types/node@26.6.6)(@void/md@1.12.2)(arktype@2.2.9)(kysely@0.29.8)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(valibot@1.5.0(typescript@7.0.2))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(workerd@1.20261123.1)(zod@4.6.7)
     transitivePeerDependencies:
       - '@types/markdown-it'
 
-  '@void/platform@1.12.0':
+  '@void/platform@1.12.2':
     dependencies:
-      '@void/deploy-core': 1.12.0
+      '@void/deploy-core': 1.12.2
       pathslash: 0.1.0
 
-  '@void/react@1.12.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.0)':
+  '@void/react@1.12.2(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.2)':
     dependencies:
       '@vitejs/plugin-react': 6.3.0(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
       vite: 8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
-      void: 1.12.0(@types/node@26.6.6)(@void/md@1.12.0)(arktype@2.2.9)(kysely@0.29.8)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(valibot@1.5.0(typescript@7.0.2))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(workerd@1.20261123.1)(zod@4.6.7)
+      void: 1.12.2(@types/node@26.6.6)(@void/md@1.12.2)(arktype@2.2.9)(kysely@0.29.8)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(valibot@1.5.0(typescript@7.0.2))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(workerd@1.20261123.1)(zod@4.6.7)
     transitivePeerDependencies:
       - '@rolldown/plugin-babel'
       - babel-plugin-react-compiler
@@ -7020,7 +7020,7 @@ snapshots:
       tsx: 4.23.15
       yaml: 2.9.1
 
-  void@1.12.0(@types/node@26.6.6)(@void/md@1.12.0)(arktype@2.2.9)(kysely@0.29.8)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(valibot@1.5.0(typescript@7.0.2))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(workerd@1.20261123.1)(zod@4.6.7):
+  void@1.12.2(@types/node@26.6.6)(@void/md@1.12.2)(arktype@2.2.9)(kysely@0.29.8)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(valibot@1.5.0(typescript@7.0.2))(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(workerd@1.20261123.1)(zod@4.6.7):
     dependencies:
       '@cloudflare/build-output-utils': 1.0.0-rc.4
       '@cloudflare/config': 1.0.0-rc.4
@@ -7030,11 +7030,11 @@ snapshots:
       '@cloudflare/workers-types': 5.20261125.1
       '@cloudflare/workers-utils': 0.57.0
       '@napi-rs/keyring': 2.1.2
-      '@void/deploy-cloudflare': 1.12.0
-      '@void/deploy-core': 1.12.0
-      '@void/edge': 1.12.0
-      '@void/isr': 1.12.0
-      '@void/platform': 1.12.0
+      '@void/deploy-cloudflare': 1.12.2
+      '@void/deploy-core': 1.12.2
+      '@void/edge': 1.12.2
+      '@void/isr': 1.12.2
+      '@void/platform': 1.12.2
       better-auth: 1.7.28(drizzle-kit@0.31.11)(drizzle-orm@0.45.4(@cloudflare/workers-types@5.20261125.1)(better-sqlite3@13.2.0)(kysely@0.29.8)(mysql2@3.24.6(@types/node@26.6.6))(pg@8.23.1))(mysql2@3.24.6(@types/node@26.6.6))(pg@8.23.1)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       better-sqlite3: 13.2.0
       blake3-jit: 1.1.1
@@ -7065,7 +7065,7 @@ snapshots:
       vite: 8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1)
       yaml: 2.9.1
     optionalDependencies:
-      '@void/md': 1.12.0(@types/markdown-it@14.2.0)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.0)
+      '@void/md': 1.12.2(@types/markdown-it@14.2.0)(vite@8.3.5(@types/node@26.6.6)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))(void@1.12.2)
       arktype: 2.2.9
       valibot: 1.5.0(typescript@7.0.2)
       zod: 4.6.7
